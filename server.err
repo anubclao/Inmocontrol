@@ -1,0 +1,216 @@
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+[GET /api/properties/:id] Error: Unknown column 'p.inventario_captacion_pdf_url' in 'field list'
+    at <anonymous> (D:\desarrollos\Inmocontrol\server\routes\properties.ts:298:31)
+    at Layer.handle [as handle_request] (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\layer.js:95:5)
+    at next (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\layer.js:95:5)
+    at D:\desarrollos\Inmocontrol\node_modules\express\lib\router\index.js:284:15
+    at param (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\index.js:365:14)
+    at param (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\index.js:376:14)
+    at router.process_params (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\index.js:421:3)
+    at next (D:\desarrollos\Inmocontrol\node_modules\express\lib\router\index.js:280:10) {
+  code: 'ER_BAD_FIELD_ERROR',
+  errno: 1054,
+  sqlState: '42S22',
+  sqlMessage: "Unknown column 'p.inventario_captacion_pdf_url' in 'field list'",
+  sql: 'SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,\n' +
+    '              p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,\n' +
+    '              p.inventory_pdf_url, p.inventario_captacion_pdf_url, p.inventario_colocacion_pdf_url,\n' +
+    '              p.mandato_pdf_url, p.mandato_signed_at, p.created_at,\n' +
+    '              COALESCE((SELECT COUNT(*) FROM inventories i WHERE i.property_id = p.id), 0) AS inventory_count\n' +
+    '       FROM properties p\n' +
+    "       WHERE p.id = '89dcd391-bccf-41e3-ba1c-ae1fc1ee4a03' AND p.organization_id = 'default_org'\n" +
+    '       LIMIT 1'
+}
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+[DB] Error creando propiedad: Check constraint 'properties_chk_1' is violated.
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+[GET /api/inventories] Out of sort memory, consider increasing server sort buffer size
+[GET /api/inventories] Out of sort memory, consider increasing server sort buffer size
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0
+[amortization/generate] Error: Cannot add or update a child row: a foreign key constraint fails (`inmocontrol`.`amortization_rows`, CONSTRAINT `fk_amort_contract` FOREIGN KEY (`contract_id`) REFERENCES `contracts` (`id`) ON DELETE CASCADE)
+    at <anonymous> (D:\desarrollos\Inmocontrol\server\routes\billing.ts:227:18)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  code: 'ER_NO_REFERENCED_ROW_2',
+  errno: 1452,
+  sqlState: '23000',
+  sqlMessage: 'Cannot add or update a child row: a foreign key constraint fails (`inmocontrol`.`amortization_rows`, CONSTRAINT `fk_amort_contract` FOREIGN KEY (`contract_id`) REFERENCES `contracts` (`id`) ON DELETE CASCADE)',
+  sql: 'INSERT INTO amortization_rows\n' +
+    '           (id, organization_id, property_id, contract_id,\n' +
+    '            month_number, period_start, period_end, due_date,\n' +
+    '            base_rent, base_admin, admin_adjustment, ipc_adjustment,\n' +
+    '            subtotal, applied_late_fee_pct, late_fee_amount,\n' +
+    '            total, total_early, total_mid, total_late, status)\n' +
+    "         VALUES ('amort-1782492048527-yk8phm', 'default_org', '068f442a-e685-4a81-aac2-259c8c35d7f0', 'contract-1782492025953', 1, '2026-06-01', '2026-06-30', '2026-06-10', 1696037, 250000, 0, 0, 1946037, 0, 0, 1946037, 1946037, 2043339, 2140641, 'pending')\n" +
+    '         ON DUPLICATE KEY UPDATE\n' +
+    '           period_start = VALUES(period_start),\n' +
+    '           period_end   = VALUES(period_end),\n' +
+    '           due_date     = VALUES(due_date),\n' +
+    '           base_rent    = VALUES(base_rent),\n' +
+    '           base_admin   = VALUES(base_admin),\n' +
+    '           admin_adjustment = VALUES(admin_adjustment),\n' +
+    '           ipc_adjustment   = VALUES(ipc_adjustment),\n' +
+    '           subtotal     = VALUES(subtotal),\n' +
+    '           total        = VALUES(total),\n' +
+    '           total_early  = VALUES(total_early),\n' +
+    '           total_mid    = VALUES(total_mid),\n' +
+    '           total_late   = VALUES(total_late),\n' +
+    '           status       = VALUES(status)'
+}
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:3001
+    at Server.setupListenHandle [as _listen2] (node:net:1948:16)
+    at listenInCluster (node:net:2005:12)
+    at node:net:2214:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1984:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 3001
+}
+
+Node.js v24.14.0

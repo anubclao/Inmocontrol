@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/* Tailwind v4: indicarle explícitamente qué archivos escanear.
+   Sin esto, el build no encuentra las clases que solo existen en .tsx
+   y el bundle de CSS queda incompleto. */
+@source "./**/*.{ts,tsx,html}";
+@source "../index.html";
+@source "../src/**/*.{ts,tsx,html}";
+
+@layer base {
+  .signature-canvas {
+    width: 100% !important;
+    height: 160px !important;
+    touch-action: none;
+  }
+}
+
+/* Custom scrollbar for better mobile experience */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

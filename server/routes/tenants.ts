@@ -1,0 +1,765 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+import express from 'express';
+import { google } from 'googleapis';
+import crypto from 'crypto';
+import { Readable } from 'stream';
+import pool from '../db.js';
+import { isTokenExpiringSoon } from '../lib/googleAuth.js';
+
+const router = express.Router();
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI,
+);
+
+/** Helper: obtiene tokens del usuario actual (hardcodeado por ahora). */
+async function getUserTokens() {
+  const userId = 'default_user';
+  const [rows] = await pool.query<any[]>(
+    'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+    [userId, 'google_drive'],
+  );
+  if (!rows.length || !rows[0].access_token) return null;
+  return rows[0];
+}
+
+/** Helper: asegura tokens frescos. */
+async function getFreshDriveClient() {
+  const tokens = await getUserTokens();
+  if (!tokens) throw new Error('No Drive connection');
+  oauth2Client.setCredentials({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token ?? undefined,
+    expiry_date: tokens.expiry_date ?? undefined,
+  });
+  if (isTokenExpiringSoon(tokens.expiry_date)) {
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    oauth2Client.setCredentials(credentials);
+    await pool.query(
+      'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
+      [credentials.access_token, credentials.expiry_date, 'default_user', 'google_drive'],
+    );
+  }
+  return google.drive({ version: 'v3', auth: oauth2Client });
+}
+
+/**
+ * POST /api/tenants
+ * Crea un arrendatario en MySQL y su carpeta en Google Drive.
+ * Body: { propertyId, name, idNumber, email, phone, rent }
+ */
+router.post('/', async (req, res) => {
+  const { propertyId, name, idNumber, email, phone, rent, leaseStartDate } = req.body as {
+    propertyId: string;
+    name: string;
+    idNumber: string;
+    email?: string;
+    phone?: string;
+    rent?: number;
+    leaseStartDate?: string;
+  };
+
+  if (!propertyId || !name || !idNumber) {
+    res.status(400).json({ error: 'Faltan campos requeridos: propertyId, name, idNumber' });
+    return;
+  }
+
+  // Validación: un inmueble solo puede tener UN arrendatario activo a la vez.
+  // (Futuro: un mismo arrendatario SÍ puede arrendar varios inmuebles — esto
+  // solo valida la dirección 1-propiedad → 1-tenant, no 1-tenant → N-propiedades.)
+  try {
+    const [existing] = await pool.query<any[]>(
+      `SELECT id, name FROM tenants WHERE property_id = ? AND status = 'Activo' LIMIT 1`,
+      [propertyId],
+    );
+    if (existing.length > 0) {
+      res.status(409).json({
+        error: `Este inmueble ya tiene un arrendatario activo (${existing[0].name}). Finaliza o cancela ese contrato antes de asignar uno nuevo.`,
+      });
+      return;
+    }
+  } catch (err: any) {
+    console.error('[DB] Error validando duplicado de tenant:', err.message);
+    res.status(500).json({ error: 'Error validando disponibilidad del inmueble' });
+    return;
+  }
+
+  const tenantId = crypto.randomUUID();
+
+  let propertyDriveFolderId = (req.body as any).propertyDriveFolderId as string | null | undefined;
+  const propertyAddress = (req.body as any).propertyAddress as string | undefined;
+  const adminFee = (req.body as any).adminFee ?? 0;
+
+  let tenantDriveFolderId: string | null = null;
+
+  // 1. Si Drive está conectado, asegurar que existe la carpeta del inmueble
+  let drive: any = null;
+  try {
+    drive = await getFreshDriveClient();
+  } catch {
+    console.warn('[Drive] No conectado o no se pudo obtener cliente');
+  }
+
+  if (drive) {
+    try {
+      // 1a. Si no hay carpeta del inmueble, crearla
+      if (!propertyDriveFolderId && propertyAddress) {
+        const [tokensRows] = await pool.query<any[]>(
+          'SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+          ['default_user', 'google_drive'],
+        );
+        const rootFolderId = tokensRows[0]?.drive_folder_id;
+
+        if (rootFolderId) {
+          // Buscar si ya existe una carpeta con este address
+          const existing = await drive.files.list({
+            q: `name='${propertyAddress.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+            fields: 'files(id)',
+            spaces: 'drive',
+          });
+
+          let propertyFolderId = existing.data.files?.[0]?.id;
+          if (!propertyFolderId) {
+            const created = await drive.files.create({
+              requestBody: {
+                name: propertyAddress,
+                mimeType: 'application/vnd.google-apps.folder',
+                parents: [rootFolderId],
+              },
+              fields: 'id',
+            });
+            propertyFolderId = created.data.id!;
+            console.log(`[Drive] Carpeta de inmueble creada: "${propertyAddress}" → ${propertyFolderId}`);
+          }
+          propertyDriveFolderId = propertyFolderId;
+        }
+      }
+
+      // 1b. Crear carpeta del arrendatario dentro de la carpeta del inmueble
+      if (propertyDriveFolderId) {
+        const folderName = `${name.trim()} (${String(idNumber).replace(/\D/g, '')})`;
+        const folderRes = await drive.files.create({
+          requestBody: {
+            name: folderName,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [propertyDriveFolderId],
+          },
+          fields: 'id',
+        });
+        tenantDriveFolderId = folderRes.data.id!;
+
+        // Subcarpetas: Cedula, Contrato, Recibos
+        const subfolders = ['Cedula', 'Contrato', 'Recibos'];
+        for (const sf of subfolders) {
+          await drive.files.create({
+            requestBody: {
+              name: sf,
+              mimeType: 'application/vnd.google-apps.folder',
+              parents: [tenantDriveFolderId],
+            },
+            fields: 'id',
+          });
+        }
+
+        console.log(`[Drive] Carpeta de arrendatario creada: "${folderName}" → ${tenantDriveFolderId}`);
+      }
+    } catch (err: any) {
+      console.warn('[Drive] Error creando carpetas:', err.message);
+    }
+  }
+
+  // 3. Guardar en MySQL (usamos 'default_org' como org hardcodeada por ahora)
+  try {
+    // Si propertyId viene vacío o apunta a un ID inexistente en MySQL, lo guardamos NULL
+    let safePropertyId: string | null = null;
+    if (propertyId) {
+      const [propRows] = await pool.query<any[]>(
+        'SELECT id FROM properties WHERE id = ?',
+        [propertyId],
+      );
+      if (propRows.length > 0) {
+        safePropertyId = propertyId;
+      } else {
+        console.warn(`[tenants] propertyId=${propertyId} no existe en BD, guardando NULL`);
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO tenants
+        (id, organization_id, property_id, name, document_id, email, phone, rent, admin_fee, lease_start_date, status, tenant_drive_folder_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', ?)`,
+      [
+        tenantId,
+        'default_org',          // TODO: org real del usuario autenticado
+        safePropertyId,
+        name.toUpperCase(),
+        idNumber,
+        email || null,
+        phone || null,
+        rent || null,
+        adminFee,
+        leaseStartDate || null,
+        tenantDriveFolderId,
+      ],
+    );
+  } catch (err: any) {
+    console.error('[DB] Error insertando tenant:', err.message);
+    res.status(500).json({ error: 'Error guardando arrendatario: ' + err.message });
+    return;
+  }
+
+  res.json({
+    success: true,
+    tenantId,
+    tenantDriveFolderId,
+    propertyDriveFolderId: propertyDriveFolderId ?? null,
+    message: tenantDriveFolderId
+      ? 'Arrendatario creado con carpeta en Google Drive'
+      : 'Arrendatario creado (sin Drive — conecta tu Google Drive en Configuración)',
+  });
+});
+
+/**
+ * GET /api/tenants
+ * Lista todos los arrendatarios desde MySQL.
+ */
+router.get('/', async (req, res) => {
+  try {
+    const [rows] = await pool.query<any[]>(
+      `SELECT id, property_id, name, document_id, email, phone, rent, admin_fee, lease_start_date, status,
+              tenant_drive_folder_id, drive_folder_path, created_at
+       FROM tenants
+       WHERE organization_id = ?
+       ORDER BY created_at DESC`,
+      ['default_org'],
+    );
+    res.json({ tenants: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Helper: busca (o crea si no existe) la carpeta del tenant en Drive.
+ * Devuelve siempre el ID de la carpeta del tenant (nunca falla si Drive
+ * está conectado y el tenant tiene `property_id`).
+ *
+ * Estructura esperada:
+ *   {rootFolder}/
+ *     └─ {dirección del inmueble}/          ← carpeta de la propiedad
+ *          └─ {nombre} ({cédula})/          ← carpeta del tenant  ← esta
+ *               ├─ Cedula/
+ *               ├─ Contrato/
+ *               └─ Recibos/
+ */
+async function ensureTenantDriveFolder(
+  drive: any,
+  rootFolderId: string,
+  tenant: { id: string; name: string; documentId: string | null; propertyId: string | null },
+): Promise<string> {
+  // 1. Resolver carpeta de la propiedad.
+  if (!tenant.propertyId) {
+    throw new Error(
+      'El arrendatario no tiene propiedad asignada. Asigná primero una propiedad en su ficha para poder crear la carpeta en Drive.',
+    );
+  }
+  const [propRows] = await pool.query<any[]>(
+    'SELECT id, address, drive_folder_id FROM properties WHERE id = ?',
+    [tenant.propertyId],
+  );
+  if (propRows.length === 0) {
+    throw new Error(`La propiedad ${tenant.propertyId} no existe en la base de datos.`);
+  }
+  const property = propRows[0];
+
+  let propertyFolderId = property.drive_folder_id as string | null | undefined;
+  if (!propertyFolderId) {
+    // Defensa: propiedad existe en BD pero sin carpeta. Buscar/crear por nombre.
+    const address = (property.address ?? 'Inmueble').toString();
+    const existing = await drive.files.list({
+      q: `name='${address.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
+    propertyFolderId = existing.data.files?.[0]?.id;
+    if (!propertyFolderId) {
+      const created = await drive.files.create({
+        requestBody: {
+          name: address,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [rootFolderId],
+        },
+        fields: 'id',
+      });
+      propertyFolderId = created.data.id!;
+      console.log(`[Drive] Carpeta de inmueble creada (recuperación): "${address}" → ${propertyFolderId}`);
+    }
+    await pool.query('UPDATE properties SET drive_folder_id = ? WHERE id = ?', [propertyFolderId, tenant.propertyId]);
+  }
+
+  // 2. Buscar/crear carpeta del tenant dentro de la carpeta de la propiedad.
+  const folderName = `${tenant.name.trim()} (${String(tenant.documentId ?? '').replace(/\D/g, '')})`;
+  const tenantExisting = await drive.files.list({
+    q: `name='${folderName.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${propertyFolderId}' in parents and trashed=false`,
+    fields: 'files(id)',
+    spaces: 'drive',
+  });
+  let tenantFolderId = tenantExisting.data.files?.[0]?.id;
+  if (!tenantFolderId) {
+    const created = await drive.files.create({
+      requestBody: {
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [propertyFolderId],
+      },
+      fields: 'id',
+    });
+    tenantFolderId = created.data.id!;
+    console.log(`[Drive] Carpeta de arrendatario creada (recuperación): "${folderName}" → ${tenantFolderId}`);
+  }
+
+  // 3. Asegurar subcarpetas Cedula / Contrato / Recibos.
+  for (const sf of ['Cedula', 'Contrato', 'Recibos']) {
+    const subExisting = await drive.files.list({
+      q: `name='${sf}' and mimeType='application/vnd.google-apps.folder' and '${tenantFolderId}' in parents and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
+    if (!subExisting.data.files?.[0]?.id) {
+      await drive.files.create({
+        requestBody: {
+          name: sf,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [tenantFolderId],
+        },
+        fields: 'id',
+      });
+    }
+  }
+
+  return tenantFolderId;
+}
+
+/**
+ * POST /api/tenants/:id/ensure-drive-folder
+ * Crea la carpeta del tenant en Drive si no existe. Idempotente.
+ * Útil cuando el tenant se creó sin Drive conectado y quedó con
+ * `tenant_drive_folder_id = NULL`. Después de esto, el botón
+ * "Abrir Inventario de Colocación" se puede habilitar.
+ *
+ * Requiere que el tenant tenga `property_id` asignado. Si no, devuelve 400.
+ */
+router.post('/:id/ensure-drive-folder', async (req, res) => {
+  const { id } = req.params;
+
+  // 1. Buscar tenant.
+  const [rows] = await pool.query<any[]>(
+    'SELECT id, name, document_id, property_id, tenant_drive_folder_id FROM tenants WHERE id = ?',
+    [id],
+  );
+  if (rows.length === 0) {
+    res.status(404).json({ error: 'Inquilino no encontrado' });
+    return;
+  }
+  const tenant = rows[0];
+
+  // 2. Si ya tiene carpeta, devolverla (idempotente).
+  if (tenant.tenant_drive_folder_id) {
+    res.json({
+      success: true,
+      tenantDriveFolderId: tenant.tenant_drive_folder_id,
+      created: false,
+      message: 'El arrendatario ya tiene carpeta en Drive',
+    });
+    return;
+  }
+
+  // 3. Necesitamos Drive conectado.
+  let drive: any;
+  try {
+    drive = await getFreshDriveClient();
+  } catch (e: any) {
+    res.status(400).json({
+      error: 'No hay conexión con Google Drive. Conectá Drive en Configuración.',
+    });
+    return;
+  }
+
+  // 4. Necesitamos el rootFolderId del usuario.
+  const [tokensRows] = await pool.query<any[]>(
+    'SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+    ['default_user', 'google_drive'],
+  );
+  const rootFolderId = tokensRows[0]?.drive_folder_id;
+  if (!rootFolderId) {
+    res.status(400).json({
+      error: 'No hay carpeta raíz de InmoControl configurada en Drive. Reconectá Drive en Configuración.',
+    });
+    return;
+  }
+
+  // 5. Crear la estructura de carpetas.
+  try {
+    const folderId = await ensureTenantDriveFolder(drive, rootFolderId, {
+      id: tenant.id,
+      name: tenant.name,
+      documentId: tenant.document_id,
+      propertyId: tenant.property_id,
+    });
+    await pool.query(
+      'UPDATE tenants SET tenant_drive_folder_id = ? WHERE id = ?',
+      [folderId, id],
+    );
+    res.json({
+      success: true,
+      tenantDriveFolderId: folderId,
+      created: true,
+      message: 'Carpeta de Drive creada y vinculada al arrendatario',
+    });
+  } catch (err: any) {
+    console.error('[tenants] ensure-drive-folder error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/tenants/:id/link-drive-folder
+ * Vincula una carpeta YA EXISTENTE en Drive al tenant en la DB, sin crear
+ * nada nuevo. Útil cuando el tenant se creó sin Drive y después se subió
+ * la documentación manualmente a una carpeta existente que hay que vincular.
+ *
+ * Body: { driveFolderId: string, createSubfolders?: boolean }
+ */
+router.post('/:id/link-drive-folder', async (req, res) => {
+  const { id } = req.params;
+  const { driveFolderId, createSubfolders } = req.body as {
+    driveFolderId?: string;
+    createSubfolders?: boolean;
+  };
+
+  if (!driveFolderId) {
+    res.status(400).json({ error: 'Falta driveFolderId en el body' });
+    return;
+  }
+
+  const [rows] = await pool.query<any[]>(
+    'SELECT id, tenant_drive_folder_id FROM tenants WHERE id = ?',
+    [id],
+  );
+  if (rows.length === 0) {
+    res.status(404).json({ error: 'Inquilino no encontrado' });
+    return;
+  }
+
+  // Validar que la carpeta existe en Drive.
+  let drive: any;
+  try {
+    drive = await getFreshDriveClient();
+  } catch {
+    res.status(400).json({ error: 'No hay conexión con Google Drive' });
+    return;
+  }
+
+  try {
+    const meta = await drive.files.get({
+      fileId: driveFolderId,
+      fields: 'id, name, mimeType, trashed',
+    });
+    if (meta.data.trashed) {
+      res.status(400).json({ error: 'La carpeta está en la papelera de Drive' });
+      return;
+    }
+    if (meta.data.mimeType !== 'application/vnd.google-apps.folder') {
+      res.status(400).json({ error: `El ID apunta a un archivo (${meta.data.name}), no a una carpeta` });
+      return;
+    }
+
+    // Si pidió crear subcarpetas, las creamos dentro de la carpeta vinculada.
+    if (createSubfolders) {
+      for (const sf of ['Cedula', 'Contrato', 'Recibos']) {
+        const subExisting = await drive.files.list({
+          q: `name='${sf}' and mimeType='application/vnd.google-apps.folder' and '${driveFolderId}' in parents and trashed=false`,
+          fields: 'files(id)',
+          spaces: 'drive',
+        });
+        if (!subExisting.data.files?.[0]?.id) {
+          await drive.files.create({
+            requestBody: {
+              name: sf,
+              mimeType: 'application/vnd.google-apps.folder',
+              parents: [driveFolderId],
+            },
+            fields: 'id',
+          });
+        }
+      }
+    }
+
+    await pool.query(
+      'UPDATE tenants SET tenant_drive_folder_id = ? WHERE id = ?',
+      [driveFolderId, id],
+    );
+    res.json({
+      success: true,
+      tenantDriveFolderId: driveFolderId,
+      folderName: meta.data.name,
+      message: `Carpeta "${meta.data.name}" vinculada al arrendatario`,
+    });
+  } catch (err: any) {
+    console.error('[tenants] link-drive-folder error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/tenants/:id/documents?folder=Cedula
+ * Lista los archivos existentes en una subcarpeta del inquilino en Drive.
+ * Se usa para saber si la cédula ya está subida (aunque el cliente haya
+ * refrescado la página y perdido el uploadStatus local).
+ */
+router.get('/:id/documents', async (req, res) => {
+  const { id } = req.params;
+  const folder = (req.query.folder as string) || 'Cedula';
+
+  const allowedFolders = ['Cedula', 'Contrato', 'Recibos', 'Acta'];
+  if (!allowedFolders.includes(folder)) {
+    res.status(400).json({ error: `Carpeta inválida. Usa: ${allowedFolders.join(', ')}` });
+    return;
+  }
+
+  try {
+    const [rows] = await pool.query<any[]>(
+      'SELECT tenant_drive_folder_id FROM tenants WHERE id = ?',
+      [id],
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: 'Inquilino no encontrado' });
+      return;
+    }
+    const tenantDriveFolderId = rows[0]?.tenant_drive_folder_id;
+    if (!tenantDriveFolderId) {
+      res.json({ files: [] });
+      return;
+    }
+
+    const drive = await getFreshDriveClient();
+    const subfolderRes = await drive.files.list({
+      q: `name='${folder}' and mimeType='application/vnd.google-apps.folder' and '${tenantDriveFolderId}' in parents and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
+    const subfolderId = subfolderRes.data.files?.[0]?.id;
+    if (!subfolderId) {
+      res.json({ files: [] });
+      return;
+    }
+
+    const filesRes = await drive.files.list({
+      q: `'${subfolderId}' in parents and trashed=false`,
+      fields: 'files(id, name, webViewLink, mimeType, size, createdTime)',
+      spaces: 'drive',
+      orderBy: 'createdTime desc',
+    });
+
+    res.json({ files: filesRes.data.files ?? [] });
+  } catch (err: any) {
+    console.error('[tenants] list documents error:', err.message);
+    // No rompas la UI si Drive no responde — devolvé lista vacía.
+    res.json({ files: [] });
+  }
+});
+
+/**
+ * PATCH /api/tenants/:id
+ */
+router.patch('/:id', async (req, res) => {
+  const { id } = req.params;
+  const allowed = ['name', 'document_id', 'email', 'phone', 'rent', 'admin_fee', 'lease_start_date', 'status', 'property_id'];
+  const updates: string[] = [];
+  const values: any[] = [];
+  const map: Record<string, string> = {
+    idNumber: 'document_id',
+    leaseStartDate: 'lease_start_date',
+    propertyId: 'property_id',
+    adminFee: 'admin_fee',
+  };
+
+  for (const f of allowed) {
+    const camel = f.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    const requestKey = Object.keys(map).find((k) => map[k] === camel) ?? camel;
+    if (req.body[requestKey] !== undefined) {
+      updates.push(`${f} = ?`);
+      values.push(req.body[requestKey]);
+    }
+  }
+
+  if (!updates.length) {
+    res.json({ success: true, message: 'Nothing to update' });
+    return;
+  }
+  values.push(id);
+  try {
+    await pool.query(
+      `UPDATE tenants SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
+      [...values, 'default_org'],
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/tenants/:id
+ */
+router.delete('/:id', async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM tenants WHERE id = ? AND organization_id = ?`,
+      [req.params.id, 'default_org'],
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/tenants/upload-document
+ * Sube un documento a una subcarpeta del arrendatario en Drive.
+ * Body: { tenantDriveFolderId, folder (Cedula|Contrato|Recibos), fileName, base64Data }
+ */
+router.post('/upload-document', async (req, res) => {
+  const { tenantDriveFolderId, folder, fileName, base64Data } = req.body as {
+    tenantDriveFolderId: string;
+    folder: string;
+    fileName: string;
+    base64Data: string;
+  };
+
+  if (!tenantDriveFolderId || !folder || !fileName || !base64Data) {
+    res.status(400).json({ error: 'Faltan campos requeridos' });
+    return;
+  }
+
+  const allowedFolders = ['Cedula', 'Contrato', 'Recibos'];
+  if (!allowedFolders.includes(folder)) {
+    res.status(400).json({ error: `Carpeta inválida. Usa: ${allowedFolders.join(', ')}` });
+    return;
+  }
+
+  try {
+    const drive = await getFreshDriveClient();
+
+    // Buscar el ID de la subcarpeta (Cedula/Contrato/Recibos) dentro de la carpeta del arrendatario
+    const subfolderRes = await drive.files.list({
+      q: `name='${folder}' and mimeType='application/vnd.google-apps.folder' and '${tenantDriveFolderId}' in parents and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
+
+    const subfolderId = subfolderRes.data.files?.[0]?.id;
+    if (!subfolderId) {
+      res.status(404).json({ error: `Subcarpeta "${folder}" no encontrada en Drive` });
+      return;
+    }
+
+    // Decodificar base64 a buffer
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+
+    const uploaded = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: [subfolderId],
+      },
+      media: {
+        mimeType: 'application/pdf',
+        body: Readable.from(fileBuffer),
+      },
+      fields: 'id, webViewLink',
+    });
+
+    // Hacer accesible públicamente
+    await drive.permissions.create({
+      fileId: uploaded.data.id!,
+      requestBody: { role: 'reader', type: 'anyone' },
+    });
+
+    console.log(`[Drive] "${fileName}" subido a ${folder} del arrendatario`);
+    res.json({ fileId: uploaded.data.id, webViewLink: uploaded.data.webViewLink });
+  } catch (err: any) {
+    console.error('[Drive] Error subiendo documento:', err.message);
+    res.status(500).json({ error: 'Error subiendo a Drive: ' + err.message });
+  }
+});
+
+/**
+ * POST /api/tenants/upload-acta
+ * Sube el PDF del Acta de Entrega a una subcarpeta "Acta/" del arrendatario
+ * (crea la subcarpeta si no existe). Es un caso especial vs /upload-document
+ * porque la subcarpeta "Acta" no está pre-creada al crear el inquilino.
+ *
+ * Body: { tenantDriveFolderId, fileName, base64Data }
+ */
+router.post('/upload-acta', async (req, res) => {
+  const { tenantDriveFolderId, fileName, base64Data } = req.body as {
+    tenantDriveFolderId: string;
+    fileName: string;
+    base64Data: string;
+  };
+
+  if (!tenantDriveFolderId || !fileName || !base64Data) {
+    res.status(400).json({ error: 'Faltan campos requeridos' });
+    return;
+  }
+
+  try {
+    const drive = await getFreshDriveClient();
+
+    // 1. Buscar/crear la subcarpeta "Acta" dentro de la carpeta del inquilino
+    let actaFolderId: string | undefined;
+    const subfolderRes = await drive.files.list({
+      q: `name='Acta' and mimeType='application/vnd.google-apps.folder' and '${tenantDriveFolderId}' in parents and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
+    actaFolderId = subfolderRes.data.files?.[0]?.id;
+    if (!actaFolderId) {
+      const created = await drive.files.create({
+        requestBody: {
+          name: 'Acta',
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [tenantDriveFolderId],
+        },
+        fields: 'id',
+      });
+      actaFolderId = created.data.id!;
+      console.log(`[Drive] Subcarpeta Acta/ creada para el arrendatario`);
+    }
+
+    // 2. Subir el PDF
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    const uploaded = await drive.files.create({
+      requestBody: { name: fileName, parents: [actaFolderId] },
+      media: { mimeType: 'application/pdf', body: Readable.from(fileBuffer) },
+      fields: 'id, webViewLink',
+    });
+
+    // 3. Hacer accesible públicamente
+    await drive.permissions.create({
+      fileId: uploaded.data.id!,
+      requestBody: { role: 'reader', type: 'anyone' },
+    });
+
+    console.log(`[Drive] Acta "${fileName}" subida a Acta/ del arrendatario`);
+    res.json({ fileId: uploaded.data.id, webViewLink: uploaded.data.webViewLink });
+  } catch (err: any) {
+    console.error('[Drive] Error subiendo acta:', err.message);
+    res.status(500).json({ error: 'Error subiendo acta a Drive: ' + err.message });
+  }
+});
+
+export default router;

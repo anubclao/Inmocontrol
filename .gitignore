@@ -1,0 +1,53 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+!.env.production.example
+
+# ─── Artefactos de dev local (no subir al repo) ──────────────────────────
+# Logs de dev server (Vite + tsx + MySQL)
+dev-*.log
+dev-*.err
+dev-*.out
+dev-*.txt
+dev-dist/
+logs-*.txt
+logs-*.out
+server.out
+server.err
+server.log
+server.out.bak
+vite.err
+vite.log
+vite-output.log
+vite-error.log
+.dev.out.log
+.dev.err.log
+*.bak
+*.old
+# Logs y outputs de smoke / lint / build / migrate runs
+lint-*.txt
+build-*.txt
+migrate-*.log
+smoke-*.log
+unit-tests-*.log
+db-conn-test.log
+test-charges-*.log
+test-cc-*.log
+# Outputs PDF de prueba (se regeneran localmente)
+muestra-*.pdf
+# Respuestas crudas de API capturadas durante debugging manual
+api_resp.json
+props.json
+prop_detail.json
+test_endpoint.json
+query
+qc
+# Sesión y storage del navegador
+indexes/
+.parcel-cache/
+.turbo/

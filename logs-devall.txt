@@ -1,0 +1,208 @@
+﻿
+> react-example@0.0.0 dev:all
+> npm run server & npm run dev
+
+
+> react-example@0.0.0 server
+> tsx server.ts
+
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ­ƒøí´©Å auth for agents: https://vestauth.com
+[dotenv@17.3.1] injecting env (12) from .env.local -- tip: ­ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+[dotenv@17.3.1] injecting env (0) from .env.local -- tip: ­ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+[dotenv@17.3.1] injecting env (0) from .env.local -- tip: ­ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+[dotenv@17.3.1] injecting env (0) from .env.local -- tip: ­ƒøá´©Å  run anywhere with `dotenvx run -- yourcommand`
+[dotenv@17.3.1] injecting env (0) from .env.local -- tip: ­ƒøá´©Å  run anywhere with `dotenvx run -- yourcommand`
+[dotenv@17.3.1] injecting env (0) from .env.local -- tip: ­ƒñû agentic secret storage: https://dotenvx.com/as2
+[API] Backend running on http://localhost:3001
+node.exe : [db] MySQL NO disponible: connect ECONNREFUSED 127.0.0.1:3306
+En línea: 1 Carácter: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([db] MySQL NO d... 127.0.0.1:3306:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[db] Los endpoints devolver├ín 503 hasta que se conecte.
+[POST /api/properties] body: {
+  address: 'Calle 99 # MQSDXNW8-01, Apto 901 (TEST)',
+  owner: 'Propietario Test MQSDXNW8',
+  localId: 'wizard-test-MQSDXNW8'
+}
+[POST /api/properties] OK ÔÇö id: 88d638e9-d279-4bca-8bf6-a66ea7853288 drive: (sin Drive)
+[POST /api/properties] body: {
+  address: 'Calle 99 # MQSDXNW8-01, Apto 901 (TEST)',
+  owner: 'Propietario Test MQSDXNW8 (EDITADO)',
+  localId: 'wizard-test-MQSDXNW8'
+}
+[POST /api/properties] OK ÔÇö id: 80bc257e-9698-4b0a-bff1-a7a2aea82b27 drive: (sin Drive)
+[POST /api/properties] body: {
+  address: 'Calle 99 # MQSDY9CH-01, Apto 901 (TEST)',
+  owner: 'Propietario Test MQSDY9CH',
+  localId: 'wizard-test-MQSDY9CH'
+}
+[POST /api/properties] OK ÔÇö id: 1175dd59-0193-4988-859e-5953aaad4de8 drive: (sin Drive)
+[POST /api/properties] body: {
+  address: 'Calle 99 # MQSDY9CH-01, Apto 901 (TEST)',
+  owner: 'Propietario Test MQSDY9CH (EDITADO)',
+  localId: '1175dd59-0193-4988-859e-5953aaad4de8'
+}
+[POST /api/properties] OK ÔÇö id: 1175dd59-0193-4988-859e-5953aaad4de8 drive: (sin Drive)
+[OAuth] /auth/google llamado. GOOGLE_CLIENT_ID presente: true
+[OAuth] Callback recibido: {
+  error: undefined,
+  hasCode: true,
+  codePreview: '4/0AdkVLPwJrYWzEuokd...'
+}
+[OAuth] Intercambiando code por tokens...
+[OAuth] Tokens recibidos: { hasAccess: true, hasRefresh: true, expiry: 1782328842309 }
+[OAuth] Usuario: default_user
+[OAuth] Creando/buscando carpeta en Drive...
+[OAuth] Carpeta: 1XVB2FP3-r_d5cfHvsRRFdI9K5JJAgFlq
+[OAuth] Guardando tokens en MySQL...
+[OAuth] Ô£ô ├ëxito! Redirigiendo al frontend.
+
+> react-example@0.0.0 dev
+> vite
+
+Port 3000 is in use, trying another one...
+
+  [32m[1mVITE[22m v6.4.1[39m  [2mready in [0m[1m3806[22m[2m[0m ms[22m
+
+  [32mÔ×£[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3001[22m/[39m
+[2m  [32mÔ×£[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m[32m  Ô×£[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m1:41:51 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/financial-records[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:41:51 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tenants[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:41:51 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tenants[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:41:51 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:41:52 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:41:52 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/financial-records[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/financial-records[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tenants[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:47:32 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:54:27 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:54:27 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:54:27 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/google[39m
+AggregateError [ENOBUFS]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at internalConnectMultiple (node:net:1218:5)
+    at internalConnectMultiple (node:net:1218:5)
+    at defaultTriggerAsyncIdScope (node:internal/async_hooks:472:18)
+    at GetAddrInfoReqWrap.emitLookup [as callback] (node:net:1560:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+[2m1:56:48 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:56:48 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/financial-records[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m1:56:48 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tenants[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/health[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tenants[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/auth/google[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/financial-records[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/properties[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
+[2m2:05:35 p. m.[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/status/google-drive[39m
+AggregateError [ETIMEDOUT]: 
+    at internalConnectMultiple (node:net:1142:49)
+    at afterConnectMultiple (node:net:1723:7)
