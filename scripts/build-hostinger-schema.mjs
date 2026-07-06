@@ -23,6 +23,13 @@ const outPath  = path.resolve('db/mysql/schema-hostinger.sql');
 // Lo que agregamos por encima del schema base: tabla property_charges (fresh).
 // NO incluye el INSERT del backfill porque este script corre contra una DB
 // vacía (deploy limpio en Hostinger).
+//
+// IMPORTANTE — FKs declaradas como ALTER TABLE separado, no inline:
+// Algunas versiones de MySQL shared (Hostinger, MariaDB 10.x) fallan con
+// "Error 150: Foreign key constraint is incorrectly formed" cuando el
+// CREATE TABLE declara FKs inline, aunque los tipos/charset coincidan.
+// El workaround estándar es crear la tabla con índices y agregar las FKs
+// vía ALTER TABLE después, donde el parser sí las acepta.
 const extras = `
 -- ============================================================================
 -- InmoControl — NOVEDADES DE CARGOS UNIFICADAS (Fase 12+)
@@ -32,12 +39,13 @@ const extras = `
 -- a quién se le imputa (owner / tenant / both) y si entra o no en la cuenta
 -- de cobro del mes.
 --
--- Ver:
---   db/mysql/migrations/006_property_charges.sql  (versión con backfill)
---   src/features/billing/components/NovedadFormModal.tsx
---   src/features/billing/calculations.ts → summarizeInvoiceCharges
+-- La integridad referencial se enforza en la capa de aplicación
+-- (NovedadFormModal + cálculos de billing). Los FKs que se agregan debajo
+-- como ALTER TABLE son defensivos — si tu MySQL los rechaza, podés
+-- comentarlos sin afectar la app.
 -- ============================================================================
 
+-- Paso 1: Crear la tabla SIN FKs (para evitar Error 150 en MySQL shared)
 CREATE TABLE IF NOT EXISTS property_charges (
   id                   CHAR(36)      NOT NULL,
   organization_id      CHAR(36)      NOT NULL,
@@ -63,12 +71,15 @@ CREATE TABLE IF NOT EXISTS property_charges (
   KEY charges_org_idx (organization_id),
   KEY charges_property_period_idx (property_id, period),
   KEY charges_type_idx (type),
-  KEY charges_charged_to_idx (charged_to),
-  CONSTRAINT fk_charges_org
-    FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
-  CONSTRAINT fk_charges_property
-    FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE
+  KEY charges_charged_to_idx (charged_to)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Paso 2: Agregar las FKs como ALTER separado (más tolerante)
+ALTER TABLE property_charges
+  ADD CONSTRAINT fk_charges_org
+    FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
+  ADD CONSTRAINT fk_charges_property
+    FOREIGN KEY (property_id)     REFERENCES properties (id)     ON DELETE CASCADE;
 `;
 
 const header = `-- ============================================================================

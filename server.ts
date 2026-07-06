@@ -18,6 +18,7 @@ import inventoriesRouter from "./server/routes/inventories.js";
 import financialRecordsRouter from "./server/routes/financialRecords.js";
 import notificationsRouter from "./server/routes/notifications.js";
 import saasBillingRouter from "./server/routes/saasBilling.js";
+import adminRouter from "./server/routes/admin.js";
 import pool, { checkDb } from "./server/db.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,6 +68,10 @@ async function startServer() {
 
   // Auth (público — login + me)
   app.use("/api/auth", authRouter);
+
+  // Bootstrap admin (público pero protegido por header token).
+  // SOLO para el piloto single-tenant. Ver server/routes/admin.ts.
+  app.use("/api/admin", adminRouter);
 
   app.use("/api/entities", entitiesRouter);
   app.use("/api/billing", billingRouter);
