@@ -33,6 +33,17 @@ router.get('/auth/google', (_req, res) => {
   res.json({ url });
 });
 
+/** Resuelve la URL del frontend para redirects post-OAuth.
+ *  - Producción: APP_URL (https://inmocontrol.tecnowebsupportia.com)
+ *  - Dev:        FRONTEND_URL o fallback http://localhost:3000
+ *  NUNCA hardcodear localhost — los usuarios de prod terminan en su propia máquina.
+ */
+const FRONTEND_REDIRECT_BASE = (
+  process.env.APP_URL ||
+  process.env.FRONTEND_URL ||
+  'http://localhost:3000'
+).replace(/\/+$/, '');  // sin slash final para concatenar limpio
+
 /** Callback de Google — intercambia code por tokens y guarda en MySQL. */
 router.get('/auth/google/callback', async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
@@ -40,7 +51,7 @@ router.get('/auth/google/callback', async (req, res) => {
 
   if (error || !code) {
     console.log('[OAuth] Error o sin código:', error);
-    res.redirect(`http://localhost:3000/?gdrive_error=${encodeURIComponent(error || 'no_code')}`);
+    res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_error=${encodeURIComponent(error || 'no_code')}`);
     return;
   }
 
@@ -82,11 +93,11 @@ router.get('/auth/google/callback', async (req, res) => {
     );
 
     console.log('[OAuth] ✓ Éxito! Redirigiendo al frontend.');
-    res.redirect(`http://localhost:3000/?gdrive_connected=1&folder=${encodeURIComponent(folderId)}`);
+    res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_connected=1&folder=${encodeURIComponent(folderId)}`);
   } catch (err: any) {
     console.error('[OAuth] Error completo:', err?.message, err?.response?.data);
     const detail = err?.response?.data?.error || err?.message || 'token_exchange_failed';
-    res.redirect(`http://localhost:3000/?gdrive_error=${encodeURIComponent(detail)}`);
+    res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_error=${encodeURIComponent(detail)}`);
   }
 });
 
