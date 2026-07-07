@@ -24,7 +24,7 @@ npm install
 
 # 2. Crear .env.local con tus llaves (no es obligatorio para abrir la app)
 cp .env.example .env.local
-# Edita .env.local y pon tu GEMINI_API_KEY si vas a usar funciones de IA
+# Edita .env.local con tus credenciales (MySQL, OAuth, Twilio, SMTP)
 
 # 3. Levantar dev server
 npm run dev
@@ -59,7 +59,6 @@ src/
 
 | Variable         | Obligatorio | Descripción                                       |
 | ---------------- | ----------- | ------------------------------------------------- |
-| `GEMINI_API_KEY` | No          | Llave para funciones de IA. La app abre sin ella. |
 | `APP_URL`        | No          | URL pública (para CORS y links internos).         |
 | `NODE_ENV`       | No          | `production` cambia el server a servir estáticos.|
 
@@ -82,4 +81,4 @@ src/
 
 ---
 
-Generado a partir de la base exportada de Google AI Studio. El branding y la lógica de negocio son propios de **InmoControl Colombia**.
+SaaS de administración de arrendamientos para el mercado colombiano. Hecho en Colombia para Colombia.

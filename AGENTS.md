@@ -87,6 +87,33 @@ src/
 - ❌ No crees un backend con DB real hasta que el monolito esté partido y la lógica financiera validada.
 - ❌ No uses `localStorage` directo fuera de `shared/store/`. Todo va por Zustand.
 
+## Deploy a Hostinger (flujo limpio, Julio 2026)
+
+> Cada `git push` → redeploy automático. NO requiere FTP ni intervención manual.
+
+**El proyecto compila en 2 outputs:**
+- `dist/` — frontend estático (vite build)
+- `dist-server/server.js` — backend bundleado (esbuild, single-file con todo inline)
+
+**Scripts clave:**
+- `npm run build` → corre `build:client` + `build:server` (ambos en uno)
+- `npm start` → `NODE_ENV=production node dist-server/server.js`
+
+**Lo que NO se sube al server:**
+- `node_modules/` (Hostinger instala con npm install en cada deploy)
+- `supabase/` (legacy — ya no se usa, eliminar)
+- `.env*` (los env vars se configuran en el panel)
+
+**Auto-deploy Hostinger:**
+1. Push a `main` → Hostinger clona, `npm install`, `npm run build`, publica `dist/`, arranca `npm start`.
+2. Si falla: revisar "Registros de tiempo de ejecución" en el panel (debe tener logs, no estar vacío).
+
+**Para deploy fresh:**
+1. Panel → Avanzado → Node.js → Create Application (Application root: project root, startup: `npm start`).
+2. Variables de entorno (ver `.env.production.example`).
+3. Schema de DB: importar `db/mysql/schema-hostinger.sql` vía phpMyAdmin.
+4. Seed: `curl -X POST -H "X-Admin-Seed-Token: <token>" https://<dominio>/api/admin/seed`.
+
 ## Estado del refactor
 
 | Fase | Estado | Notas |
