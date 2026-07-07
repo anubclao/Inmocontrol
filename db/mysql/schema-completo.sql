@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS tenants (
   lease_start_date    DATE         NULL,
   status              VARCHAR(20)  NOT NULL DEFAULT 'Activo',
   tenant_drive_folder_id VARCHAR(200) NULL,
+  drive_folder_path    VARCHAR(500) NULL
+                          COMMENT 'Path legible de la carpeta del tenant en Drive',
   created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -495,11 +497,13 @@ CREATE TABLE IF NOT EXISTS user_oauth_tokens (
   provider      VARCHAR(50)  NOT NULL
                   CHECK (provider IN ('google_drive')),
   access_token  TEXT         NOT NULL,
-  refresh_token TEXT         NULL,
-  expiry_date   BIGINT       NULL
-                  COMMENT 'Unix timestamp ms del expiration del access_token',
-  scopes        VARCHAR(500) NULL,
-  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  refresh_token    TEXT         NULL,
+  expiry_date      BIGINT       NULL
+                     COMMENT 'Unix timestamp ms del expiration del access_token',
+  drive_folder_id  VARCHAR(200) NULL
+                     COMMENT 'ID de la carpeta "InmoControl" en el Drive del usuario',
+  scopes           VARCHAR(500) NULL,
+  created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY user_oauth_user_provider_idx (user_id, provider)

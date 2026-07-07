@@ -157,4 +157,26 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-startServer().catch(console.error);
+// ─── Safety nets — NUNCA dejar que un error asíncrono mate el proceso ───
+// Sin estos handlers, una query MySQL mal armada (ej: ER_BAD_FIELD_ERROR
+// por schema drift) se convierte en unhandledRejection y Node tira el
+// proceso entero. Express solo captura errores SINCRONICOS del middleware.
+// Los rechazos de promesas (lo que más usa mysql2) se escapan por aquí.
+// Ver: https://nodejs.org/api/process.html#warning-using-uncaughtexception
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[server] UNHANDLED REJECTION (no mató el proceso):', reason?.message ?? reason);
+  if (reason?.stack) console.error(reason.stack);
+  if (reason?.sql) console.error('  sql:', reason.sql);
+});
+
+process.on('uncaughtException', (err: any) => {
+  console.error('[server] UNCAUGHT EXCEPTION (no mató el proceso):', err?.message ?? err);
+  if (err?.stack) console.error(err.stack);
+  // No exit — solo loguear. Para errores fatales de verdad (OOM, etc.),
+  // Node va a cerrar el proceso igual cuando intente usarlos.
+});
+
+startServer().catch((err) => {
+  console.error('[server] Error fatal en startServer():', err);
+  process.exit(1);
+});
