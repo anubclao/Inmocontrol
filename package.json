@@ -1,8 +1,12 @@
 {
-  "name": "react-example",
+  "name": "inmocontrol",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "dist-server/server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "server": "tsx watch server.ts",
     "dev": "vite",
