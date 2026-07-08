@@ -229,6 +229,23 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 
 Si un SELECT falla con "Unknown column inventario_captacion_pdf_url", es porque alguien (como yo) usó el nombre español. Usar el inglés: `inventory_captacion_pdf_url`. La respuesta del API puede usar el alias español para clientes que lo prefieran, pero la DB es inglés.
 
+### Migración 009 — reconcilia el schema canónico con la realidad (jul-2026)
+El `schema-hostinger.sql` y `schema-completo.sql` documentaban las 2 columnas
+(`inventory_captacion_pdf_url`, `inventory_colocacion_pdf_url`) **pero nunca las
+incluían en el `CREATE TABLE`**. Resultado: drift silencioso entre docs y DB.
+Cualquier `GET /api/properties/:id` o `POST /api/inventories/upload-pdf` tiraba
+500 con `ER_BAD_FIELD_ERROR` hasta que se aplicó la migración.
+
+- **Fix**: `db/mysql/migrations/009_properties_inventory_pdf_urls.sql` (idempotente).
+  Aplicar con `node scripts/apply-009-migration.mjs` (o pegar el SQL en phpMyAdmin).
+- **Replicado en**: `schema-completo.sql` y `schema-hostinger.sql` (ambas ya tienen
+  las columnas dentro del `CREATE TABLE` de `properties`, así deploys frescos
+  arrancan limpios).
+- **Removida la rama defensiva rota** de `server/routes/inventories.ts:336` que
+  intentaba `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (sintaxis PostgreSQL,
+  inválida en MySQL 8). Con la migración aplicada, la columna YA existe — esa
+  rama era un parche que en realidad rompía más de lo que arreglaba.
+
 ### Schema importante de `properties.status`
 - Constraint: `CHECK (status IN ('Pendiente','Activo','En Colocación','Arrendado','Inactivo'))`
 - NO acepta 'available'/'rented'/'maintenance' (esa era la convención vieja)
@@ -264,6 +281,30 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
   métodos de pago son PER-ORG (`organization_id` FK).
 - IVA colombiano 19% se calcula al facturar (`COLOMBIA_IVA_RATE = 0.19`).
   Mostrar subtotal + IVA + total en UI (estándar colombiano).
+
+### Onboarding de testers (Google OAuth)
+- **Problema típico**: tester intenta "Conectar Drive" → rebota con
+  `403 access_denied` + mensaje de Google "la app se está probando y solo
+  pueden acceder a ella los testers aprobados por el desarrollador".
+- **Causa**: la OAuth app de InmoControl está en modo **Testing** en Google
+  Cloud Console (no verificada). Solo los emails listados como Test users
+  pueden autorizar.
+- **Fix (30 seg, sin redeploy)**: Google Cloud Console → APIs & Services →
+  OAuth consent screen → sección **Test users** → `+ ADD USERS` → pegar
+  email del tester → Save.
+- **No olvidarse de agregarse a uno mismo**: el developer/owner también
+  tiene que estar en la lista, sino no puede conectar su propio Drive.
+- **Hygiene**: cada tester usa **su propio Chrome profile** con **su
+  cuenta de Google**. Si comparten perfil, Chrome muestra un popup
+  confuso de "Cambiar a un perfil de Chrome" y el que termina
+  autorizando puede ser la cuenta equivocada.
+- **Warning amarillo "Google no ha verificado esta app"**: es normal en
+  modo Testing. El tester tiene que clickear "Avanzado → Ir a ... (no
+  seguro)" la primera vez. Solo desaparece cuando la app se publique a
+  producción.
+- **Guía completa paso a paso + tabla de testers actuales**:
+  [`docs/TESTERS.md`](docs/TESTERS.md). Actualizar ese doc cuando se sume
+  o salga un tester.
 
 ### Recuperación de wizard interrumpido (PENDIENTE)
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
