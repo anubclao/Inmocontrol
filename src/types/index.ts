@@ -1,3 +1,48 @@
+/**
+ * Propietario de una propiedad (migración 010+).
+ * Una propiedad puede tener N propietarios, cada uno con su % de participación.
+ * El Contrato de Mandato sigue siendo 1 PDF multi-firmado por todos (no se
+ * desglosa por dueño — vive en `Property.mandatePdfUrl`).
+ */
+export interface PropertyOwner {
+  id: string;
+  name: string;
+  idNumber?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  /** Porcentaje de participación (0.00 - 100.00). `null` = sin definir. */
+  ownershipPct?: number | null;
+  position: number;
+  notes?: string | null;
+  /** Documentos legales del dueño. Solo CC y RUT — el Predial es por propiedad. */
+  documents?: {
+    cedula?: string;
+    rut?: string;
+  };
+}
+
+/**
+ * Unidad adicional de una propiedad (migración 010+): garaje, depósito, etc.
+ * NO se crea fila para la unidad principal: la principal ES la propiedad
+ * misma y sus docs (Certificado de Tradición) tienen `unitId = null` en
+ * el backend.
+ */
+export type PropertyUnitType = 'parking' | 'storage' | 'other';
+
+export interface PropertyUnit {
+  id: string;
+  type: PropertyUnitType;
+  label: string; // "Garaje 12", "Depósito 3B"
+  folioMatricula?: string | null;
+  areaM2?: number | null;
+  notes?: string | null;
+  position: number;
+  /** Documentos de la unidad. Solo Certificado de Tradición por ahora. */
+  documents?: {
+    certificado_tradicion?: string;
+  };
+}
+
 export interface Owner {
   id: string;
   name: string;
@@ -67,6 +112,23 @@ export interface Property {
   driveFolderPath?: string;
   /** URL del PDF firmado del Inventario de Captación. */
   inventoryPdfUrl?: string;
+
+  // ── Migración 010+ ────────────────────────────────────────────────
+  /** N propietarios de esta propiedad (reemplaza el legacy `ownerName`). */
+  owners?: PropertyOwner[];
+  /** N unidades adicionales: garaje, depósito, etc. */
+  units?: PropertyUnit[];
+  /**
+   * Documentos a nivel de PROPIEDAD (no de un owner/unit específico):
+   *   - `predial`: 1 por propiedad (impuesto al bien, no al dueño)
+   *   - `certificado_tradicion`: Certificado de la unidad principal
+   * Los Certificados de unidades adicionales viven en `units[i].documents.certificado_tradicion`.
+   * Las CCs y RUTs de cada propietario viven en `owners[i].documents`.
+   */
+  documents_property?: {
+    predial?: string;
+    certificado_tradicion?: string;
+  };
 }
 
 export interface Contract {

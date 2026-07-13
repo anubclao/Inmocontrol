@@ -131,9 +131,17 @@ CREATE TABLE IF NOT EXISTS tenants (
 -- ============================================================================
 -- 5. PROPERTY_DOCUMENTS — documentos legales subidos por el agente
 -- ============================================================================
+-- owner_id y unit_id (migración 010) permiten vincular el documento a un
+-- propietario específico o a una unidad adicional (garaje, depósito).
+-- NULL = no aplica (ej: Predial de la propiedad, Certificado de la unidad
+-- principal, o docs del Mandato — que sigue viviendo en properties.mandato_pdf_url).
 CREATE TABLE IF NOT EXISTS property_documents (
   id            CHAR(36)     NOT NULL,
   property_id   CHAR(36)     NOT NULL,
+  owner_id      CHAR(36)     NULL
+                  COMMENT 'FK a property_owners. NULL si el doc NO es de un dueño específico (ej: Predial de la propiedad).',
+  unit_id       CHAR(36)     NULL
+                  COMMENT 'FK a property_units. NULL para la unidad principal o para docs no asociados a una unidad.',
   doc_type      VARCHAR(50)  NOT NULL
                   CHECK (doc_type IN ('cedula', 'certificado_tradicion', 'predial', 'rut', 'otro')),
   file_name     VARCHAR(255) NOT NULL,
@@ -143,7 +151,58 @@ CREATE TABLE IF NOT EXISTS property_documents (
   uploaded_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY prop_docs_property_idx (property_id),
-  CONSTRAINT fk_prop_docs_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE
+  KEY prop_docs_owner_idx (owner_id),
+  KEY prop_docs_unit_idx (unit_id),
+  CONSTRAINT fk_prop_docs_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE,
+  CONSTRAINT fk_prop_docs_owner    FOREIGN KEY (owner_id)     REFERENCES property_owners (id) ON DELETE CASCADE,
+  CONSTRAINT fk_prop_docs_unit     FOREIGN KEY (unit_id)      REFERENCES property_units  (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 5.1 PROPERTY_OWNERS — N propietarios por propiedad (migración 010)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS property_owners (
+  id              CHAR(36)      NOT NULL,
+  organization_id CHAR(36)      NOT NULL,
+  property_id     CHAR(36)      NOT NULL,
+  name            VARCHAR(150)  NOT NULL,
+  id_number       VARCHAR(30)   NULL,
+  phone           VARCHAR(40)   NULL,
+  email           VARCHAR(150)  NULL,
+  ownership_pct   DECIMAL(5,2)  NULL
+                    COMMENT 'Porcentaje de participación (0.00-100.00). NULL = sin definir.',
+  position        INT           NOT NULL DEFAULT 1,
+  notes           TEXT          NULL,
+  created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY property_owners_property_idx (property_id),
+  KEY property_owners_org_idx (organization_id),
+  CONSTRAINT fk_property_owners_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE,
+  CONSTRAINT fk_property_owners_org FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 5.2 PROPERTY_UNITS — unidades adicionales (migración 010)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS property_units (
+  id              CHAR(36)      NOT NULL,
+  organization_id CHAR(36)      NOT NULL,
+  property_id     CHAR(36)      NOT NULL,
+  type            VARCHAR(30)   NOT NULL
+                    COMMENT 'parking (garaje) | storage (depósito) | other',
+  label           VARCHAR(100)  NOT NULL,
+  folio_matricula VARCHAR(50)   NULL,
+  area_m2         DECIMAL(10,2) NULL,
+  notes           TEXT          NULL,
+  position        INT           NOT NULL DEFAULT 1,
+  created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY property_units_property_idx (property_id),
+  KEY property_units_org_idx (organization_id),
+  CONSTRAINT fk_property_units_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE CASCADE,
+  CONSTRAINT fk_property_units_org FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================

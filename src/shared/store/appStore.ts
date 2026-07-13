@@ -110,6 +110,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // FIX CRÍTICO: documents era ignorado por el mapper → la card mostraba
         // "Lo que falta: todos" aunque los docs estuvieran en property_documents.
         documents: p.documents ?? {},
+        // Migración 010+ — N propietarios y N unidades adicionales
+        owners: p.owners ?? [],
+        units: p.units ?? [],
       }));
 
       const tenants = (tenantsRes.tenants ?? []).map((t: any) => ({

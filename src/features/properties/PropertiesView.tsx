@@ -2,14 +2,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import { generateMandatoPdf } from './mandatoPdf';
 import { useSettingsStore } from '../../shared/store/settingsStore';
 import { motion } from 'motion/react';
-import { FileText, Image, Eye, ClipboardCheck, GitCompare, Download, FileSignature, Upload, Building2, Hash, CreditCard, Power, Trash2, Lock, ListChecks, Camera, X, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { FileText, Image, Eye, ClipboardCheck, GitCompare, Download, FileSignature, Upload, Building2, Hash, CreditCard, Power, Trash2, Lock, ListChecks, Camera, X, ChevronLeft, ChevronRight, RefreshCw, Users, Car, Package, Box, User as UserIcon, Mail, Phone, IdCard, Percent } from 'lucide-react';
 import { Button, Card, Modal } from '../../shared/ui';
 import { ProcessOrderBanner } from '../../shared/ui/ProcessOrderBanner';
 import { formatAddress, isValidCHIP } from '../../utils/validators';
 import { createPropertyFolders, uploadFileToDrive, fileToBase64 } from '../../lib/drive/driveService';
 import { useGoogleDriveStore } from '../../shared/store/googleDriveStore';
 import { useAppStore } from '../../shared/store/appStore';
-import { StepBasic } from './components/StepBasic';
+import { StepBasic, type WizardOwner, type WizardUnit } from './components/StepBasic';
 import { StepDocs } from './components/StepDocs';
 import { StepInventory } from './components/StepInventory';
 import { Role } from '../auth/permissions';
@@ -19,6 +19,7 @@ import { inventoryDB } from './inventoryDB';
 import type { Inventory } from './inventoryTypes';
 import { InventoryDiffView } from './InventoryDiffView';
 import { driveProxyUrl, driveDownloadUrl } from '../../lib/drive/driveProxy';
+import type { PropertyOwner, PropertyUnit, PropertyUnitType } from '../../types';
 
 export interface PropertiesViewProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
@@ -30,33 +31,92 @@ export interface PropertiesViewProps {
   role: Role | null;
 }
 
-const REQUIRED_DOCS = ['Cédula de Ciudadanía', 'Certificado de Tradición', 'Impuesto Predial', 'Rut Actualizado', 'Contrato de Mandato'];
 const REQUIRED_AREAS = ['Cocina', 'Baño Principal', 'Habitación 1', 'Zona Social'];
-/** Etiqueta del doc de mandato que activa el estado al 100%. */
-const MANDATO_LABEL = 'Contrato de Mandato';
+/** slotKey del Contrato de Mandato (1 PDF multi-firmado por todos los propietarios). */
+const MANDATO_KEY = 'mandato';
+/** slotKey del Certificado de Tradición de la unidad principal. */
+const CERT_MAIN_KEY = 'certificado_tradicion:main';
+/** slotKey del Predial (1 por propiedad). */
+const PREDIAL_KEY = 'predial';
 
-/** Verifica si la propiedad tiene todos los documentos obligatorios + mandato firmado. */
+/** Verifica si la propiedad tiene todos los documentos obligatorios + mandato firmado.
+ *  Migración 010+: itera por cada owner y por cada unit, además de los docs a nivel
+ *  de propiedad (Predial + Certificado principal + Mandato). */
 function allDocsComplete(p: any): boolean {
   if (!p) return false;
-  const docs = p.documents ?? {};
-  const allDocs = REQUIRED_DOCS.filter(d => d !== MANDATO_LABEL).every(l => !!docs[l]);
-  return allDocs && !!p.mandatePdfUrl;
+  // Mandato y Predial: a nivel de propiedad
+  if (!p.mandatePdfUrl) return false;
+  if (!p.documents_property?.predial && !p.documents?.['Impuesto Predial']) {
+    // Sin predial — opcional, no bloquea
+  }
+  // Certificado principal
+  const hasMainCert = !!p.documents_property?.certificado_tradicion
+    || !!p.documents?.['Certificado de Tradición'];
+  if (!hasMainCert) return false;
+  // CC por cada owner con nombre
+  const owners = p.owners ?? [];
+  for (const o of owners) {
+    if (!o.name?.trim()) continue;
+    if (!o.documents?.cedula) return false;
+  }
+  // Cert por cada unit con label
+  const units = p.units ?? [];
+  for (const u of units) {
+    if (!u.label?.trim()) continue;
+    if (!u.documents?.certificado_tradicion) return false;
+  }
+  return true;
+}
+
+/** Etiqueta humana de un slotKey para mostrar al usuario. Helper para los
+ *  handlers que vienen del flujo de file upload (donde ya no tenemos el
+ *  contexto de owners/units a mano). */
+function slotKeyToLabel(
+  slotKey: string,
+  owners?: WizardOwner[] | PropertyOwner[],
+  units?: WizardUnit[] | PropertyUnit[],
+): string {
+  if (slotKey === 'predial') return 'Impuesto Predial';
+  if (slotKey === 'mandato') return 'Contrato de Mandato';
+  if (slotKey === 'certificado_tradicion:main') return 'Certificado de Tradición';
+  if (slotKey.startsWith('cedula:')) {
+    const id = slotKey.slice('cedula:'.length);
+    const o = owners?.find?.((x) => x.id === id);
+    return o ? `Cédula de ${o.name}` : 'Cédula';
+  }
+  if (slotKey.startsWith('rut:')) {
+    const id = slotKey.slice('rut:'.length);
+    const o = owners?.find?.((x) => x.id === id);
+    return o ? `RUT de ${o.name}` : 'RUT';
+  }
+  if (slotKey.startsWith('certificado_tradicion:')) {
+    const id = slotKey.slice('certificado_tradicion:'.length);
+    const u = units?.find?.((x) => x.id === id);
+    return u ? `Certificado de ${u.label}` : 'Certificado de Tradición';
+  }
+  return slotKey;
 }
 
 export function PropertiesView({ showToast, properties, onAddProperty, onUpdateProperty, onDeleteProperty }: PropertiesViewProps) {
   const [address, setAddress] = useState('');
   const [chip, setChip] = useState('');
   const [folio, setFolio] = useState('');
-  const [owner, setOwner] = useState('');
-  const [ownerIdNumber, setOwnerIdNumber] = useState('');
   const [propertyType, setPropertyType] = useState<PropertyType>('apartamento');
+  /** N propietarios del wizard. Migración 010+. */
+  const [wizardOwners, setWizardOwners] = useState<WizardOwner[]>([
+    { id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' },
+  ]);
+  /** N unidades adicionales del wizard (garaje, depósito, etc.). */
+  const [wizardUnits, setWizardUnits] = useState<WizardUnit[]>([]);
+  /** Cédula del primer propietario (reflejada en el campo legacy de `ownerIdNumber`).
+   *  Mantenemos por compat con el modal de cédula que se abre al clickear CC. */
+  const [ownerIdNumber, setOwnerIdNumber] = useState('');
   /** Si false → se muestra la lista de inmuebles. Si true → se muestra el wizard de captación. */
   const [showWizard, setShowWizard] = useState(false);
   const [step, setStep] = useState(1);
+  /** Docs subidos en el wizard. key = slotKey (ej: "cedula:<ownerId>", "predial", "mandato"). */
   const [uploadedDocs, setUploadedDocs] = useState<Record<string, string | null>>({});
-  /** Files en memoria del wizard de captación. Se suben a Drive en handleFinalize
-   *  (cuando ya existe driveFolderId). En uploadedDocs usamos `'__pending__'` como
-   *  marcador para que la UI muestre "Documento listo" sin aún tener URL real. */
+  /** Files en memoria del wizard de captación. Se suben a Drive en handleFinalize. */
   const [wizardFiles, setWizardFiles] = useState<Record<string, File | null>>({});
   /** Inventario de captación capturado por el wizard. NO se postea a MySQL durante
    *  el wizard (porque la propiedad aún no existe y el FK explota). En su lugar,
@@ -104,7 +164,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     setDeleting(true);
     try {
       const result = await onDeleteProperty(pendingDelete.id);
-      if (result.ok) {
+      if (result.ok === true) {
         const driveNote =
           result.driveCleanupStatus === 'deleted'
             ? ' (carpeta Drive vaciada)'
@@ -115,7 +175,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         // Si el detail modal está abierto sobre esta misma propiedad, cerrarlo
         setViewingProperty((curr: any) => (curr?.id === pendingDelete.id ? null : curr));
       } else {
-        showToast(result.error, 'error');
+        // TS narrow: result.ok === false
+        showToast(result.error ?? 'Error eliminando', 'error');
       }
     } finally {
       setDeleting(false);
@@ -205,11 +266,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       return;
     }
 
-    // --- Caso 1: subida desde el modal de detalle (propiedad existente) ---
-    if (!owner && currentDocLabel === MANDATO_LABEL && uploadingMandatoPropertyId) {
+    // --- Caso A: subida de MANDATO desde el modal de detalle (propiedad existente) ---
+    if (uploadingMandatoPropertyId) {
       const propId = uploadingMandatoPropertyId;
-      setUploadingDoc(MANDATO_LABEL);
-      showToast(`Subiendo ${MANDATO_LABEL}...`);
+      setUploadingDoc(MANDATO_KEY);
+      showToast(`Subiendo Contrato de Mandato...`);
       try {
         const prop = properties.find((p: any) => p.id === propId);
         const driveFolderId = prop?.driveFolderId;
@@ -217,7 +278,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
         if (driveFolderId) {
           const base64 = await fileToBase64(file);
-          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', `${MANDATO_LABEL}.pdf`, base64);
+          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', `Contrato_de_Mandato.pdf`, base64);
           if (!result.webViewLink) {
             showToast(`Error al subir: ${result.error}`, 'error');
             setUploadingDoc(null); setCurrentDocLabel(null); setUploadingMandatoPropertyId(null);
@@ -227,14 +288,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           mandateUrl = result.webViewLink;
         } else {
           // Sin Drive: el archivo queda solo en este navegador (blob URL).
-          // Se persiste en MySQL la referencia local para no perder el binding.
           mandateUrl = URL.createObjectURL(file);
         }
 
         const now = new Date().toISOString();
         const nextStatus = prop?.status === 'Pendiente' ? 'Activo' : prop?.status;
 
-        // Persistir en backend (POST es UPSERT — actualiza solo mandate_pdf_url/mandate_signed_at)
         try {
           const res = await fetch('/api/properties', {
             method: 'POST',
@@ -259,8 +318,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         if (nextStatus !== prop?.status) updates.status = nextStatus;
         onUpdateProperty(propId, updates);
         setViewingProperty((prev: any) => prev ? { ...prev, ...updates } : prev);
-        if (nextStatus === 'Activo') showToast(`${MANDATO_LABEL} firmado. ¡Propiedad activada!`, 'success');
-        else showToast(`${MANDATO_LABEL} subido correctamente`, 'success');
+        if (nextStatus === 'Activo') showToast(`Contrato de Mandato firmado. ¡Propiedad activada!`, 'success');
+        else showToast(`Contrato de Mandato subido correctamente`, 'success');
       } catch (err) {
         console.error('[mandato upload]', err);
         showToast('Error al procesar el archivo', 'error');
@@ -272,11 +331,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       return;
     }
 
-    // --- Caso 1b: subida de documento legal desde el modal de detalle ---
-    if (!owner && currentDocLabel && uploadingDocPropertyId) {
+    // --- Caso B: subida de DOCUMENTO LEGAL desde el modal de detalle ---
+    if (uploadingDocPropertyId) {
       const propId = uploadingDocPropertyId;
-      setUploadingDoc(currentDocLabel);
-      showToast(`Subiendo ${currentDocLabel}...`);
+      const slotKey = currentDocLabel; // puede ser slotKey nuevo o label legacy
+      setUploadingDoc(slotKey);
+      showToast(`Subiendo documento...`);
       let docUrl: string | null = null;
       try {
         const base64 = await fileToBase64(file);
@@ -284,7 +344,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         const driveFolderId = prop?.driveFolderId;
 
         if (driveFolderId) {
-          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', `${currentDocLabel}.pdf`, base64);
+          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', `${slotKey}.pdf`, base64);
           if (result.webViewLink) {
             docUrl = result.webViewLink;
           } else {
@@ -292,23 +352,22 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           }
         } else {
           docUrl = URL.createObjectURL(file);
-          showToast(`${currentDocLabel} guardado localmente (Drive desconectado)`, 'success');
+          showToast(`Documento guardado localmente (Drive desconectado)`, 'success');
         }
 
         if (docUrl) {
-          const updatedDocs = { ...(prop?.documents ?? {}), [currentDocLabel]: docUrl };
+          const updatedDocs = { ...(prop?.documents ?? {}), [slotKey]: docUrl };
           onUpdateProperty(propId, { documents: updatedDocs });
           setViewingProperty((prev: any) => prev ? { ...prev, documents: updatedDocs } : prev);
-          if (driveFolderId) showToast(`${currentDocLabel} subido a Drive`, 'success');
+          if (driveFolderId) showToast(`Documento subido a Drive`, 'success');
 
-          // Persistir también en MySQL (property_documents) — UPSERT via POST.
           try {
             const res = await fetch('/api/properties', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 localId: propId,
-                documents: { [currentDocLabel]: docUrl },
+                documents: { [slotKey]: docUrl },
               }),
             });
             if (!res.ok) {
@@ -317,7 +376,6 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             }
           } catch (err: any) {
             console.error('[doc upload] backend persist:', err);
-            // No bloqueamos: el archivo YA está en Drive, se reintentará al recargar.
           }
         }
       } catch (err) {
@@ -331,19 +389,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       return;
     }
 
-    // --- Caso 2: subida desde el wizard de captación ---
-    if (!owner) return; // no owner = contexto inválido
-    // Guardamos el File real para subirlo a Drive en handleFinalize (cuando ya
-    // tengamos driveFolderId). El blob URL real permite previsualizar el PDF
-    // en esta sesión sin necesidad de subirlo a Drive todavía.
+    // --- Caso C: subida desde el wizard de captación (slotKey) ---
+    if (!showWizard) return;
     setUploadingDoc(currentDocLabel);
     const blobUrl = URL.createObjectURL(file);
-    // Si ya existía un blob URL previo para este doc, lo revocamos para no leakear memoria.
     const prev = uploadedDocs[currentDocLabel];
     if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
     setWizardFiles({ ...wizardFiles, [currentDocLabel]: file });
     setUploadedDocs({ ...uploadedDocs, [currentDocLabel]: blobUrl });
-    showToast(`${currentDocLabel} listo (se subirá a Drive al finalizar el registro)`, 'success');
+    showToast(`Documento listo (se subirá a Drive al finalizar el registro)`, 'success');
     setUploadingDoc(null);
     setCurrentDocLabel(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -367,7 +421,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         'error',
       );
     }
-    setCurrentDocLabel(MANDATO_LABEL);
+    setCurrentDocLabel(MANDATO_KEY);
     setUploadingMandatoPropertyId(propertyId);
     mandatoFileInputRef.current?.click();
   };
@@ -393,9 +447,51 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   };
 
   const handleFinalize = async (capturedInventory?: Inventory) => {
-    if (!address || !chip || !folio || !owner) { showToast('Por favor complete los datos básicos', 'error'); return; }
-    const missingDocs = REQUIRED_DOCS.filter((doc) => !uploadedDocs[doc]);
-    if (missingDocs.length > 0) { showToast(`Faltan documentos obligatorios: ${missingDocs.join(', ')}`, 'error'); return; }
+    // ── Validación de campos básicos ──
+    if (!address || !chip || !folio) {
+      showToast('Por favor complete dirección, CHIP y folio', 'error');
+      return;
+    }
+    const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
+    if (validOwners.length === 0) {
+      showToast('Agregá al menos un propietario con nombre', 'error');
+      return;
+    }
+    // Validar suma de % de participación
+    const definedPcts = wizardOwners
+      .map((o) => Number(o.ownershipPct))
+      .filter((n) => !isNaN(n) && n > 0);
+    if (definedPcts.length > 0) {
+      const sum = definedPcts.reduce((a, b) => a + b, 0);
+      if (Math.abs(sum - 100) > 0.01) {
+        showToast(`Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`, 'error');
+        return;
+      }
+    }
+
+    // ── Validar docs requeridos (migración 010+) ──
+    const missingDocs: string[] = [];
+    for (const o of validOwners) {
+      if (!uploadedDocs[`cedula:${o.id}`]) {
+        missingDocs.push(`Cédula de ${o.name}`);
+      }
+    }
+    if (!uploadedDocs['certificado_tradicion:main']) {
+      missingDocs.push('Certificado de Tradición (unidad principal)');
+    }
+    for (const u of wizardUnits) {
+      if (!u.label.trim()) continue;
+      if (!uploadedDocs[`certificado_tradicion:${u.id}`]) {
+        missingDocs.push(`Certificado de ${u.label}`);
+      }
+    }
+    if (!uploadedDocs[MANDATO_KEY]) {
+      missingDocs.push('Contrato de Mandato');
+    }
+    if (missingDocs.length > 0) {
+      showToast(`Faltan documentos obligatorios: ${missingDocs.join(', ')}`, 'error');
+      return;
+    }
 
     // Refactor: garantizar SIEMPRE que el wizard cierre al terminar, incluso si algo
     // tira excepción intermedia. try/finally así el usuario no queda atrapado en step 3.
@@ -407,6 +503,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     let driveFolderPath: string | null = null;
     let driveFolderId: string | null = null;
     let propertyDbId: string | null = null;
+    const firstOwner = validOwners[0];
     try {
       const res = await fetch('/api/properties', {
         method: 'POST',
@@ -414,7 +511,27 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         body: JSON.stringify({
           localId: wizardPropertyId,
           address, chip, folio,
-          ownerName: owner, ownerIdNumber, propertyType,
+          ownerName: firstOwner.name,
+          ownerIdNumber: firstOwner.idNumber,
+          propertyType,
+          // Migración 010+
+          owners: validOwners.map((o, i) => ({
+            id: o.id, // slotKey temporal; el server lo reemplaza por UUID
+            name: o.name,
+            idNumber: o.idNumber || null,
+            phone: o.phone || null,
+            email: o.email || null,
+            ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+            position: i + 1,
+          })),
+          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
+            id: u.id,
+            type: u.type,
+            label: u.label,
+            folioMatricula: u.folioMatricula || null,
+            areaM2: u.areaM2 ? Number(u.areaM2) : null,
+            position: i + 1,
+          })),
         }),
       });
       const data = await res.json();
@@ -436,47 +553,92 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       return;
     }
 
-    // 2. Subir los 5 PDFs a Drive (carpeta Propietario/). El mandato también va ahí.
-    //    Construimos documents con webViewLink real o blob URL si Drive no estaba conectado.
+    // ── Re-keyear owners/units: el server devolvió UUIDs reales (distintos
+    //    a los slotKeys del wizard). Hacemos GET para mapear wizard-XXX → UUID.
+    let realOwners: Array<{ id: string; name: string }> = [];
+    let realUnits: Array<{ id: string; label: string; type: string }> = [];
+    try {
+      const r = await fetch(`/api/properties/${propertyDbId}`);
+      if (r.ok) {
+        const fresh = await r.json();
+        realOwners = (fresh.owners ?? []).map((o: any) => ({ id: o.id, name: o.name }));
+        realUnits = (fresh.units ?? []).map((u: any) => ({ id: u.id, label: u.label, type: u.type }));
+      }
+    } catch (err) {
+      console.warn('[finalize] no se pudieron leer los UUIDs reales:', err);
+    }
+    const ownerIdMap = new Map<string, string>();
+    validOwners.forEach((wOwner, i) => {
+      const real = realOwners[i];
+      if (real) ownerIdMap.set(wOwner.id, real.id);
+    });
+    const unitIdMap = new Map<string, string>();
+    wizardUnits.filter((u) => u.label.trim()).forEach((wUnit, i) => {
+      const real = realUnits[i];
+      if (real) unitIdMap.set(wUnit.id, real.id);
+    });
+    /** Convierte un slotKey del wizard (con ids temp) al slotKey con UUIDs reales. */
+    const realSlotKey = (slotKey: string): string => {
+      if (slotKey.startsWith('cedula:')) {
+        const wid = slotKey.slice('cedula:'.length);
+        const rid = ownerIdMap.get(wid);
+        return rid ? `cedula:${rid}` : slotKey;
+      }
+      if (slotKey.startsWith('rut:')) {
+        const wid = slotKey.slice('rut:'.length);
+        const rid = ownerIdMap.get(wid);
+        return rid ? `rut:${rid}` : slotKey;
+      }
+      if (slotKey.startsWith('certificado_tradicion:')) {
+        const wid = slotKey.slice('certificado_tradicion:'.length);
+        if (wid === 'main') return slotKey;
+        const rid = unitIdMap.get(wid);
+        return rid ? `certificado_tradicion:${rid}` : slotKey;
+      }
+      return slotKey; // predial, mandato
+    };
+
+    // 2. Subir los PDFs a Drive (carpeta Propietario/).
+    //    Construimos `finalDocuments` con slotKeys ya en formato REAL (UUIDs).
     const finalDocuments: Record<string, string> = {};
     const driveConnected = !!driveFolderId;
     const uploadedToDrive: string[] = [];
     const uploadedLocalOnly: string[] = [];
     const failedUploads: string[] = [];
 
-    for (const label of REQUIRED_DOCS) {
-      const file = wizardFiles[label];
+    for (const [wizardSlotKey, file] of Object.entries(wizardFiles)) {
       if (!file) continue;
+      const realKey = realSlotKey(wizardSlotKey);
+      const fileName = `${realKey.replace(/[:]/g, '_')}.pdf`;
       if (driveConnected && driveFolderId) {
         try {
-          const base64 = await fileToBase64(file);
-          const result = await uploadFileToDrive(propertyDbId, driveFolderId, 'Propietario', `${label}.pdf`, base64);
+          const base64 = await fileToBase64(file as File);
+          const result = await uploadFileToDrive(propertyDbId, driveFolderId, 'Propietario', fileName, base64);
           if (result.webViewLink) {
-            finalDocuments[label] = result.webViewLink;
-            uploadedToDrive.push(label);
+            finalDocuments[realKey] = result.webViewLink;
+            uploadedToDrive.push(realKey);
           } else {
-            // Drive rechazó → fallback a blob local
-            finalDocuments[label] = URL.createObjectURL(file);
-            uploadedLocalOnly.push(label);
-            console.warn(`[finalize] ${label}: Drive upload failed (${result.error}) → local blob fallback`);
+            finalDocuments[realKey] = URL.createObjectURL(file as File);
+            uploadedLocalOnly.push(realKey);
+            console.warn(`[finalize] ${realKey}: Drive upload failed (${result.error}) → local blob fallback`);
           }
         } catch (err: any) {
-          finalDocuments[label] = URL.createObjectURL(file);
-          uploadedLocalOnly.push(label);
-          failedUploads.push(`${label}: ${err.message}`);
+          finalDocuments[realKey] = URL.createObjectURL(file as File);
+          uploadedLocalOnly.push(realKey);
+          failedUploads.push(`${realKey}: ${err.message}`);
         }
       } else {
-        finalDocuments[label] = URL.createObjectURL(file);
-        uploadedLocalOnly.push(label);
+        finalDocuments[realKey] = URL.createObjectURL(file as File);
+        uploadedLocalOnly.push(realKey);
       }
     }
 
-    const mandateUrl = finalDocuments[MANDATO_LABEL] ?? null;
+    const mandateUrl = finalDocuments[MANDATO_KEY] ?? null;
     const mandateSubido = !!mandateUrl;
     const mandateSignedAt = mandateSubido ? new Date().toISOString() : null;
     const status = mandateSubido ? 'Activo' : 'Pendiente';
 
-    // 3. Persistir URLs reales + mandato en MySQL (segundo POST = UPSERT)
+    // 3. Persistir URLs reales + mandate + owners/units en MySQL (segundo POST = UPSERT)
     try {
       const res = await fetch('/api/properties', {
         method: 'POST',
@@ -486,10 +648,27 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           mandatePdfUrl: mandateUrl,
           mandateSignedAt: mandateSignedAt,
           documents: finalDocuments,
-          // FIX: persistir status también. Antes solo iba al store local,
-          // por eso MySQL quedaba con 'available' (default server) y la card
-          // mostraba "Pendiente" aún cuando la lógica del wizard decidía 'Activo'.
           status,
+          // Re-mandar owners/units con UUIDs reales (por si el server los
+          // re-keyeó distinto en el primer POST — debería ser estable, pero
+          // mandarlos de nuevo garantiza consistencia).
+          owners: validOwners.map((o, i) => ({
+            id: realOwners[i]?.id,
+            name: o.name,
+            idNumber: o.idNumber || null,
+            phone: o.phone || null,
+            email: o.email || null,
+            ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+            position: i + 1,
+          })),
+          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
+            id: realUnits[i]?.id,
+            type: u.type,
+            label: u.label,
+            folioMatricula: u.folioMatricula || null,
+            areaM2: u.areaM2 ? Number(u.areaM2) : null,
+            position: i + 1,
+          })),
         }),
       });
       if (!res.ok) {
@@ -498,7 +677,6 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       }
     } catch (err: any) {
       console.error('[finalize] backend persist URLs:', err);
-      // No bloqueamos: ya quedó la fila base; los docs se reintentan desde el modal.
       showToast(`Propiedad guardada, pero falló al persistir URLs en servidor: ${err.message}`, 'error');
     }
 
@@ -630,48 +808,88 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // INSERT duplicado → otra carpeta en Drive con el mismo nombre.
     onAddProperty({
       id: propertyDbId,
-      address, chip, folio, owner, ownerIdNumber, propertyType,
+      address, chip, folio,
+      owner: firstOwner.name,
+      ownerName: firstOwner.name,
+      ownerIdNumber: firstOwner.idNumber,
+      propertyType,
       status,
       documents: finalDocuments,
       mandatePdfUrl: mandateUrl,
       mandateSignedAt,
       driveFolderId,
       driveFolderPath,
+      // Migración 010+ — pasamos los owners/units con UUIDs reales al store
+      owners: validOwners.map((o, i) => ({
+        id: realOwners[i]?.id ?? o.id,
+        name: o.name,
+        idNumber: o.idNumber || null,
+        phone: o.phone || null,
+        email: o.email || null,
+        ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+        position: i + 1,
+        documents: {
+          cedula: finalDocuments[realSlotKey(`cedula:${o.id}`)] ?? null,
+          rut: finalDocuments[realSlotKey(`rut:${o.id}`)] ?? null,
+        },
+      })),
+      units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
+        id: realUnits[i]?.id ?? u.id,
+        type: u.type,
+        label: u.label,
+        folioMatricula: u.folioMatricula || null,
+        areaM2: u.areaM2 ? Number(u.areaM2) : null,
+        position: i + 1,
+        documents: {
+          certificado_tradicion: finalDocuments[realSlotKey(`certificado_tradicion:${u.id}`)] ?? null,
+        },
+      })),
+      documents_property: {
+        predial: finalDocuments['predial'] ?? null,
+        certificado_tradicion: finalDocuments['certificado_tradicion:main'] ?? null,
+      },
     });
 
     // 5. Toast honesto: decir qué se subió a Drive y qué quedó solo local
     const folderName = driveFolderPath ?? `InmoControl/${address}`;
+    const totalDocs = Object.keys(finalDocuments).length;
+    const realOwnersCount = validOwners.length;
+    const realUnitsCount = wizardUnits.filter((u) => u.label.trim()).length;
     let body =
       `✓ ¡Propiedad creada!\n\n` +
       `📁 Drive:\n` +
       `Mi unidad / ${folderName}/\n` +
-      `• Propietario/ (${uploadedToDrive.length}/${REQUIRED_DOCS.length} docs)\n` +
-      `• Inventarios/\n`;
+      `• Propietario/ (${uploadedToDrive.length}/${totalDocs} docs)\n` +
+      `• Inventarios/\n` +
+      `\nPropietarios: ${realOwnersCount}` +
+      (realUnitsCount > 0 ? ` · Unidades adicionales: ${realUnitsCount}` : '');
 
     if (uploadedToDrive.length > 0) {
-      body += `\nSubidos a Drive:\n• ${uploadedToDrive.join('\n• ')}`;
+      body += `\n\nSubidos a Drive:\n• ${uploadedToDrive.map((k) => slotKeyToLabel(k, wizardOwners, wizardUnits)).join('\n• ')}`;
     }
     if (uploadedLocalOnly.length > 0) {
       const motivo = driveConnected
         ? 'falló la subida a Drive (reintentá desde el detalle)'
         : 'Drive no estaba conectado';
-      body += `\n\nGuardados solo en este navegador (${motivo}):\n• ${uploadedLocalOnly.join('\n• ')}`;
+      body += `\n\nGuardados solo en este navegador (${motivo}):\n• ${uploadedLocalOnly.map((k) => slotKeyToLabel(k, wizardOwners, wizardUnits)).join('\n• ')}`;
     }
     if (failedUploads.length > 0) {
       body += `\n\nErrores:\n• ${failedUploads.join('\n• ')}`;
     }
 
-    showToast(body, uploadedToDrive.length === REQUIRED_DOCS.length ? 'success' : 'error');
+    showToast(body, uploadedToDrive.length === totalDocs ? 'success' : 'error');
     } finally {
       // Garantía: el wizard SIEMPRE cierra, incluso si una excepción escapó los
       // try/catch internos (ej. onAddProperty tirando, o un fallo de React en
       // el render siguiente). Sin esto el usuario queda atrapado en step 3.
       setStep(1);
       setShowWizard(false);
-      setAddress(''); setChip(''); setFolio(''); setOwner(''); setOwnerIdNumber('');
+      setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
       setPropertyType('apartamento');
+      setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+      setWizardUnits([]);
       // Liberamos los blob URLs del wizard antes de vaciar el state (memory leak fix)
-      Object.values(uploadedDocs).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+      (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
       setUploadedDocs({});
       setWizardFiles({});
       setWizardInventory(null);
@@ -700,7 +918,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       const patch: Record<string, any> = {
         mandatePdfUrl: fresh.mandato_pdf_url ?? fresh.mandate_pdf_url ?? null,
         mandateSignedAt: fresh.mandate_signed_at ?? null,
-        documents: fresh.documents ?? {},
+        // El backend devuelve `documents` (a nivel de propiedad) y `documents_legacy`
+        // (compat con el frontend viejo que lee keys legibles). Usamos documents_legacy
+        // para que `viewingProperty.documents['Cédula de Ciudadanía']` siga funcionando
+        // en la UI del detalle sin tener que cambiar todas las referencias.
+        documents: fresh.documents_legacy ?? fresh.documents ?? {},
         status: fresh.status === 'available' ? 'Pendiente'
               : fresh.status === 'rented' ? 'Arrendado'
               : fresh.status === 'maintenance' ? 'Inactivo'
@@ -709,6 +931,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         inventoryCaptacionPdfUrl: fresh.inventory_captacion_pdf_url ?? fresh.inventory_captacion_pdf_url ?? null,
         inventoryColocacionPdfUrl: fresh.inventario_colocacion_pdf_url ?? fresh.inventory_colocacion_pdf_url ?? null,
         inventoryCount: fresh.inventory_count ?? 0,
+        // Migración 010+ — N propietarios y N unidades con sus docs anidados
+        owners: fresh.owners ?? [],
+        units: fresh.units ?? [],
+        documents_property: fresh.documents ?? {},
       };
       // FIX: actualizar Zustand state local SIN pasar por PATCH. Si updateProperty
       // dispara un PATCH que falla (por campos no permitidos o formato de fecha),
@@ -869,9 +1095,29 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     }
   };
 
+  /** Valida que los slots requeridos estén subidos y avanza al inventario.
+   *  En realidad, StepDocs ya hace su propia validación y deshabilita el botón
+   *  Continuar si faltan docs. Esta función queda como red de seguridad. */
   const validateStep2 = () => {
-    const missingDocs = REQUIRED_DOCS.filter((doc) => !uploadedDocs[doc]);
-    if (missingDocs.length > 0) { showToast(`Debe subir todos los documentos requeridos: ${missingDocs.join(', ')}`, 'error'); return; }
+    const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
+    const missingDocs: string[] = [];
+    for (const o of validOwners) {
+      if (!uploadedDocs[`cedula:${o.id}`]) missingDocs.push(`Cédula de ${o.name}`);
+    }
+    if (!uploadedDocs['certificado_tradicion:main']) {
+      missingDocs.push('Certificado de Tradición');
+    }
+    for (const u of wizardUnits) {
+      if (!u.label.trim()) continue;
+      if (!uploadedDocs[`certificado_tradicion:${u.id}`]) {
+        missingDocs.push(`Certificado de ${u.label}`);
+      }
+    }
+    if (!uploadedDocs[MANDATO_KEY]) missingDocs.push('Contrato de Mandato');
+    if (missingDocs.length > 0) {
+      showToast(`Faltan documentos: ${missingDocs.join(', ')}`, 'error');
+      return;
+    }
     setStep(3);
   };
 
@@ -879,7 +1125,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   // usamos un id sintético. Cuando ya es una propiedad existente (en modal),
   // usamos su id real.
   const wizardPropertyId = `wizard-${Date.now()}`;
-  const wizardProperty = { address, chip, owner, ownerIdNumber };
+  const wizardProperty = { address, chip, owner: wizardOwners[0]?.name ?? '', ownerIdNumber: wizardOwners[0]?.idNumber ?? '' };
 
   return (
     <>
@@ -912,8 +1158,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             <Button
               onClick={() => {
                 // Liberar blob URLs del wizard anterior antes de empezar uno nuevo (memory leak fix)
-                Object.values(uploadedDocs).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
-                setShowWizard(true); setStep(1); setAddress(''); setChip(''); setFolio(''); setOwner(''); setOwnerIdNumber(''); setPropertyType('apartamento'); setUploadedDocs({});
+                (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+                setShowWizard(true); setStep(1);
+                setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
+                setPropertyType('apartamento');
+                setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+                setWizardUnits([]);
+                setUploadedDocs({});
               }}
               className="gap-2"
             >
@@ -957,8 +1208,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       address={address} setAddress={setAddress}
                       chip={chip} setChip={setChip}
                       folio={folio} setFolio={setFolio}
-                      owner={owner} setOwner={setOwner}
                       propertyType={propertyType} setPropertyType={setPropertyType}
+                      owners={wizardOwners} setOwners={setWizardOwners}
+                      units={wizardUnits} setUnits={setWizardUnits}
                       showToast={showToast}
                       onContinue={() => setStep(2)}
                     />
@@ -966,10 +1218,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 )}
                 {step === 2 && (
                   <StepDocs
+                    owners={wizardOwners}
+                    units={wizardUnits}
                     uploadedDocs={uploadedDocs} setUploadedDocs={setUploadedDocs}
                     uploadingDoc={uploadingDoc} setUploadingDoc={setUploadingDoc}
                     currentDocLabel={currentDocLabel} setCurrentDocLabel={setCurrentDocLabel}
-                    owner={owner} ownerIdNumber={ownerIdNumber} setOwnerIdNumber={setOwnerIdNumber}
+                    ownerIdNumber={ownerIdNumber} setOwnerIdNumber={setOwnerIdNumber}
                     viewingDoc={viewingDoc} setViewingDoc={setViewingDoc}
                     showToast={showToast}
                     onBack={() => setStep(1)}
@@ -1019,22 +1273,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     <span className="font-medium">{chip || '---'}</span>
                   </div>
                   <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Propietario</span>
-                    <span className="font-medium">{owner || '---'}</span>
+                    <span className="text-slate-500">Propietarios</span>
+                    <span className="font-medium text-right">
+                      {wizardOwners.filter((o) => o.name.trim()).length}
+                      {wizardUnits.filter((u) => u.label.trim()).length > 0 && (
+                        <span className="text-slate-400 text-[10px] block">
+                          + {wizardUnits.filter((u) => u.label.trim()).length} unidad(es) adic.
+                        </span>
+                      )}
+                    </span>
                   </div>
-                  {ownerIdNumber && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-slate-500">Cédula</span>
-                      <span className="font-medium">{ownerIdNumber}</span>
-                    </div>
-                  )}
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Paso</span>
                     <span className="text-blue-700 font-bold">{step} de 3</span>
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-slate-100">
                     <span className="text-slate-500">Mandato</span>
-                    {uploadedDocs[MANDATO_LABEL] ? (
+                    {uploadedDocs[MANDATO_KEY] ? (
                       <span className="inline-flex items-center gap-1 text-emerald-700 font-bold">
                         <ClipboardCheck className="w-3.5 h-3.5" />
                         FIRMADO
@@ -1278,34 +1533,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <p className="text-sm font-semibold">{viewingProperty?.createdAt ? new Date(viewingProperty.createdAt).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</p>
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Propietario</p>
-              <p className="text-sm font-semibold">{viewingProperty?.owner}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase">
+                Propietarios ({viewingProperty?.owners?.length ?? 1})
+              </p>
+              <p className="text-sm font-semibold truncate">
+                {(viewingProperty?.owners ?? []).map((o: any) => o.name).join(', ') || viewingProperty?.owner || '—'}
+              </p>
             </div>
-            {viewingProperty?.ownerIdNumber && (
-              <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Cédula</p>
-                <p className="text-sm font-semibold">{viewingProperty?.ownerIdNumber}</p>
-              </div>
-            )}
             <div className="col-span-2">
               <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Estado del Inmueble</p>
               <div className="flex flex-wrap gap-2">
                 {(['Pendiente', 'Activo', 'Arrendado', 'Inactivo'] as const).map((status) => {
                   const isCurrent = viewingProperty?.status === status;
-                  // Validar transición
                   let disabled = false;
                   let reason = '';
-                  const docs = viewingProperty?.documents ?? {};
-                  const allDocsPresent = REQUIRED_DOCS.filter(d => d !== MANDATO_LABEL).every(l => !!docs[l]);
-                  const mandatoOk = !!viewingProperty?.mandatePdfUrl;
+                  const docsComplete = allDocsComplete(viewingProperty);
                   const hasActiveContract = contracts.some((c: any) => c.propertyId === viewingProperty?.id && c.status === 'active');
 
                   if (!isCurrent) {
                     if (status === 'Activo') {
-                      if (!allDocsPresent) { disabled = true; reason = 'Faltan documentos'; }
-                      else if (!mandatoOk) { disabled = true; reason = 'Falta contrato de mandato'; }
+                      if (!docsComplete) { disabled = true; reason = 'Faltan documentos o mandato'; }
                     } else if (status === 'Arrendado') {
-                      if (!allDocsPresent || !mandatoOk) { disabled = true; reason = 'Docs incompletos'; }
+                      if (!docsComplete) { disabled = true; reason = 'Docs incompletos'; }
                       else if (!hasActiveContract) { disabled = true; reason = 'Sin contrato activo'; }
                     }
                   }
@@ -1330,15 +1579,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   );
                 })}
               </div>
-              {/* Checklist de lo que falta — SOLO docs que se pueden arreglar desde el detalle.
-                  El mandato NO aparece aquí porque se sube únicamente en el wizard de creación. */}
               {!allDocsComplete(viewingProperty) && (
                 <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
                   <p className="text-[9px] font-bold text-amber-700 uppercase mb-1">Lo que falta</p>
                   <ul className="space-y-0.5">
-                    {REQUIRED_DOCS.filter(d => d !== MANDATO_LABEL).filter(l => !viewingProperty?.documents?.[l]).map(l => (
-                      <li key={l} className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />{l}
+                    {!viewingProperty?.mandatePdfUrl && (
+                      <li className="text-[9px] text-amber-600 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Contrato de Mandato
+                      </li>
+                    )}
+                    {(viewingProperty?.owners ?? []).filter((o: any) => o.name && !o.documents?.cedula).map((o: any) => (
+                      <li key={o.id} className="text-[9px] text-amber-600 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Cédula de {o.name}
+                      </li>
+                    ))}
+                    {!viewingProperty?.documents_property?.certificado_tradicion && !viewingProperty?.documents?.['Certificado de Tradición'] && (
+                      <li className="text-[9px] text-amber-600 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Certificado de Tradición (unidad principal)
+                      </li>
+                    )}
+                    {(viewingProperty?.units ?? []).filter((u: any) => u.label && !u.documents?.certificado_tradicion).map((u: any) => (
+                      <li key={u.id} className="text-[9px] text-amber-600 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Certificado de {u.label}
                       </li>
                     ))}
                   </ul>
@@ -1347,59 +1609,155 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             </div>
           </div>
 
-          {viewingProperty?.documents && Object.keys(viewingProperty.documents).length > 0 ? (
+          {/* ── Propietarios (migración 010+) ── */}
+          {(viewingProperty?.owners?.length ?? 0) > 0 && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2 flex-1">Documentos Legales</p>
+                <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2 flex-1">
+                  Propietarios ({viewingProperty.owners.length})
+                </p>
                 {detailRefreshing && <span className="text-[10px] text-blue-500 animate-pulse">Actualizando…</span>}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {REQUIRED_DOCS.filter(d => d !== MANDATO_LABEL).map((docLabel) => {
-                  const url = viewingProperty.documents?.[docLabel];
-                  return url ? (
-                    <button
-                      key={docLabel}
-                      onClick={() => setViewingDoc({ label: docLabel, url })}
-                      className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-400 transition-colors text-left group"
-                      data-testid={`view-doc-${docLabel}`}
-                    >
-                      <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-slate-800 truncate flex-1">{docLabel}</span>
-                      <span className="text-[10px] font-bold text-emerald-700 group-hover:underline">Ver</span>
-                    </button>
-                  ) : (
-                    <button
-                      key={docLabel}
-                      onClick={() => triggerDetailDocUpload(viewingProperty.id, docLabel)}
-                      className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
-                    >
-                      <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                      <span className="text-[11px] font-medium text-slate-500 truncate flex-1">{docLabel}</span>
-                      <span className="text-[10px] font-bold text-blue-600">Subir</span>
-                    </button>
-                  );
-                })}
-                {/* NOTA: Contrato de Mandato se muestra SOLO en la sección "Contratos" abajo. */}
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">Documentos Legales</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {REQUIRED_DOCS.filter(d => d !== MANDATO_LABEL).map((docLabel) => (
-                  <button
-                    key={docLabel}
-                    onClick={() => triggerDetailDocUpload(viewingProperty.id, docLabel)}
-                    className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
-                  >
-                    <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-slate-500 truncate flex-1">{docLabel}</span>
-                    <span className="text-[10px] font-bold text-blue-600">Subir</span>
-                  </button>
+              <div className="space-y-2">
+                {viewingProperty.owners.map((o: any, idx: number) => (
+                  <div key={o.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold">
+                        {idx + 1}
+                      </div>
+                      <p className="text-xs font-bold text-slate-800 flex-1">{o.name}</p>
+                      {o.ownershipPct != null && (
+                        <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                          {o.ownershipPct}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { slotKey: `cedula:${o.id}`, label: 'Cédula', url: o.documents?.cedula },
+                        { slotKey: `rut:${o.id}`, label: 'RUT', url: o.documents?.rut },
+                      ].map(({ slotKey, label, url }) => (
+                        url ? (
+                          <button
+                            key={slotKey}
+                            onClick={() => setViewingDoc({ label: `${label} de ${o.name}`, url })}
+                            className="flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
+                          >
+                            <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                            <span className="text-[10px] font-medium text-slate-800 truncate flex-1">{label}</span>
+                            <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                          </button>
+                        ) : (
+                          <button
+                            key={slotKey}
+                            onClick={() => {
+                              // TODO Fase 2: habilitar subida de CC/RUT por owner desde el detalle
+                              showToast(`Subida de ${label} por propietario: pendiente de UI específica`, 'error');
+                            }}
+                            className="flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
+                          >
+                            <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                            <span className="text-[10px] font-medium text-slate-500 truncate flex-1">{label}</span>
+                            <span className="text-[9px] font-bold text-blue-600">Subir</span>
+                          </button>
+                        )
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
           )}
+
+          {/* ── Unidades adicionales (migración 010+) ── */}
+          {(viewingProperty?.units?.length ?? 0) > 0 && (
+            <div className="space-y-3">
+              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
+                Unidades Adicionales ({viewingProperty.units.length})
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {viewingProperty.units.map((u: any) => {
+                  const certUrl = u.documents?.certificado_tradicion;
+                  const Icon = u.type === 'parking' ? Car : u.type === 'storage' ? Package : Box;
+                  return (
+                    <div key={u.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Icon className="w-3.5 h-3.5 text-blue-600" />
+                        <p className="text-xs font-bold text-slate-800 flex-1 truncate">{u.label}</p>
+                      </div>
+                      {u.folioMatricula && (
+                        <p className="text-[9px] text-slate-500 mb-1.5">Matrícula: {u.folioMatricula}</p>
+                      )}
+                      {certUrl ? (
+                        <button
+                          onClick={() => setViewingDoc({ label: `Certificado de ${u.label}`, url: certUrl })}
+                          className="w-full flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
+                        >
+                          <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                          <span className="text-[10px] font-medium text-slate-800 truncate flex-1">Certificado de Tradición</span>
+                          <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            showToast(`Subida de Certificado de ${u.label}: pendiente de UI específica`, 'error');
+                          }}
+                          className="w-full flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
+                        >
+                          <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                          <span className="text-[10px] font-medium text-slate-500 truncate flex-1">Certificado de Tradición</span>
+                          <span className="text-[9px] font-bold text-blue-600">Subir</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Documentos a nivel de propiedad (Predial + Certificado principal) ── */}
+          <div className="space-y-3">
+            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
+              Documentos de la Propiedad
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {(() => {
+                const items = [
+                  { slotKey: 'predial', label: 'Impuesto Predial', url: viewingProperty?.documents_property?.predial ?? viewingProperty?.documents?.['Impuesto Predial'] },
+                  { slotKey: 'certificado_tradicion:main', label: 'Certificado de Tradición', url: viewingProperty?.documents_property?.certificado_tradicion ?? viewingProperty?.documents?.['Certificado de Tradición'] },
+                ];
+                return items.map((item) => {
+                  if (item.url) {
+                    return (
+                      <button
+                        key={item.slotKey}
+                        onClick={() => setViewingDoc({ label: item.label, url: item.url! })}
+                        className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-400 transition-colors text-left group"
+                        data-testid={`view-doc-${item.slotKey}`}
+                      >
+                        <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                        <span className="text-xs font-medium text-slate-800 truncate flex-1">{item.label}</span>
+                        <span className="text-[10px] font-bold text-emerald-700 group-hover:underline">Ver</span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <button
+                      key={item.slotKey}
+                      onClick={() => showToast(`Subida de ${item.label}: pendiente de UI específica`, 'error')}
+                      className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
+                    >
+                      <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                      <span className="text-[11px] font-medium text-slate-500 truncate flex-1">{item.label}</span>
+                      <span className="text-[10px] font-bold text-blue-600">Subir</span>
+                    </button>
+                  );
+                });
+              })()}
+              {/* NOTA: Contrato de Mandato se muestra SOLO en la sección "Contratos" abajo. */}
+            </div>
+          </div>
 
           {/* Contratos */}
           <div className="space-y-3">
@@ -1621,6 +1979,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           <StepInventory
             showToast={showToast}
             propertyId={inventoryModalProperty.id}
+            propertyType={inventoryModalProperty.propertyType ?? 'apartamento'}
             property={{
               address: inventoryModalProperty.address,
               owner: inventoryModalProperty.owner,
@@ -1681,11 +2040,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 </div>
                 {/* Agrupar fotos por área */}
                 {Object.entries(
-                  photoGallery.photos.reduce<Record<string, typeof photoGallery.photos>>((acc, p) => {
+                  (photoGallery.photos as any[]).reduce<Record<string, any[]>>((acc, p) => {
                     (acc[p.areaLabel] ??= []).push(p);
                     return acc;
-                  }, {}),
-                ).map(([areaLabel, photos]) => (
+                  }, {} as Record<string, any[]>),
+                ).map(([areaLabel, photos]: [string, any[]]) => (
                   <div key={areaLabel} className="space-y-2">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-1">
                       <p className="text-xs font-bold text-slate-700 uppercase">{areaLabel}</p>
