@@ -426,8 +426,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     mandatoFileInputRef.current?.click();
   };
 
-  /** Dispara la subida de un documento legal desde el modal de detalle. */
-  const triggerDetailDocUpload = (propertyId: string, docLabel: string) => {
+  /** Dispara la subida de un documento legal desde el modal de detalle.
+   *  Acepta un `slotKey` completo (ej: "cedula:<ownerId>", "predial",
+   *  "certificado_tradicion:<unitId>") o un label legible legacy. El backend
+   *  parsea el slotKey y vincula al owner/unit correcto. */
+  const triggerDetailDocUpload = (propertyId: string, slotKey: string) => {
     // Si la propiedad tiene carpeta en Drive pero Drive está desconectado,
     // bloqueamos y explicamos por qué: subir "local" perdería el archivo al cambiar de equipo
     // y la copia ya no sincronizaría con Drive al reconectar.
@@ -435,15 +438,30 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     const driveConnected = useGoogleDriveStore.getState().connected;
     if (prop?.driveFolderId && !driveConnected) {
       showToast(
-        `Google Drive desconectado — no se puede subir "${docLabel}" a la nube. ` +
+        `Google Drive desconectado — no se puede subir el documento a la nube. ` +
         `Reconectá tu cuenta desde Configuración → Integraciones y reintentá.`,
         'error',
       );
       return;
     }
-    setCurrentDocLabel(docLabel);
+    setCurrentDocLabel(slotKey);
     setUploadingDocPropertyId(propertyId);
     detailDocInputRef.current?.click();
+  };
+
+  /** Helper semántico: subir CC o RUT de un propietario específico. */
+  const triggerOwnerDocUpload = (propertyId: string, ownerId: string, docType: 'cedula' | 'rut') => {
+    const slotKey = `${docType}:${ownerId}`;
+    triggerDetailDocUpload(propertyId, slotKey);
+  };
+  /** Helper semántico: subir Certificado de Tradición de una unidad adicional. */
+  const triggerUnitDocUpload = (propertyId: string, unitId: string) => {
+    triggerDetailDocUpload(propertyId, `certificado_tradicion:${unitId}`);
+  };
+  /** Helper semántico: subir Predial o Certificado de la unidad principal
+   *  (documentos a nivel de propiedad, sin owner/unit específico). */
+  const triggerPropertyDocUpload = (propertyId: string, slotKey: 'predial' | 'certificado_tradicion:main') => {
+    triggerDetailDocUpload(propertyId, slotKey);
   };
 
   const handleFinalize = async (capturedInventory?: Inventory) => {
@@ -1650,10 +1668,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                         ) : (
                           <button
                             key={slotKey}
-                            onClick={() => {
-                              // TODO Fase 2: habilitar subida de CC/RUT por owner desde el detalle
-                              showToast(`Subida de ${label} por propietario: pendiente de UI específica`, 'error');
-                            }}
+                            onClick={() => triggerDetailDocUpload(viewingProperty.id, slotKey)}
                             className="flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
                           >
                             <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
@@ -1699,9 +1714,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                         </button>
                       ) : (
                         <button
-                          onClick={() => {
-                            showToast(`Subida de Certificado de ${u.label}: pendiente de UI específica`, 'error');
-                          }}
+                          onClick={() => triggerUnitDocUpload(viewingProperty.id, u.id)}
                           className="w-full flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
                         >
                           <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
@@ -1745,7 +1758,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   return (
                     <button
                       key={item.slotKey}
-                      onClick={() => showToast(`Subida de ${item.label}: pendiente de UI específica`, 'error')}
+                      onClick={() => triggerPropertyDocUpload(viewingProperty.id, item.slotKey as 'predial' | 'certificado_tradicion:main')}
                       className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
                     >
                       <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
