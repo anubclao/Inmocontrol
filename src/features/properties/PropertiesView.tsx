@@ -1149,9 +1149,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       }
       // Fallback: regenerar el PDF (caso legado sin mandatoPdfUrl persistido)
       const settings = useSettingsStore.getState();
+      // Migración 010+: si la propiedad tiene N propietarios, los pasamos todos.
+      // Si no tiene (legacy, 1 solo), caemos a property.owner/ownerIdNumber.
+      const fallbackOwners = (() => {
+        if (property.owners && property.owners.length > 0) {
+          return property.owners.map((o: any) => ({
+            name: o.name,
+            documentId: o.idNumber ?? '',
+            phone: o.phone ?? undefined,
+            email: o.email ?? undefined,
+            ownershipPct: o.ownershipPct ?? null,
+          }));
+        }
+        return [{ name: property.owner, documentId: property.ownerIdNumber ?? '' }];
+      })();
       await generateMandatoPdf({
         property: { address: property.address, owner: property.owner, chip: property.chip, ownerIdNumber: property.ownerIdNumber },
-        owner: { name: property.owner, documentId: property.ownerIdNumber },
+        owners: fallbackOwners,
         agency: {
           name: settings.agency.name,
           nit: settings.agency.nit,
