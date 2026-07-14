@@ -322,24 +322,17 @@ router.post('/upload-pdf', async (req, res) => {
     requestBody: { role: 'reader', type: 'anyone' },
   });
 
-  // 5. Guardar la URL en la propiedad según la fase
+  // 5. Guardar la URL en la propiedad según la fase.
+  //    Las columnas `inventory_captacion_pdf_url` / `inventory_colocacion_pdf_url`
+  //    se crean en la migración 009. Si el server se deploya antes de aplicarla,
+  //    este UPDATE va a fallar con ER_BAD_FIELD_ERROR — el flujo retorna 500
+  //    limpio (sin la rama defensiva de antes, que usaba `ADD COLUMN IF NOT EXISTS`,
+  //    sintaxis de PostgreSQL que rompe en MySQL 8).
   const urlField = phase === 'inicial' ? 'inventory_captacion_pdf_url' : 'inventory_colocacion_pdf_url';
-  // Si las columnas no existen, las creamos on-demand (mejorable en migración)
-  try {
-    await pool.query(
-      `UPDATE properties SET ${urlField} = ? WHERE id = ?`,
-      [uploaded.data.webViewLink, propertyId],
-    );
-  } catch (e: any) {
-    console.warn(`[inventory-pdf] columna ${urlField} no existe, agregando...`);
-    await pool.query(
-      `ALTER TABLE properties ADD COLUMN IF NOT EXISTS ${urlField} VARCHAR(500) NULL`,
-    );
-    await pool.query(
-      `UPDATE properties SET ${urlField} = ? WHERE id = ?`,
-      [uploaded.data.webViewLink, propertyId],
-    );
-  }
+  await pool.query(
+    `UPDATE properties SET ${urlField} = ? WHERE id = ?`,
+    [uploaded.data.webViewLink, propertyId],
+  );
 
   res.json({
     success: true,
