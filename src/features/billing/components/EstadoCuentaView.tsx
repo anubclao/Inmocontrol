@@ -35,6 +35,8 @@ import type { Contract } from '../../contracts/contractTypes';
 import type { Property } from '../../../types';
 import { generateEstadoCuentaPDF, generateEstadoCuentaPdfBlob } from '../estadoCuentaPdf';
 import { uploadPdfToDrive } from '../../../lib/drive/driveService';
+import { computeOwnerDistribution } from '../ownerDistribution';
+import { AlertTriangle, Users } from 'lucide-react';
 
 const COP = (n: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
@@ -121,6 +123,9 @@ export function EstadoCuentaView({
           name: property.ownerName ?? '—',
           idNumber: property.ownerIdNumber,
         },
+        // Migración 010+: pasar la lista de copropietarios al PDF para que
+        // incluya la sección "Desglose por copropietario" si hay N > 1.
+        owners: (property.owners as any) ?? [],
         tenant: tenant ?? { name: '—', idNumber: '—' },
         bankAccount: primaryBank,
         statementNumber: stmtNumber,
@@ -250,6 +255,99 @@ export function EstadoCuentaView({
               />
             </div>
           </div>
+
+          {/* ── Desglose por copropietario (migración 010+) ──
+              Migración 010+: si la propiedad tiene N propietarios, mostramos
+              el desglose del neto y las transferencias por cada uno. Si
+              hay 1 solo, este bloque se omite para no duplicar info. */}
+          {statement && (() => {
+            const distribution = computeOwnerDistribution(
+              statement.netCalculated,
+              statement.totalPayouts,
+              property.owners as any,
+            );
+            // Solo mostrar el bloque si hay N > 1
+            if (distribution.items.length < 2) return null;
+            return (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                    <Users className="w-3.5 h-3.5" />
+                    Desglose por copropietario
+                  </h4>
+                  {distribution.assumedDistribution && distribution.note && (
+                    <div
+                      className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded flex items-center gap-1"
+                      title={distribution.note}
+                    >
+                      <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+                      <span>% asumidos — configurá los % reales en el detalle de la propiedad</span>
+                    </div>
+                  )}
+                </div>
+                <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-100">
+                      <tr className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                        <th className="px-3 py-2">Propietario</th>
+                        <th className="px-3 py-2 text-right">% Part.</th>
+                        <th className="px-3 py-2 text-right">Neto (proporcional)</th>
+                        <th className="px-3 py-2 text-right">Transferido</th>
+                        <th className="px-3 py-2 text-right">Saldo</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {distribution.items.map((d) => (
+                        <tr key={d.owner.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-3 py-2 text-xs text-slate-700">
+                            <div className="font-semibold">{d.owner.name}</div>
+                            {d.owner.idNumber && (
+                              <div className="text-[10px] text-slate-500 font-mono">CC {d.owner.idNumber}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs tabular-nums text-slate-700 font-medium">
+                            {d.pct.toFixed(2)}%
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs tabular-nums text-blue-700 font-semibold">
+                            {COP(d.netCalculated)}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs tabular-nums text-emerald-700">
+                            {COP(d.totalPayouts)}
+                          </td>
+                          <td className={`px-3 py-2 text-right text-xs tabular-nums font-bold ${
+                            d.finalBalance > 0 ? 'text-emerald-700' : d.finalBalance < 0 ? 'text-red-700' : 'text-slate-700'
+                          }`}>
+                            {COP(d.finalBalance)}
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Fila de totales (verificación) */}
+                      <tr className="bg-slate-50 font-semibold text-xs">
+                        <td className="px-3 py-2 text-slate-700 uppercase tracking-wider">Total</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                          {distribution.items.reduce((s, d) => s + d.pct, 0).toFixed(2)}%
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-blue-900">
+                          {COP(distribution.items.reduce((s, d) => s + d.netCalculated, 0))}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-emerald-900">
+                          {COP(distribution.items.reduce((s, d) => s + d.totalPayouts, 0))}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-900">
+                          {COP(distribution.items.reduce((s, d) => s + d.finalBalance, 0))}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                {distribution.assumedDistribution && distribution.note && (
+                  <p className="text-[10px] text-slate-500 mt-2 italic">
+                    {distribution.note}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ── Detalle de movimientos ── */}
           <MovementsTable statement={statement} />

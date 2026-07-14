@@ -35,7 +35,8 @@ import { formatCurrency } from '../../utils/calculations';
 import type {
   BankAccount, Contract, OwnerPayout, OwnerStatement,
 } from './types';
-import type { Property } from '../../types';
+import type { Property, PropertyOwner } from '../../types';
+import { computeOwnerDistribution } from './ownerDistribution';
 
 const COP = (n: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
@@ -56,8 +57,19 @@ export interface EstadoCuentaPdfInput {
   contract: Contract;
   /** Datos de la propiedad. */
   property: Property;
-  /** Propietario (receptor del estado de cuenta). */
+  /**
+   * Propietario principal (receptor del estado de cuenta).
+   * Para compatibilidad con propiedades legacy de 1 solo dueño, se sigue
+   * pasando este campo. Si la propiedad tiene N copropietarios, también
+   * hay que pasar `owners` para que el PDF incluya el desglose.
+   */
   owner: { name: string; idNumber?: string; email?: string; phone?: string };
+  /**
+   * Migración 010+: lista de copropietarios. Si tiene N > 1, el PDF incluye
+   * una sección de "Desglose por copropietario" con la distribución del
+   * neto y las transferencias según el % de participación de cada uno.
+   */
+  owners?: PropertyOwner[];
   /** Inquilino (referencia, no destinatario). */
   tenant: { name: string; idNumber: string };
   /** Cuenta bancaria del PROPIETARIO (a donde se le transfiere). */
@@ -89,7 +101,16 @@ function buildEstadoCuentaDoc(input: EstadoCuentaPdfInput): jsPDF {
     agency = { name: 'INMOVIRTUAL S.A. E.S.P.', nit: '800.175.746-9' },
     statementNumber,
     elaboratedBy = 'Administrador',
+    owners,
   } = input;
+
+  // Migración 010+: si hay N copropietarios, calculamos el desglose del
+  // neto y las transferencias por cada uno según su % de participación.
+  const ownerDistribution = computeOwnerDistribution(
+    statement.netCalculated,
+    statement.totalPayouts,
+    owners,
+  );
 
   const numberStr = statementNumber ?? `EC-${statement.period.replace('-', '')}`;
   const today = new Date();
@@ -188,6 +209,83 @@ function buildEstadoCuentaDoc(input: EstadoCuentaPdfInput): jsPDF {
   doc.rect(margin + 2 * W, y, W, 14);
   doc.rect(margin + 3 * W, y, W, 14);
   y += 18;
+
+  // ─── 3.5. DESGLOSE POR COPROPIETARIO (migración 010+) ────────────────
+  // Solo si la propiedad tiene N > 1 propietarios. Si los % no están
+  // configurados, se asigna 100% al primero y se muestra un aviso.
+  if (ownerDistribution.items.length > 1) {
+    if (pageH - y < 60) {
+      doc.addPage();
+      y = margin;
+    }
+    y = drawSectionTitle(doc, '3.5. DESGLOSE POR COPROPIETARIO', margin, y, pageW);
+
+    // Nota si los % fueron asumidos/renormalizados
+    if (ownerDistribution.assumedDistribution && ownerDistribution.note) {
+      doc.setFillColor(254, 243, 199); // amarillo suave
+      doc.rect(margin, y, pageW - 2 * margin, 8, 'F');
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7);
+      doc.setTextColor(146, 64, 14);
+      doc.text(`⚠ ${ownerDistribution.note}`, margin + 2, y + 5);
+      doc.setTextColor(15, 23, 42);
+      y += 11;
+    }
+
+    // Cabecera de la tabla
+    const disCols: Array<{ label: string; w: number; align?: 'left' | 'right' }> = [
+      { label: 'Propietario',     w: 60, align: 'left' },
+      { label: 'Cédula',          w: 28, align: 'left' },
+      { label: '% Part.',         w: 18, align: 'right' },
+      { label: 'Neto',            w: 28, align: 'right' },
+      { label: 'Transferido',     w: 28, align: 'right' },
+      { label: 'Saldo',           w: pageW - 2 * margin - 60 - 28 - 18 - 28 - 28, align: 'right' },
+    ];
+    drawDisHeader(doc, disCols, margin, y, pageW);
+    y += 7;
+
+    // Filas
+    for (let i = 0; i < ownerDistribution.items.length; i++) {
+      const d = ownerDistribution.items[i];
+      if (pageH - y < 12) {
+        doc.addPage();
+        y = margin;
+        drawDisHeader(doc, disCols, margin, y, pageW);
+        y += 7;
+      }
+      const rowH = 7;
+      // Fondo alternado
+      doc.setFillColor(i % 2 === 0 ? 255 : 248, i % 2 === 0 ? 255 : 250, i % 2 === 0 ? 255 : 252);
+      doc.rect(margin, y, pageW - 2 * margin, rowH, 'F');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      // Propietario
+      const ownerName = doc.splitTextToSize(d.owner.name, disCols[0].w - 2)[0] ?? d.owner.name;
+      doc.text(ownerName, margin + 1, y + 5);
+      // Cédula
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(d.owner.idNumber ?? '—', margin + disCols[0].w + 1, y + 5);
+      // %
+      doc.setTextColor(15, 23, 42);
+      doc.text(`${d.pct.toFixed(2)}%`, margin + disCols[0].w + disCols[1].w + disCols[2].w - 1, y + 5, { align: 'right' });
+      // Neto
+      doc.text(COP(d.netCalculated), margin + disCols[0].w + disCols[1].w + disCols[2].w + disCols[3].w - 1, y + 5, { align: 'right' });
+      // Transferido
+      doc.text(COP(d.totalPayouts), margin + disCols[0].w + disCols[1].w + disCols[2].w + disCols[3].w + disCols[4].w - 1, y + 5, { align: 'right' });
+      // Saldo
+      if (d.finalBalance > 0) doc.setTextColor(5, 150, 105);
+      else if (d.finalBalance < 0) doc.setTextColor(220, 38, 38);
+      doc.text(COP(d.finalBalance), pageW - margin - 1, y + 5, { align: 'right' });
+      doc.setTextColor(15, 23, 42);
+      // Borde inferior
+      doc.setDrawColor(226, 232, 240);
+      doc.line(margin, y + rowH, pageW - margin, y + rowH);
+      y += rowH;
+    }
+    y += 4;
+  }
 
   // ─── 4. DETALLE DE MOVIMIENTOS DEL MES ───────────────────────────────
   y = drawSectionTitle(doc, '4. DETALLE DE MOVIMIENTOS DEL MES', margin, y, pageW);
@@ -585,4 +683,33 @@ function drawSignatureBlock(
   doc.setFontSize(7);
   doc.setTextColor(148, 163, 184);
   doc.text('Fecha: ____/____/________', x, y + 23);
+}
+/** Dibuja la cabecera de la tabla de desglose por copropietario.
+ *  Separada de drawSectionTitle porque usa un estilo m�s compacto
+ *  (gris claro, no banda azul) � se parece m�s a una tabla normal. */
+function drawDisHeader(
+  doc: jsPDF,
+  cols: Array<{ label: string; w: number; align?: 'left' | 'right' }>,
+  x: number,
+  y: number,
+  pageW: number,
+): void {
+  const totalW = cols.reduce((s, c) => s + c.w, 0);
+  doc.setFillColor(241, 245, 249);
+  doc.rect(x, y, totalW, 6.5, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  let cx = x;
+  for (const c of cols) {
+    if (c.align === 'right') {
+      doc.text(c.label.toUpperCase(), cx + c.w - 1, y + 4.5, { align: 'right' });
+    } else {
+      doc.text(c.label.toUpperCase(), cx + 1, y + 4.5);
+    }
+    cx += c.w;
+  }
+  doc.setTextColor(15, 23, 42);
+  doc.setDrawColor(226, 232, 240);
+  doc.line(x, y + 6.5, x + totalW, y + 6.5);
 }
