@@ -28,7 +28,15 @@ import { useBillingStore } from './features/billing/billingStore';
 import { deriveAlerts } from './features/alerts/deriveAlerts';
 import { useAlertsStore } from './features/alerts/alertsStore';
 
-const SESSION_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * Inactividad → logout automático.
+ * 8 horas = un día de trabajo completo. Antes era 15 min, muy agresivo
+ * (sacaba al usuario del wizard en medio del inventario si se distraía).
+ * Para cambiar a "nunca cierra salvo logout manual", setear este valor
+ * a un número muy grande (ej: Number.MAX_SAFE_INTEGER) o eliminar el useEffect
+ * que lo usa en el archivo.
+ */
+const SESSION_TIMEOUT_MS = 8 * 60 * 60 * 1000;
 
 interface LocalUser {
   uid: string;
@@ -171,8 +179,28 @@ export default function App() {
     setUser(null);
     setRole(null);
     localStorage.removeItem(STORAGE_KEYS.user);
+    // FIX: limpiar el store Zustand también. Sin esto, los datos del usuario
+    // anterior quedan en memoria del browser, accesibles si el siguiente user
+    // usa la misma sesión/equipo. Además, evita la confusión de ver "datos
+    // viejos" después de un logout+login rápido.
+    useAppStore.getState().reset();
     showToast('Sesión finalizada');
   };
+
+  /**
+   * Re-hidrata los datos del store cuando el user pasa de null a !null
+   * (es decir, después de un login). Sin esto, el store mantiene datos
+   * del user anterior o aparece vacío tras un logout+login. Con el
+   * reset() en handleLogout, partimos de initialState y necesitamos
+   * volver a traer todo de MySQL.
+   */
+  useEffect(() => {
+    if (user) {
+      void useAppStore.getState().hydrate();
+      // Re-chequear Google Drive por si cambió de cuenta entre sesiones
+      void useGoogleDriveStore.getState().checkStatus();
+    }
+  }, [user]);
 
   /**
    * Al montar la app, si hay cookie de sesión válida, intenta restaurar
