@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Users, FileText, Wallet, ClipboardCheck, Eye, FileSignature, RefreshCw, Car, Package, Box, User } from 'lucide-react';
+import { Users, FileText, Wallet, ClipboardCheck, Eye, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle } from 'lucide-react';
 import { Button, Card, Modal, Input } from '../../../shared/ui';
 import type { WizardOwner, WizardUnit } from './StepBasic';
 
@@ -335,33 +335,49 @@ export function StepDocs({
         <Button
           className="flex-1"
           onClick={() => setConfirmContinue(true)}
-          disabled={missingRequired.length > 0}
         >
           {missingRequired.length > 0
-            ? `Faltan ${missingRequired.length} doc(s) requerido(s)`
+            ? `Continuar con ${missingRequired.length} pendiente(s)`
             : 'Continuar a Inventario'}
         </Button>
       </div>
 
-      {/* Modal de confirmación antes de pasar al inventario */}
+      {/* Modal de confirmación antes de pasar al inventario.
+          Migración 011+: si faltan documentos requeridos, muestra la lista
+          explícita + un checkbox de "Entiendo los pendientes" para que el
+          user no se cuele por error. */}
       <Modal isOpen={confirmContinue} onClose={() => setConfirmContinue(false)} title="¿Continuar al Inventario?">
         <div className="space-y-4">
-          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
-            <p className="font-semibold mb-1">Una vez en el inventario no podrá modificar los documentos desde aquí.</p>
-            <p className="text-xs text-amber-800">
-              Si más adelante detecta un error en algún PDF, tendrá que entrar al <strong>Detalle del Inmueble</strong>
-              {' '}y reemplazar el documento manualmente.
+          {missingRequired.length > 0 && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 space-y-2">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" />
+                Vas a finalizar con {missingRequired.length} documento(s) pendiente(s)
+              </p>
+              <ul className="text-xs space-y-1 list-disc pl-5">
+                {missingRequired.map((m) => (
+                  <li key={m.slotKey}>{labelForKey(m.slotKey, owners, units)}</li>
+                ))}
+              </ul>
+              <p className="text-xs text-amber-800">
+                La propiedad quedará en estado <strong>Pendiente</strong> y los docs faltantes se podrán
+                subir después desde el <strong>Detalle del Inmueble</strong>.
+              </p>
+            </div>
+          )}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
+            <p>Una vez en el inventario no podrá modificar los documentos desde aquí.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Si después detecta un error en algún PDF, puede entrar al Detalle del Inmueble
+              y reemplazarlo manualmente.
             </p>
           </div>
-          <p className="text-sm text-slate-600">
-            ¿Está seguro que desea continuar al paso de <strong>Inventario de Captación</strong>?
-          </p>
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1" onClick={() => setConfirmContinue(false)}>
-              Revisar documentos
+              {missingRequired.length > 0 ? 'Subir los pendientes' : 'Revisar documentos'}
             </Button>
             <Button className="flex-1" onClick={() => { setConfirmContinue(false); onContinue(); }}>
-              Sí, continuar
+              {missingRequired.length > 0 ? `Sí, continuar con ${missingRequired.length} pendiente(s)` : 'Sí, continuar'}
             </Button>
           </div>
         </div>

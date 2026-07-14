@@ -14,6 +14,7 @@ import { StepDocs } from './components/StepDocs';
 import { StepInventory } from './components/StepInventory';
 import { Role } from '../auth/permissions';
 import { useContractStore } from '../contracts/contractStore';
+import { STORAGE_KEYS } from '../../shared/hooks/storageKeys';
 import { PROPERTY_TYPES, type PropertyType } from './inventoryConfig';
 import { inventoryDB } from './inventoryDB';
 import type { Inventory } from './inventoryTypes';
@@ -170,6 +171,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
    *  se persiste en IndexedDB con id `wizard-X:inicial` y se re-keyea + postea a
    *  MySQL dentro de handleFinalize, una vez que propertyDbId ya está disponible. */
   const [wizardInventory, setWizardInventory] = useState<Inventory | null>(null);
+  // ID temporal del wizard de captación. Lo guardamos en state para reusar el
+  // mismo id al reabrir el wizard (así la autosave del inventario en IndexedDB
+  // se reconecta). Se renombra a un UUID real en handleFinalize.
+  const [wizardPropertyId, setWizardPropertyId] = useState<string>(`wizard-${Date.now()}`);
   const [viewingDoc, setViewingDoc] = useState<{ label: string; url: string } | null>(null);
   const [viewingProperty, setViewingProperty] = useState<any>(null);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
@@ -246,6 +251,99 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewingProperty?.id]);
+
+  // ── Autosave del wizard de captación ─────────────────────────────
+  // Cada vez que el user modifica algo del wizard (dirección, chip, owners,
+  // units, slotKey con doc ya subido), persistimos el state en localStorage
+  // para sobrevivir un refresh o cierre accidental. Los archivos en sí NO
+  // se guardan aquí (los blob URLs expiran al cerrar el tab); se asume que
+  // si Drive está conectado, los archivos ya están subidos. Sin Drive, el
+  // draft preserva los inputs del form y los slotKeys pendientes para que
+  // el user solo tenga que re-subir los archivos.
+  //
+  // Se activa SOLO cuando el wizard está abierto (showWizard=true) para no
+  // escribir cada 200ms cuando el componente está en modo lista.
+  useEffect(() => {
+    if (!showWizard) return;
+    try {
+      // serializamos solo los campos serializables (sin Files ni blob URLs)
+      const draft = {
+        wizardPropertyId, // CRÍTICO: reusar el mismo id al reabrir para que
+                          // StepInventory re-hidrate el inventario desde IndexedDB
+        address, chip, folio, propertyType, step,
+        wizardOwners,
+        wizardUnits,
+        // uploadedDocs: solo guardamos las keys que tienen algo (las URLs blob
+        // no sirven post-refresh — el user tendrá que re-subir si no subió a Drive)
+        uploadedDocsKeys: Object.fromEntries(
+          Object.entries(uploadedDocs).map(([k, v]) => [k, v ? 'has-file' : null]),
+        ),
+        ownerIdNumber,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEYS.wizardPropertyDraft, JSON.stringify(draft));
+    } catch (err) {
+      console.warn('[wizard-draft] no se pudo guardar:', err);
+    }
+  }, [
+    showWizard, wizardPropertyId, address, chip, folio, propertyType, step,
+    wizardOwners, wizardUnits, uploadedDocs, ownerIdNumber,
+  ]);
+
+  // Hidratar el draft SOLO cuando el user abre explícitamente el wizard.
+  // El "+ Agregar Propiedad" / "+ Agregar Primera Propiedad" setean un
+  // flag que detectamos aquí. Si no hay flag, no tocamos el state (así no
+  // pisamos un wizard en curso al re-render).
+  const [restoreDraftOnOpen, setRestoreDraftOnOpen] = useState(false);
+  useEffect(() => {
+    if (!showWizard || !restoreDraftOnOpen) return;
+    setRestoreDraftOnOpen(false);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as {
+        wizardPropertyId?: string;
+        address?: string; chip?: string; folio?: string;
+        propertyType?: PropertyType; step?: number;
+        wizardOwners?: WizardOwner[]; wizardUnits?: WizardUnit[];
+        ownerIdNumber?: string;
+        uploadedDocsKeys?: Record<string, string | null>;
+      };
+      // Solo restauramos si hay algo significativo (al menos dirección o un owner)
+      const hasContent = (draft.address && draft.address.length > 0)
+        || (draft.wizardOwners && draft.wizardOwners.some((o) => o.name.trim().length > 0));
+      if (!hasContent) return;
+      // CRÍTICO: reusar el mismo wizardPropertyId para que la autosave del
+      // inventario en IndexedDB (key = `${wizardPropertyId}:inicial`) se
+      // reconecte al reabrir el wizard. Si generamos uno nuevo, el inventario
+      // queda huérfano.
+      if (draft.wizardPropertyId) setWizardPropertyId(draft.wizardPropertyId);
+      if (draft.address) setAddress(draft.address);
+      if (draft.chip) setChip(draft.chip);
+      if (draft.folio) setFolio(draft.folio);
+      if (draft.propertyType) setPropertyType(draft.propertyType);
+      if (draft.ownerIdNumber) setOwnerIdNumber(draft.ownerIdNumber);
+      if (draft.wizardOwners && draft.wizardOwners.length > 0) setWizardOwners(draft.wizardOwners);
+      if (draft.wizardUnits && draft.wizardUnits.length > 0) setWizardUnits(draft.wizardUnits);
+      // Step 1 siempre (los steps 2 y 3 tienen state que no podemos restaurar
+      // — los archivos subidos tienen blob URLs que expiran; el inventario
+      // está en IndexedDB y se carga solo al re-abrir)
+      setStep(1);
+      // uploadedDocs: no restauramos los blob URLs (expiran al refresh), pero
+      // sí marcamos qué slots ya tenían algo para que la UI muestre el slot
+      // como "pendiente de re-subir" en vez de vacío.
+      if (draft.uploadedDocsKeys) {
+        const next: Record<string, string | null> = {};
+        for (const [k, v] of Object.entries(draft.uploadedDocsKeys)) {
+          next[k] = v; // 'has-file' como string (no URL — el user re-sube)
+        }
+        setUploadedDocs(next);
+      }
+      showToast('Tenías un draft sin terminar — restaurado al paso 1. Los archivos se re-suben desde el paso 2.', 'success');
+    } catch (err) {
+      console.warn('[wizard-draft] no se pudo restaurar:', err);
+    }
+  }, [showWizard, restoreDraftOnOpen]);
 
   /**
    * FIX: el click handler ahora también hace un GET directo para popular
@@ -973,6 +1071,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       setUploadedDocs({});
       setWizardFiles({});
       setWizardInventory(null);
+      // Limpiar el draft del wizard en localStorage (el flujo terminó OK)
+      try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     }
   };
 
@@ -1216,9 +1316,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   };
 
   // Cuando entramos al paso 3 con un propertyId temporal (en wizard de captación),
-  // usamos un id sintético. Cuando ya es una propiedad existente (en modal),
-  // usamos su id real.
-  const wizardPropertyId = `wizard-${Date.now()}`;
+  // usamos un id sintético (state arriba). Cuando ya es una propiedad existente
+  // (en modal), usamos su id real.
   const wizardProperty = { address, chip, owner: wizardOwners[0]?.name ?? '', ownerIdNumber: wizardOwners[0]?.idNumber ?? '' };
 
   return (
@@ -1259,6 +1358,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
                 setWizardUnits([]);
                 setUploadedDocs({});
+                // Si hay draft en localStorage, el useEffect de hidratación lo
+                // restaura al paso 1 (los archivos se re-suben desde el paso 2).
+                try { if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft)) setRestoreDraftOnOpen(true); } catch { /* silent */ }
               }}
               className="gap-2"
             >
@@ -1268,9 +1370,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           ) : (
             <Button
               variant="outline"
-              onClick={() => { setShowWizard(false); setStep(1); }}
+              onClick={() => {
+                // FIX: al cancelar el wizard, NO limpiamos el draft. Así si el
+                // user cierra el browser por error, refresca, o vuelve mañana,
+                // el progreso sigue ahí. El draft solo se borra cuando el
+                // wizard termina OK (handleFinalize) o si el user descarta
+                // explícitamente (próximo: botón "Descartar draft").
+                setShowWizard(false);
+                setStep(1);
+              }}
             >
-              ← Ver Inmuebles
+              ← Ver Inmuebles (guardar borrador)
             </Button>
           )}
         </div>
@@ -1403,7 +1513,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-4" />
               <h3 className="text-lg font-bold text-slate-500 mb-2">No hay inmuebles registrados</h3>
               <p className="text-sm text-slate-400 mb-6">Comienza agregando tu primera propiedad con el botón de arriba.</p>
-              <Button onClick={() => { setShowWizard(true); setStep(1); setPropertyType('apartamento'); }} className="gap-2">
+              <Button onClick={() => {
+                setShowWizard(true); setStep(1); setPropertyType('apartamento');
+                setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
+                setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+                setWizardUnits([]);
+                setUploadedDocs({});
+                // Si hay draft, restaurarlo
+                try { if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft)) setRestoreDraftOnOpen(true); } catch { /* silent */ }
+              }} className="gap-2">
                 + Agregar Primera Propiedad
               </Button>
             </Card>
