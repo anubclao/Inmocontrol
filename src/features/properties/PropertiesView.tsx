@@ -519,6 +519,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   };
 
   const handleFinalize = async (capturedInventory?: Inventory) => {
+    console.log('[finalize] ▶ START — address:', address, 'chip:', chip, 'folio:', folio,
+      'owners:', wizardOwners.filter((o) => o.name.trim()).length,
+      'units:', wizardUnits.filter((u) => u.label.trim()).length);
     // ── Validación de campos básicos ──
     if (!address || !chip || !folio) {
       showToast('Por favor complete dirección, CHIP y folio', 'error');
@@ -607,6 +610,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         }),
       });
       const data = await res.json();
+      console.log('[finalize] POST #1 OK — propertyId:', data.propertyId, 'driveFolderId:', data.driveFolderId);
       if (!res.ok) {
         showToast('Error guardando en servidor: ' + (data.error ?? 'unknown'), 'error');
         return;
@@ -744,10 +748,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           })),
         }),
       });
+      console.log('[finalize] POST #2 (UPSERT) status:', res.status);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
+      console.log('[finalize] POST #2 OK — mandate, documents, owners, units persistidos en MySQL');
     } catch (err: any) {
       console.error('[finalize] backend persist URLs:', err);
       showToast(`Propiedad guardada, pero falló al persistir URLs en servidor: ${err.message}`, 'error');
@@ -879,6 +885,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // IMPORTANTE: pasar `id: propertyDbId` para que addProperty NO haga otro POST
     // (la fila ya existe en MySQL desde el paso 1). Sin esto, antes creaba un
     // INSERT duplicado → otra carpeta en Drive con el mismo nombre.
+    console.log('[finalize] llamando onAddProperty con id:', propertyDbId, 'address:', address);
     onAddProperty({
       id: propertyDbId,
       address, chip, folio,

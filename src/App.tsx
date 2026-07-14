@@ -240,12 +240,14 @@ export default function App() {
 
   // ─── CRUD handlers (Fase 2 — ahora delegan al store) ─────────────
   const handleAddProperty = (newProperty: any) => {
+    console.log('[App] handleAddProperty — newProperty.id:', newProperty.id, 'address:', newProperty.address);
     const propertyWithId = {
       ...newProperty,
       id: newProperty.id ?? `prop-${Date.now()}`,
       createdAt: newProperty.createdAt ?? new Date().toISOString(),
       createdBy: newProperty.createdBy ?? user?.uid,
     };
+    console.log('[App] addProperty al store con id:', propertyWithId.id);
     addProperty(propertyWithId);
     showToast('Propiedad guardada');
 
