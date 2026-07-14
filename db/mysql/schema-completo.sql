@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS profiles (
                     COMMENT 'bcrypt hash del password. NULL = sin password (legacy OAuth users)',
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_by      VARCHAR(36)  NULL,
   PRIMARY KEY (id),
   KEY profiles_org_idx (organization_id),
   CONSTRAINT fk_profiles_org FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE
@@ -279,6 +280,7 @@ CREATE TABLE IF NOT EXISTS contracts (
   signed_at              DATETIME      NULL,
   created_at             DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at             DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_by             VARCHAR(36)   NULL,
   PRIMARY KEY (id),
   KEY contracts_org_idx (organization_id),
   KEY contracts_property_idx (property_id),
