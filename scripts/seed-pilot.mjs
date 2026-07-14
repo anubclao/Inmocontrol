@@ -40,7 +40,7 @@ import { runPilotSeed } from '../server/seed/pilotSeed.ts';
       console.log(`  Password: ${process.env.PILOT_PASSWORD ? '(oculto — ver env var)' : 'inmo2026! (default)'}`);
     }
     process.exit(0);
-  } catch (err: any) {
+  } catch (err) {
     console.error('═══════════════════════════════════════════════════════════════');
     console.error('  Seed FAILED');
     console.error('═══════════════════════════════════════════════════════════════');

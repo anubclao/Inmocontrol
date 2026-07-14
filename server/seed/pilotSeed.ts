@@ -200,11 +200,16 @@ export async function runPilotSeed(): Promise<PilotSeedResult> {
           month_number, period_start, period_end, due_date,
           base_rent, base_admin, admin_adjustment, ipc_adjustment,
           subtotal, applied_late_fee_pct, late_fee_amount,
+          paid_on_day_of_month,
           total, total_early, total_mid, total_late, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               ?,
+               ?, ?, ?, ?, 'pending')`,
       [r.id, ORG_ID, r.propertyId, r.contractId, r.monthNumber, r.periodStart, r.periodEnd,
        r.dueDate, r.baseRent, r.baseAdmin, r.adminAdjustment, r.ipcAdjustment,
-       r.subtotal, r.appliedLateFeePct, r.lateFeeAmount, r.total, r.totalEarly, r.totalMid, r.totalLate],
+       r.subtotal, r.appliedLateFeePct, r.lateFeeAmount,
+       r.paidOnDayOfMonth,
+       r.total, r.totalEarly, r.totalMid, r.totalLate],
     );
   }
   stages.push(`amortization_rows(${amortRows.length})`);
