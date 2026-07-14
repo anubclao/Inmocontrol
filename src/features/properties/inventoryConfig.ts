@@ -784,6 +784,128 @@ export interface CustomArea {
 }
 
 /**
+ * Catálogo CERRADO de materiales por item.id. Si un item tiene una lista con
+ * al menos 1 material, el campo Material del inventario se renderiza como
+ * `<select>` con esas opciones. Si la lista está vacía o el item no está
+ * en el catálogo, el campo de Material se oculta (no es obligatorio para
+ * todos los items — ej: "Lámparas" no tiene material definido).
+ *
+ * Los items que comparten material (ej: "Puerta" y "Puerta Principal")
+ * se referencian a la misma lista. Para mantener el catálogo manejable,
+ * las keys están normalizadas a los IDs de los items más comunes.
+ */
+export const MATERIAL_CATALOG: Record<string, string[]> = {
+  // ── Pisos (comparten) ──
+  'pisos': ['Cerámica', 'Porcelanato', 'Madera laminada', 'Madera maciza', 'Alfombra', 'Vinilo', 'Concreto pulido', 'Mármol', 'Granito', 'Baldosa'],
+
+  // ── Paredes ──
+  'paredes': ['Pintura vinílica', 'Pintura acrílica', 'Pintura esmalte', 'Papel tapiz', 'Drywall', 'Cerámica', 'Madera', 'Yeso', 'Estuco', 'Concreto visto'],
+
+  // ── Techos ──
+  'techos': ['Pintura', 'Drywall', 'Madera', 'Concreto visto', 'Yeso', 'PVC', 'Teja de barro', 'Teja de zinc', 'Cielo raso'],
+
+  // ── Ventanas ──
+  'ventanas': ['Aluminio + vidrio', 'PVC + vidrio', 'Madera + vidrio', 'Hierro + vidrio', 'Vidrio crudo'],
+
+  // ── Puertas (comparten) ──
+  'puerta': ['Madera sólida', 'MDF', 'Metálica', 'Aluminio + vidrio', 'PVC + vidrio', 'Vidrio templado'],
+  'puerta_ppal': ['Madera sólida', 'MDF', 'Metálica', 'Aluminio + vidrio', 'PVC + vidrio', 'Blindada'],
+  'puertas': ['Madera sólida', 'MDF', 'Metálica', 'Aluminio + vidrio', 'PVC + vidrio'],
+
+  // ── Marcos de puerta ──
+  'marco_puerta': ['Madera', 'Metálico', 'Aluminio', 'PVC', 'MDF'],
+
+  // ── Cerraduras (comparten) ──
+  'cerradura': ['Cilíndrica', 'Digital', 'Manija', 'Embutida', 'De pomo', 'De seguridad', 'Multipunto'],
+  'cerradura_puerta_ppal': ['Cilíndrica', 'Digital', 'De seguridad', 'Multipunto'],
+  'cerradura_otras_puertas': ['Cilíndrica', 'De pomo', 'Embutida', 'Multipunto'],
+
+  // ── Vidrios ──
+  'vidrios': ['Crudo', 'Templado', 'Laminado', 'Bronce', 'Esmerilado'],
+  'vidrios_especiales': ['Templado', 'Laminado', 'Esmerilado', 'SmartGlass'],
+  'otros_vidrios': ['Crudo', 'Templado', 'Laminado', 'Esmerilado'],
+
+  // ── Rejas ──
+  'rejas': ['Hierro forjado', 'Hierro cuadrado', 'Aluminio', 'Acero inoxidable'],
+
+  // ── Alfombras ──
+  'alfombras': ['Lana', 'Sintética', 'Algodón', 'Fibra natural', 'Yute', 'Sisal'],
+
+  // ── Sanitario / Baño ──
+  'sanitario': ['Porcelana', 'Loza', 'Acero inoxidable', 'Inodoro inteligente'],
+  'lavamanos': ['Porcelana', 'Loza', 'Vidrio templado', 'Acero inoxidable', 'Mármol', 'Piedra'],
+  'griferia': ['Cromada', 'Acero inoxidable', 'Bronce', 'Negra mate', 'Oro', 'Sensor'],
+  'griferia_sanitario': ['Cromada', 'Acero inoxidable', 'Bronce', 'Negra mate'],
+  'griferia_ducha': ['Cromada', 'Acero inoxidable', 'Bronce', 'Negra mate', 'Mezcladora'],
+  'ducha': ['Regadera fija', 'Regadera manual', 'Doble regadera', 'Teléfono', 'Sistema de lluvia'],
+  'tina': ['Acero esmaltado', 'Acrílico', 'Hierro fundido', 'Mármol', 'Hidromasaje'],
+  'espejos': ['Vidrio con marco de madera', 'Vidrio con marco metálico', 'Vidrio sin marco', 'Espejo inteligente'],
+  'gabinetes': ['Madera', 'MDF', 'PVC', 'Metalicos', 'Acrílicos'],
+  'rejillas': ['Aluminio', 'Hierro', 'PVC', 'Cromadas', 'Plástico'],
+
+  // ── Cocina ──
+  'lavaplatos': ['Acero inoxidable', 'Granito', 'Cuarzo', 'Mármol', 'Polietileno'],
+  'estufa_asador': ['Gas natural', 'Gas propano', 'Eléctrica', 'Inducción', 'Mixta'],
+  'horno': ['Gas', 'Eléctrico', 'Convector', 'A vapor'],
+  'campana_extractora': ['Acero inoxidable', 'Acero negro', 'Empotrable', 'Isla'],
+  'mueble_inf_entrepanos': ['Madera', 'MDF', 'Aglomerado', 'Metalicos', 'PVC'],
+  'mueble_inf_cajones': ['Madera', 'MDF', 'Metalicos', 'PVC', 'Con rieles telescópicos'],
+  'mueble_inf_puertas': ['Madera', 'MDF', 'Metalicas', 'PVC', 'Con vidrio'],
+  'mueble_sup_entrepanos': ['Madera', 'MDF', 'Aglomerado', 'Metalicos', 'PVC', 'Vidrio'],
+  'mueble_sup_cajones': ['Madera', 'MDF', 'Metalicos', 'PVC'],
+  'mueble_sup_puertas': ['Madera', 'MDF', 'Metalicas', 'PVC', 'Con vidrio'],
+  'calentador': ['Gas natural', 'Gas propano', 'Eléctrico', 'Solar', 'Térmico'],
+
+  // ── Closets ──
+  'closet_puertas': ['Madera', 'MDF', 'Corredizas', 'Abatibles', 'PVC'],
+  'closet_entrepanos': ['Madera', 'MDF', 'Metalicos', 'Vidrio'],
+  'closet_cajones': ['Madera', 'MDF', 'Metalicos', 'Con rieles telescópicos'],
+
+  // ── Muebles / decoración ──
+  'cortineros': ['Madera', 'Metalicos', 'PVC', 'Aluminio', 'Sin cortinero'],
+  'plafones': ['Drywall', 'Madera', 'PVC', 'Yeso', 'Fibra mineral'],
+  'plafones_lamparas': ['Drywall', 'Madwall', 'Madera', 'PVC'],
+  'lamparas': ['LED', 'Incandescente', 'Fluorescente', 'Halógena', 'Solar', 'Smart'],
+  'apliques': ['Metalicos', 'Cristal', 'Cerámica', 'LED', 'Smart'],
+  'rosetas': ['Metalicas', 'Plásticas', 'Madera', 'Decorativas'],
+  'interruptores': ['Simple', 'Doble', 'Triple', 'Conmutado', 'Smart', 'Dimmer'],
+  'tomas': ['110V simple', '110V doble', '220V', 'GFCI', 'USB', 'Smart'],
+  'cable_datos': ['Cat 5e', 'Cat 6', 'Cat 6A', 'Fibra óptica', 'Coaxial'],
+  'divisiones': ['Drywall', 'Vidrio templado', 'Madera', 'Metalicas', 'PVC'],
+  'chimenea': ['A leña', 'A gas', 'Eléctrica', 'Decorativa (sin uso)', 'No aplica'],
+  'guarda_escobas': ['Madera', 'Metalico', 'PVC', 'Empotrado en pared'],
+
+  // ── Otros / genérico ──
+  'pintura': ['Vinílica', 'Acrílica', 'Esmalte', 'Látex', 'Antihumedad'],
+  'puertas_cortinas_metalicas': ['Metálicas', 'Acero', 'Aluminio', 'Enrollables'],
+  'puerta_cortina': ['Metálica enrollable', 'Acero', 'Aluminio', 'PVC'],
+  'senalizacion': ['Pintura', 'Letrero luminoso', 'Plástico', 'Reflectiva'],
+  'muro': ['Concreto', 'Ladrillo', 'Bloque', 'Mampostería', 'Yeso', 'Drywall'],
+  'vegetacion': ['Césped', 'Plantas ornamentales', 'Árboles', 'Arbustos', 'Sin vegetación'],
+  'riego': ['Aspersión', 'Goteo', 'Manguera', 'Automático', 'No tiene'],
+  'mueble': ['Madera', 'MDF', 'Metalico', 'Tela', 'Cuero', 'Mixto'],
+  'mostrador': ['Madera', 'Mármol', 'Granito', 'Cuarzo', 'Acero inoxidable', 'Melamina'],
+  'sillas': ['Madera', 'Metalicas', 'Plástico', 'Tapizadas', 'Cuero'],
+  'escritorio': ['Madera', 'MDF', 'Metalico', 'Vidrio templado'],
+  'silla': ['Madera', 'Metalica', 'Tapizada', 'Cuero', 'Malla ergonómica'],
+  'archivador': ['Metalico', 'Madera', 'MDF'],
+  'internet': ['Fibra óptica', 'Cable coaxial', 'DSL', 'Inalámbrico', 'No tiene'],
+  'meson': ['Granito', 'Cuarzo', 'Mármol', 'Acero inoxidable', 'Concreto pulido', 'Melamina'],
+  'electrodomesticos': ['Nevera', 'Microondas', 'Horno', 'Lavavajillas', 'Licuadora', 'Cafetera'],
+  'estanteria': ['Metalica', 'Madera', 'MDF', 'PVC', 'Mixta'],
+  'piso_epoxido': ['Epóxico', 'Concreto pulido', 'Hormigón'],
+  'puertas_cortinas': ['Metálicas', 'Enrollables', 'Seccionales', 'Rápidas'],
+  'cortinas': ['Metálicas', 'PVC', 'Lona', 'Cristal'],
+  'capacidad_carga': ['5 T', '10 T', '20 T', '30 T', '50 T'],
+  'senalizacion_carga': ['Pintura de piso', 'Letrero', 'Cinta', 'Marcación visible'],
+  'vitrina': ['Vidrio templado', 'Cristal', 'Acrílico'],
+  'marco': ['Aluminio', 'Madera', 'Metalico', 'PVC'],
+  'escalera_acceso': ['Metalica', 'Madera', 'Concreto', 'Caracol'],
+  'baranda_seguridad': ['Metalica', 'Acero inoxidable', 'Aluminio', 'PVC'],
+  'archivador_documentos': ['Metalico', 'Madera', 'Ignífugo'],
+};
+
+/**
  * Resuelve las áreas finales de un inventario a partir del tipo, los counters
  * y las custom areas (botón "Otros").
  */

@@ -131,8 +131,15 @@ export async function generateInventoryPdfBlob(
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(100, 116, 139);
-    doc.text('ITEM', margin + 2, y);
-    doc.text('ESTADO', pageW - margin - 30, y);
+    // Encabezados de la tabla de items: ITEM | CANT | MATERIAL | ESTADO
+    const colItemX = margin + 2;
+    const colCantX = pageW - margin - 78;
+    const colMaterialX = pageW - margin - 64;
+    const colEstadoX = pageW - margin - 30;
+    doc.text('ITEM', colItemX, y);
+    doc.text('CANT', colCantX, y, { align: 'right' });
+    doc.text('MATERIAL', colMaterialX, y);
+    doc.text('ESTADO', colEstadoX, y, { align: 'center' });
     y += 4;
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageW - margin, y);
@@ -141,23 +148,59 @@ export async function generateInventoryPdfBlob(
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(15, 23, 42);
     Object.values(area.items).forEach((item) => {
-      ensureSpace(8);
+      ensureSpace(12);
       doc.setFontSize(9);
-      const itemLabel = doc.splitTextToSize(item.label, pageW - margin - 50);
-      doc.text(itemLabel, margin + 2, y);
+
+      // Material puede ser largo — si lo es, lo cortamos a un ancho razonable
+      const itemLabel = doc.splitTextToSize(item.label, colCantX - colItemX - 4);
+      doc.text(itemLabel, colItemX, y);
+
+      // Cantidad
+      const qty = item.qty ?? 1;
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(71, 85, 105);
+      doc.text(String(qty), colCantX, y, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+
+      // Material (entre colCantX+4 y colEstadoX-30, ~34mm de ancho)
+      if (item.material) {
+        const matText = doc.splitTextToSize(item.material, colEstadoX - colMaterialX - 4);
+        doc.setTextColor(71, 85, 105);
+        doc.text(matText[0] ?? '', colMaterialX, y);
+        doc.setTextColor(15, 23, 42);
+      }
+
+      // Badge de estado con color (esquina derecha)
       const status = ITEM_STATUS_LABEL[item.status];
       const color = item.status === 'bueno' ? [16, 185, 129]
         : item.status === 'regular' ? [245, 158, 11]
         : item.status === 'malo' ? [239, 68, 68]
         : [148, 163, 184];
       doc.setFillColor(color[0], color[1], color[2]);
-      doc.roundedRect(pageW - margin - 28, y - 3.5, 24, 5, 1.5, 1.5, 'F');
+      doc.roundedRect(colEstadoX - 14, y - 3.5, 28, 5, 1.5, 1.5, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.text(status, pageW - margin - 16, y, { align: 'center' });
+      doc.text(status, colEstadoX, y, { align: 'center' });
       doc.setTextColor(15, 23, 42);
       doc.setFont('helvetica', 'normal');
+
       y += Math.max(5, itemLabel.length * 1.4);
+
+      // Observaciones del item (debajo, italic pequeño) — compat: notes legacy
+      const itemObs = item.observations ?? item.notes;
+      if (itemObs) {
+        ensureSpace(6);
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(8);
+        doc.setTextColor(71, 85, 105);
+        const obs = doc.splitTextToSize(`↳ ${itemObs}`, pageW - colItemX - 4);
+        doc.text(obs, colItemX, y);
+        y += obs.length * 3.5 + 1;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(15, 23, 42);
+      }
     });
 
     if (area.observations) {

@@ -1,7 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { Camera, Trash2, Eye } from 'lucide-react';
 import { Button, Input, Modal } from '../../../shared/ui';
-import { ITEM_CATALOG, ITEM_STATUS_COLOR, ITEM_STATUS_LABEL, type ItemStatus } from '../inventoryConfig';
+import {
+  ITEM_CATALOG, ITEM_STATUS_COLOR, ITEM_STATUS_LABEL, MATERIAL_CATALOG,
+  type ItemStatus,
+} from '../inventoryConfig';
 import type { InventoryArea, InventoryPhoto, InventoryItem } from '../inventoryTypes';
 import { compressImage } from '../imageCompress';
 
@@ -23,6 +26,20 @@ interface AreaEditorProps {
 
 const STATUSES: ItemStatus[] = ['bueno', 'regular', 'malo', 'na'];
 
+/** Compat: si el item viejo no tiene `qty`, `material`, `observations`,
+ *  devuelve defaults razonables al renderizar. */
+function fillItemDefaults(raw: Partial<InventoryItem> | undefined, def: { id: string; label: string }): InventoryItem {
+  return {
+    id: def.id,
+    label: def.label,
+    status: raw?.status ?? 'na',
+    qty: raw?.qty ?? 1,
+    material: raw?.material ?? '',
+    // Si viene `notes` (legacy) y no `observations`, lo copiamos.
+    observations: raw?.observations ?? raw?.notes ?? '',
+  };
+}
+
 export function AreaEditor({
   area, index, total, recommendedPhotos, photos, onChange, onPhotosChange,
   onAddPhoto, onRemovePhoto, onBack, onNext, onSkipToSign, hideSignatures,
@@ -35,17 +52,24 @@ export function AreaEditor({
   const filledItems = Object.values(area.items).filter((i) => i.status).length;
   const progress = items.length > 0 ? (filledItems / items.length) * 100 : 100;
 
-  const setItemStatus = (itemId: string, status: ItemStatus) => {
+  /** Helper para mutar un item. Si el item no existe, lo crea con defaults. */
+  const updateItem = (itemId: string, patch: Partial<InventoryItem>) => {
     const def = items.find((i) => i.id === itemId);
     if (!def) return;
+    const prev = area.items[itemId];
+    const base = fillItemDefaults(prev, def);
     onChange({
       ...area,
       items: {
         ...area.items,
-        [itemId]: { id: def.id, label: def.label, status },
+        [itemId]: { ...base, ...patch },
       },
     });
   };
+  const setItemStatus = (itemId: string, status: ItemStatus) => updateItem(itemId, { status });
+  const setItemQty = (itemId: string, qty: number) => updateItem(itemId, { qty: Math.max(1, Math.floor(qty || 1)) });
+  const setItemMaterial = (itemId: string, material: string) => updateItem(itemId, { material });
+  const setItemObservations = (itemId: string, observations: string) => updateItem(itemId, { observations });
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files as FileList | null;
@@ -105,26 +129,73 @@ function slugify(s: string): string {
       {/* Checklist de items */}
       <div className="space-y-2">
         {items.map((item) => {
-          const current = area.items[item.id];
+          const raw = area.items[item.id];
+          const def = items.find((i) => i.id === item.id)!;
+          const current = fillItemDefaults(raw, def);
+          const materialOptions = MATERIAL_CATALOG[item.id] ?? [];
           return (
-            <div key={item.id} className="p-3 bg-slate-50 rounded-lg border border-slate-100">
-              <p className="text-sm font-bold text-slate-900 mb-2">{item.label}</p>
-              <div className="grid grid-cols-4 gap-1">
-                {STATUSES.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setItemStatus(item.id, s)}
-                    className={`py-1.5 text-[10px] font-bold rounded uppercase transition-all ${
-                      current?.status === s
-                        ? ITEM_STATUS_COLOR[s] + ' shadow-sm'
-                        : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-400'
-                    }`}
-                  >
-                    {ITEM_STATUS_LABEL[s]}
-                  </button>
-                ))}
+            <div key={item.id} className="p-3 bg-slate-50 rounded-lg border border-slate-100 space-y-2">
+              {/* Fila 1: Label + Cantidad + Material + Estado */}
+              <div className="flex items-start gap-2">
+                <p className="text-sm font-bold text-slate-900 flex-1 min-w-0">{item.label}</p>
+                <div className="w-14 flex-shrink-0">
+                  <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Cant.</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={current.qty}
+                    onChange={(e) => setItemQty(item.id, Number(e.target.value))}
+                    className="w-full px-1.5 py-1 bg-white border border-slate-200 rounded text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  />
+                </div>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                {/* Material (select cerrado) — solo si hay opciones para este item */}
+                {materialOptions.length > 0 && (
+                  <div>
+                    <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Material</label>
+                    <select
+                      value={current.material ?? ''}
+                      onChange={(e) => setItemMaterial(item.id, e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    >
+                      <option value="">— Seleccionar —</option>
+                      {materialOptions.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {/* Estado: 4 botones de colores */}
+                <div>
+                  <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Estado</label>
+                  <div className="grid grid-cols-4 gap-1">
+                    {STATUSES.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setItemStatus(item.id, s)}
+                        className={`py-1 text-[9px] font-bold rounded uppercase transition-all ${
+                          current.status === s
+                            ? ITEM_STATUS_COLOR[s] + ' shadow-sm'
+                            : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-400'
+                        }`}
+                        title={ITEM_STATUS_LABEL[s]}
+                      >
+                        {ITEM_STATUS_LABEL[s].slice(0, 3)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* Fila 2: Observaciones */}
+              <input
+                type="text"
+                value={current.observations ?? ''}
+                onChange={(e) => setItemObservations(item.id, e.target.value)}
+                placeholder="Observaciones (rayones, manchas, piezas faltantes...)"
+                className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
             </div>
           );
         })}

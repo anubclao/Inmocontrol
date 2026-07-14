@@ -25,6 +25,26 @@ export interface InventoryItem {
   id: string;                 // id del ItemDef
   label: string;
   status: ItemStatus;
+  /**
+   * Cantidad de unidades de este item en el área. Default 1.
+   * Ej: "Puertas" en una entrada puede ser qty=2 (puerta principal + puerta de servicio).
+   */
+  qty: number;
+  /**
+   * Material del item, elegido de la lista cerrada `MATERIAL_CATALOG[item.id]`.
+   * Vacío si todavía no se eligió.
+   */
+  material?: string;
+  /**
+   * Observaciones del agente sobre el estado del item (rayones, manchas,
+   * piezas faltantes, etc.). Reemplaza al antiguo `notes`.
+   */
+  observations?: string;
+  /**
+   * @deprecated Usar `observations`. Mantenido para compat con inventarios
+   * legacy generados antes de la migración 010+. El mapper en StepInventory
+   * copia `notes` → `observations` al cargar inventarios viejos.
+   */
   notes?: string;
 }
 
