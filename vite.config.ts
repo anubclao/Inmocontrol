@@ -13,6 +13,14 @@ export default defineConfig(({ mode }) => ({
       '@': path.resolve(__dirname, '.'),
     },
   },
+  build: {
+    // FIX: esbuild 0.28 (security update) rompe el downcompile a es2020
+    // que Vite usa por default. Algunos bundles legacy (html2canvas, jspdf)
+    // tienen `var { x } = arguments[0] || {}` que esbuild 0.28 no sabe
+    // transpilar al target viejo. Forzando esnext, esbuild deja el código
+    // moderno tal cual y los browsers modernos lo ejecutan nativamente.
+    target: 'esnext',
+  },
   server: {
     // En desarrollo, Express corre en 3001. Aquí Vite recibe las peticiones
     // y reenvía /api/* al backend Express.
