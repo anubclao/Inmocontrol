@@ -179,6 +179,11 @@ export default function App() {
     setUser(null);
     setRole(null);
     localStorage.removeItem(STORAGE_KEYS.user);
+    // FIX PRIVACIDAD: limpiar también el draft del wizard de propiedad.
+    // Sin esto, el siguiente user en el mismo browser ve el draft del
+    // user anterior al hacer click en "+ Agregar Propiedad" (la app
+    // restaura drafts viejos de localStorage sin filtrar por user).
+    try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     // FIX: limpiar el store Zustand también. Sin esto, los datos del usuario
     // anterior quedan en memoria del browser, accesibles si el siguiente user
     // usa la misma sesión/equipo. Además, evita la confusión de ver "datos

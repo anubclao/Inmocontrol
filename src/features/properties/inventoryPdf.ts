@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import type { Inventory, Signature } from './inventoryTypes';
+import type { Inventory, ItemMedia, Signature } from './inventoryTypes';
 import { ITEM_STATUS_LABEL } from './inventoryConfig';
 
 const PROPERTY_TYPE_LABEL: Record<string, string> = {
@@ -50,19 +50,20 @@ const DEFAULT_OPTS: PdfOptions = { agencyName: 'la agencia' };
  * Genera el PDF del Inventario (Inicial o Final) y dispara la descarga.
  * Embebe:
  *  - Header con datos del inmueble y del tipo
- *  - Una página por cada área con sus items + fotos
+ *  - Una página compacta por cada área: tabla de items (con su media) + fotos de área
  *  - Una página con los Textos Jurídicos
  *  - Una página final con las firmas (foto + datos del firmante)
  *
- * `getPhotos` es inyectado porque las fotos están en IndexedDB.
+ * `getMedia` es inyectado porque las fotos/videos están en IndexedDB
+ * (key: `<inventoryId>:<mediaId>`).
  */
 export async function generateInventoryPDF(
   inventory: Inventory,
   property: { address: string; owner: string; chip: string },
-  getPhotoDataUrl: (photoId: string) => Promise<string | null>,
+  getMediaDataUrl: (mediaId: string) => Promise<string | null>,
   opts: PdfOptions = DEFAULT_OPTS,
 ): Promise<void> {
-  const blob = await generateInventoryPdfBlob(inventory, property, getPhotoDataUrl, opts);
+  const blob = await generateInventoryPdfBlob(inventory, property, getMediaDataUrl, opts);
   const filename = `Inventario_${inventory.phase}_${property.address.replace(/\s+/g, '_').slice(0, 40)}_${Date.now()}.pdf`;
   triggerDownload(blob, filename);
 }
@@ -71,13 +72,14 @@ export async function generateInventoryPDF(
 export async function generateInventoryPdfBlob(
   inventory: Inventory,
   property: { address: string; owner: string; chip: string },
-  getPhotoDataUrl: (photoId: string) => Promise<string | null>,
+  getMediaDataUrl: (mediaId: string) => Promise<string | null>,
   opts: PdfOptions = DEFAULT_OPTS,
 ): Promise<Blob> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 15;
+  const margin = 10;
+  const contentW = pageW - 2 * margin;
   let y = margin;
 
   const ensureSpace = (needed: number) => {
@@ -88,202 +90,292 @@ export async function generateInventoryPdfBlob(
   };
 
   // ─── Header ───────────────────────────────────────────────
-  doc.setFontSize(18);
+  doc.setFontSize(14);
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
   doc.text(
     `INVENTARIO ${inventory.phase === 'inicial' ? 'INICIAL' : 'FINAL'} - INMOCONTROL`,
     pageW / 2, y, { align: 'center' }
   );
-  y += 10;
+  y += 6;
 
-  doc.setFontSize(10);
+  doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.setFont('helvetica', 'normal');
   doc.text(`Fecha: ${new Date(inventory.createdAt).toLocaleString('es-CO')}`, pageW / 2, y, { align: 'center' });
-  y += 8;
+  y += 5;
 
-  // ─── Datos del inmueble ───────────────────────────────────
+  // ─── Datos del inmueble (caja compacta) ──────────────────
+  const headerBoxH = 16;
   doc.setDrawColor(226, 232, 240);
   doc.setFillColor(248, 250, 252);
-  doc.rect(margin, y, pageW - 2 * margin, 26, 'F');
-  y += 6;
-  doc.setFontSize(9); doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold');
-  doc.text('INMUEBLE', margin + 4, y);
-  y += 4;
+  doc.rect(margin, y, contentW, headerBoxH, 'F');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.setFont('helvetica', 'bold');
+  doc.text('INMUEBLE', margin + 2, y + 3);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(`Dirección: ${property.address}`, margin + 4, y); y += 5;
-  doc.text(`Propietario: ${property.owner}`, margin + 4, y); y += 5;
-  doc.text(`CHIP: ${property.chip}`, margin + 4, y); y += 5;
-  doc.text(`Tipo: ${(PROPERTY_TYPE_LABEL[inventory.propertyType] ?? inventory.propertyType).toUpperCase()}`, margin + 4, y);
-  y += 10;
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Dir: ${property.address}`, margin + 2, y + 7);
+  doc.text(`Propietario: ${property.owner}`, margin + 2, y + 11);
+  doc.text(`CHIP: ${property.chip}`, margin + 2, y + 15);
+  // Columna derecha: tipo + fase
+  const rightX = pageW - margin - 2;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    (PROPERTY_TYPE_LABEL[inventory.propertyType] ?? inventory.propertyType).toUpperCase(),
+    rightX, y + 7, { align: 'right' }
+  );
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.setFontSize(7);
+  doc.text(
+    inventory.phase === 'inicial' ? 'Inventario de captación' : 'Inventario de colocación',
+    rightX, y + 11, { align: 'right' }
+  );
+  y += headerBoxH + 4;
 
-  // ─── Una sección por área ─────────────────────────────────
+  // ─── Una sección compacta por área ────────────────────────
   for (const area of inventory.areas) {
-    ensureSpace(40);
-    doc.setFontSize(13);
+    ensureSpace(20);
+    // Título del área
+    doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
     doc.text(area.label.toUpperCase(), margin, y);
-    y += 6;
+    y += 5;
+    doc.setDrawColor(226, 232, 240);
+    doc.line(margin, y - 1, pageW - margin, y - 1);
 
-    doc.setFontSize(9);
+    // Definir columnas de la tabla de items (compacta, sin badges gigantes)
+    const colQtyX = pageW - margin - 38;     // 8mm ancho
+    const colEstadoX = pageW - margin - 22;  // 18mm ancho
+    const colItemX = margin + 1;
+    const colItemW = colQtyX - colItemX - 2;
+
+    doc.setFontSize(6);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(100, 116, 139);
-    // Encabezados de la tabla de items: ITEM | CANT | MATERIAL | ESTADO
-    const colItemX = margin + 2;
-    const colCantX = pageW - margin - 78;
-    const colMaterialX = pageW - margin - 64;
-    const colEstadoX = pageW - margin - 30;
     doc.text('ITEM', colItemX, y);
-    doc.text('CANT', colCantX, y, { align: 'right' });
-    doc.text('MATERIAL', colMaterialX, y);
-    doc.text('ESTADO', colEstadoX, y, { align: 'center' });
-    y += 4;
-    doc.setDrawColor(226, 232, 240);
-    doc.line(margin, y, pageW - margin, y);
+    doc.text('CANT', colQtyX + 4, y, { align: 'center' });
+    doc.text('ESTADO', colEstadoX + 9, y, { align: 'center' });
     y += 3;
+    doc.line(margin, y, pageW - margin, y);
+    y += 1.5;
 
+    // Filas de items
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(15, 23, 42);
-    Object.values(area.items).forEach((item) => {
-      ensureSpace(12);
-      doc.setFontSize(9);
+    for (const item of Object.values(area.items)) {
+      ensureSpace(8);
 
-      // Material puede ser largo — si lo es, lo cortamos a un ancho razonable
-      const itemLabel = doc.splitTextToSize(item.label, colCantX - colItemX - 4);
-      doc.text(itemLabel, colItemX, y);
+      // Label del item (puede hacer wrap si es largo)
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      const labelLines = doc.splitTextToSize(item.label, colItemW);
+      doc.text(labelLines, colItemX, y + 2);
 
       // Cantidad
-      const qty = item.qty ?? 1;
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(71, 85, 105);
-      doc.text(String(qty), colCantX, y, { align: 'right' });
+      const qty = item.qty ?? 1;
+      doc.text(String(qty), colQtyX + 4, y + 2, { align: 'center' });
       doc.setFont('helvetica', 'normal');
-      doc.setTextColor(15, 23, 42);
 
-      // Material (entre colCantX+4 y colEstadoX-30, ~34mm de ancho)
-      if (item.material) {
-        const matText = doc.splitTextToSize(item.material, colEstadoX - colMaterialX - 4);
-        doc.setTextColor(71, 85, 105);
-        doc.text(matText[0] ?? '', colMaterialX, y);
-        doc.setTextColor(15, 23, 42);
-      }
-
-      // Badge de estado con color (esquina derecha)
-      const status = ITEM_STATUS_LABEL[item.status];
-      const color = item.status === 'bueno' ? [16, 185, 129]
+      // Estado: barrita de color (4mm alto) + label
+      const statusColor = item.status === 'bueno' ? [16, 185, 129]
         : item.status === 'regular' ? [245, 158, 11]
         : item.status === 'malo' ? [239, 68, 68]
         : [148, 163, 184];
-      doc.setFillColor(color[0], color[1], color[2]);
-      doc.roundedRect(colEstadoX - 14, y - 3.5, 28, 5, 1.5, 1.5, 'F');
+      const badgeX = colEstadoX;
+      const badgeW = 22;
+      const badgeH = 4;
+      const badgeY = y;
+      doc.setFillColor(statusColor[0], statusColor[1], statusColor[2]);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'F');
       doc.setTextColor(255, 255, 255);
+      doc.setFontSize(6);
       doc.setFont('helvetica', 'bold');
-      doc.text(status, colEstadoX, y, { align: 'center' });
+      doc.text(ITEM_STATUS_LABEL[item.status].toUpperCase(), badgeX + badgeW / 2, badgeY + 2.8, { align: 'center' });
       doc.setTextColor(15, 23, 42);
       doc.setFont('helvetica', 'normal');
 
-      y += Math.max(5, itemLabel.length * 1.4);
-
-      // Observaciones del item (debajo, italic pequeño) — compat: notes legacy
-      const itemObs = item.observations ?? item.notes;
-      if (itemObs) {
-        ensureSpace(6);
-        doc.setFont('helvetica', 'italic');
-        doc.setFontSize(8);
-        doc.setTextColor(71, 85, 105);
-        const obs = doc.splitTextToSize(`↳ ${itemObs}`, pageW - colItemX - 4);
-        doc.text(obs, colItemX, y);
-        y += obs.length * 3.5 + 1;
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9);
+      // Material (al lado del label, en gris pequeño)
+      if (item.material) {
+        doc.setFontSize(6);
+        doc.setTextColor(100, 116, 139);
+        const matText = doc.splitTextToSize(
+          `· ${item.material}`,
+          colQtyX - colItemX - 4,
+        );
+        doc.text(matText[0] ?? '', colItemX, y + 2 + labelLines.length * 3);
         doc.setTextColor(15, 23, 42);
       }
-    });
 
-    if (area.observations) {
-      ensureSpace(10);
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(9);
-      doc.setTextColor(71, 85, 105);
-      const obs = doc.splitTextToSize(`Obs: ${area.observations}`, pageW - 2 * margin - 4);
-      doc.text(obs, margin + 2, y);
-      y += obs.length * 4 + 2;
+      // Altura consumida por label (mín 4mm)
+      const rowH = Math.max(4, labelLines.length * 3);
+      y += rowH;
+
+      // Observaciones del item (italic pequeño debajo)
+      const itemObs = item.observations ?? item.notes;
+      if (itemObs) {
+        ensureSpace(4);
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(6);
+        doc.setTextColor(100, 116, 139);
+        const obs = doc.splitTextToSize(`↳ ${itemObs}`, colItemW + 16);
+        doc.text(obs, colItemX, y + 2);
+        y += obs.length * 2.5;
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(15, 23, 42);
+      }
+
+      // Media del item (fotos/videos) — thumbnails inline 18x13.5mm
+      const itemMedia: ItemMedia[] = (item as any).media ?? [];
+      if (itemMedia.length > 0) {
+        ensureSpace(16);
+        const thumbW = 18;
+        const thumbH = 13.5;
+        const gap = 1.5;
+        const perRow = Math.floor((colItemW + 16) / (thumbW + gap));
+        let thumbX = colItemX;
+        let thumbY = y + 1;
+        let count = 0;
+        for (const m of itemMedia) {
+          if (count > 0 && count % perRow === 0) {
+            thumbX = colItemX;
+            thumbY += thumbH + gap;
+            ensureSpace(thumbH + 2);
+          }
+          if (m.type === 'video') {
+            // Video: dibujar marco + icono play
+            doc.setDrawColor(148, 163, 184);
+            doc.setFillColor(241, 245, 249);
+            doc.rect(thumbX, thumbY, thumbW, thumbH, 'FD');
+            // Triángulo de "play"
+            doc.setFillColor(71, 85, 105);
+            const cx = thumbX + thumbW / 2;
+            const cy = thumbY + thumbH / 2;
+            doc.triangle(
+              cx - 2, cy - 3,
+              cx - 2, cy + 3,
+              cx + 3, cy,
+              'F',
+            );
+            doc.setFontSize(5);
+            doc.setTextColor(100, 116, 139);
+            doc.text('VIDEO', thumbX + thumbW - 1, thumbY + thumbH - 0.5, { align: 'right' });
+            doc.setTextColor(15, 23, 42);
+          } else {
+            const url = await getMediaDataUrl(m.id);
+            if (url) {
+              try {
+                doc.addImage(url, 'JPEG', thumbX, thumbY, thumbW, thumbH, undefined, 'FAST');
+              } catch {
+                doc.setDrawColor(226, 232, 240);
+                doc.rect(thumbX, thumbY, thumbW, thumbH);
+              }
+            } else {
+              doc.setDrawColor(226, 232, 240);
+              doc.rect(thumbX, thumbY, thumbW, thumbH);
+            }
+          }
+          thumbX += thumbW + gap;
+          count++;
+        }
+        y += thumbH + gap + 1;
+      }
+
+      y += 1.5;
+      doc.setDrawColor(241, 245, 249);
+      doc.line(margin, y, pageW - margin, y);
+      y += 1.5;
     }
 
+    // Observaciones del área
+    if (area.observations) {
+      ensureSpace(6);
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7);
+      doc.setTextColor(71, 85, 105);
+      const obs = doc.splitTextToSize(`Obs: ${area.observations}`, contentW - 2);
+      doc.text(obs, margin + 1, y);
+      y += obs.length * 3 + 1;
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+    }
+
+    // Fotos de área (las que el agente subió sin asociar a un item específico)
     if (area.photos.length > 0) {
-      ensureSpace(50);
-      y += 4;
-      const photoW = (pageW - 2 * margin - 4) / 2;
+      ensureSpace(20);
+      y += 1;
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(100, 116, 139);
+      doc.text('FOTOS DEL ÁREA', margin, y);
+      y += 3;
+
+      // 3 fotos por fila, más pequeñas
+      const photoW = (contentW - 4) / 3;
       const photoH = photoW * 0.66;
-      for (let i = 0; i < area.photos.length; i += 2) {
+      for (let i = 0; i < area.photos.length; i += 3) {
         ensureSpace(photoH + 2);
-        const id1 = area.photos[i];
-        const url1 = await getPhotoDataUrl(id1);
-        if (url1) {
-          try { doc.addImage(url1, 'JPEG', margin, y, photoW, photoH); } catch { /* ignore dataURL issues */ }
-        } else {
-          doc.setDrawColor(226, 232, 240);
-          doc.rect(margin, y, photoW, photoH);
-        }
-        if (i + 1 < area.photos.length) {
-          const id2 = area.photos[i + 1];
-          const url2 = await getPhotoDataUrl(id2);
-          if (url2) {
-            try { doc.addImage(url2, 'JPEG', margin + photoW + 4, y, photoW, photoH); } catch { /* ignore */ }
+        for (let j = 0; j < 3 && i + j < area.photos.length; j++) {
+          const id = area.photos[i + j];
+          const url = await getMediaDataUrl(id);
+          const x = margin + j * (photoW + 2);
+          if (url) {
+            try { doc.addImage(url, 'JPEG', x, y, photoW, photoH, undefined, 'FAST'); }
+            catch { doc.setDrawColor(226, 232, 240); doc.rect(x, y, photoW, photoH); }
           } else {
             doc.setDrawColor(226, 232, 240);
-            doc.rect(margin + photoW + 4, y, photoW, photoH);
+            doc.rect(x, y, photoW, photoH);
           }
         }
-        y += photoH + 4;
+        y += photoH + 2;
       }
     }
 
-    y += 4;
-    doc.setDrawColor(226, 232, 240);
-    doc.line(margin, y, pageW - margin, y);
-    y += 6;
+    y += 3;
   }
 
   // ─── Textos jurídicos ─────────────────────────────────────
   doc.addPage();
   y = margin;
-  doc.setFontSize(14);
+  doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text('TEXTOS JURÍDICOS', pageW / 2, y, { align: 'center' });
-  y += 10;
+  y += 8;
 
   const propertyLabel = PROPERTY_TYPE_LABEL[inventory.propertyType] ?? 'inmueble';
   for (const t of LEGAL_TEXTS) {
     const body = t.body
       .replaceAll('{propertyType}', propertyLabel)
       .replaceAll('{empresa}', opts.agencyName);
-    const lines = doc.splitTextToSize(body, pageW - 2 * margin);
+    const lines = doc.splitTextToSize(body, contentW);
     ensureSpace(lines.length * 4 + 8);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(15, 23, 42);
     doc.text(`${t.title}.`, margin, y);
-    y += 5;
+    y += 4;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(51, 65, 85);
     doc.text(lines, margin, y);
-    y += lines.length * 4 + 4;
+    y += lines.length * 3.5 + 3;
   }
 
   // ─── Firmas ───────────────────────────────────────────────
   doc.addPage();
   y = margin;
-  doc.setFontSize(16);
+  doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text('FIRMAS Y CONFORMIDAD', pageW / 2, y, { align: 'center' });
-  y += 12;
+  y += 10;
 
   // Inventario de Colocación: SOLO 2 firmas (arrendatario + agente).
   // La firma del propietario va en el Contrato de Mandato y en el Contrato
@@ -295,9 +387,9 @@ export async function generateInventoryPdfBlob(
 
   for (const r of roles) {
     const sig = inventory.signatures.find((s) => s.signerRole === r.key);
-    ensureSpace(70);
-    drawSignatureBlock(doc, margin, y, pageW - 2 * margin, 35, r.label, sig);
-    y += 62;
+    ensureSpace(60);
+    drawSignatureBlock(doc, margin, y, contentW, 30, r.label, sig);
+    y += 52;
   }
 
   return doc.output('blob');
@@ -323,27 +415,27 @@ function drawSignatureBlock(
   // Foto del firmante (esquina izquierda)
   const photoSize = h;
   if (sig?.signerPhotoDataUrl) {
-    try { doc.addImage(sig.signerPhotoDataUrl, 'JPEG', x, y, photoSize, photoSize); } catch { /* ignore */ }
+    try { doc.addImage(sig.signerPhotoDataUrl, 'JPEG', x, y, photoSize, photoSize, undefined, 'FAST'); } catch { /* ignore */ }
   } else {
     doc.setDrawColor(226, 232, 240);
     doc.setFillColor(248, 250, 252);
     doc.rect(x, y, photoSize, photoSize, 'FD');
-    doc.setFontSize(8);
+    doc.setFontSize(7);
     doc.setTextColor(148, 163, 184);
     doc.setFont('helvetica', 'italic');
     doc.text('Sin foto', x + photoSize / 2, y + photoSize / 2, { align: 'center' });
   }
 
   // Firma (canvas, al centro-derecha)
-  const sigX = x + photoSize + 4;
-  const sigW = w - photoSize - 4;
+  const sigX = x + photoSize + 3;
+  const sigW = w - photoSize - 3;
   doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.3);
+  doc.setLineWidth(0.2);
   doc.rect(sigX, y, sigW, h);
   if (sig?.dataUrl) {
-    try { doc.addImage(sig.dataUrl, 'PNG', sigX + 2, y + 2, sigW - 4, h - 4); } catch { /* ignore */ }
+    try { doc.addImage(sig.dataUrl, 'PNG', sigX + 1, y + 1, sigW - 2, h - 2); } catch { /* ignore */ }
   } else {
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(148, 163, 184);
     doc.setFont('helvetica', 'italic');
     doc.text('Sin firma', sigX + sigW / 2, y + h / 2, { align: 'center' });
@@ -351,19 +443,19 @@ function drawSignatureBlock(
 
   // Datos del firmante (debajo)
   const textX = x;
-  let textY = y + photoSize + 5;
-  doc.setFontSize(9);
+  let textY = y + photoSize + 4;
+  doc.setFontSize(8);
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
   doc.text(label.toUpperCase(), textX, textY);
-  textY += 5;
+  textY += 4;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
+  doc.setFontSize(7);
   doc.setTextColor(71, 85, 105);
   if (sig) {
-    doc.text(`${sig.signerName}${sig.signerIdNumber ? ' • CC: ' + sig.signerIdNumber : ''}`, textX, textY); textY += 4;
-    if (sig.signerPhone) { doc.text(`Tel: ${sig.signerPhone}`, textX, textY); textY += 4; }
-    if (sig.signerEmail) { doc.text(`Email: ${sig.signerEmail}`, textX, textY); textY += 4; }
+    doc.text(`${sig.signerName}${sig.signerIdNumber ? ' • CC: ' + sig.signerIdNumber : ''}`, textX, textY); textY += 3.5;
+    if (sig.signerPhone) { doc.text(`Tel: ${sig.signerPhone}`, textX, textY); textY += 3.5; }
+    if (sig.signerEmail) { doc.text(`Email: ${sig.signerEmail}`, textX, textY); textY += 3.5; }
     doc.text(`Firmado: ${new Date(sig.signedAt).toLocaleDateString('es-CO')}`, textX, textY);
   } else {
     doc.text('(pendiente)', textX, textY);

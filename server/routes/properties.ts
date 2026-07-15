@@ -3,7 +3,7 @@ dotenv.config({ path: '.env.local' });
 import express from 'express';
 import { google } from 'googleapis';
 import crypto from 'crypto';
-import pool from '../db.js';
+import pool, { ensureDefaultOrg } from '../db.js';
 import { isTokenExpiringSoon } from '../lib/googleAuth.js';
 
 const router = express.Router();
@@ -215,6 +215,11 @@ router.post('/', async (req, res) => {
   };
   const dbMandateSignedAt = toMysqlDateTime(mandateSignedAt);
 
+  // Resolvemos orgId ANTES del try principal porque los loops de owners/units
+  // están en try blocks separados más abajo. Si lo declaráramos adentro del
+  // try, no sería visible fuera.
+  const orgId = await ensureDefaultOrg();
+
   try {
     if (isUpsert) {
       await pool.query(
@@ -250,7 +255,7 @@ router.post('/', async (req, res) => {
           mandatePdfUrl ?? null,
           dbMandateSignedAt,
           propertyId,
-          'default_org',
+          orgId,
         ],
       );
     } else {
@@ -262,7 +267,7 @@ router.post('/', async (req, res) => {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           propertyId,
-          'default_org',
+          orgId,
           address,
           chip || null,
           folio || null,
@@ -323,7 +328,7 @@ router.post('/', async (req, res) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             ownerId,
-            'default_org',
+            orgId,
             propertyId,
             name,
             idNumber ? String(idNumber) : null,
@@ -373,7 +378,7 @@ router.post('/', async (req, res) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             unitId,
-            'default_org',
+            orgId,
             propertyId,
             type,
             label,
@@ -481,6 +486,7 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const propertyId = req.params.id;
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query<any[]>(
       `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
               p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
@@ -490,7 +496,7 @@ router.get('/:id', async (req, res) => {
        FROM properties p
        WHERE p.id = ? AND p.organization_id = ?
        LIMIT 1`,
-      [propertyId, 'default_org'],
+      [propertyId, orgId],
     );
     if (rows.length === 0) {
       res.status(404).json({ error: 'Propiedad no encontrada' });
@@ -646,6 +652,7 @@ router.get('/:id', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const expand = req.query.expand === 'full';
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query<any[]>(
       `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
               p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
@@ -654,7 +661,7 @@ router.get('/', async (req, res) => {
        FROM properties p
        WHERE p.organization_id = ? AND p.archived = 0
        ORDER BY p.created_at DESC`,
-      ['default_org'],
+      [orgId],
     );
 
     const propertyIds = rows.map((r) => r.id);
@@ -796,9 +803,10 @@ router.patch('/:id', async (req, res) => {
   }
   values.push(id);
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `UPDATE properties SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
-      [...values, 'default_org'],
+      [...values, orgId],
     );
     res.json({ success: true });
   } catch (err: any) {
@@ -814,12 +822,13 @@ router.patch('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  const orgId = await ensureDefaultOrg();
 
   const [propRows] = await pool.query<any[]>(
     `SELECT id, address, drive_folder_id
      FROM properties
      WHERE id = ? AND organization_id = ?`,
-    [id, 'default_org'],
+    [id, orgId],
   );
 
   if (!propRows.length) {
@@ -846,7 +855,7 @@ router.delete('/:id', async (req, res) => {
   try {
     await pool.query(
       `DELETE FROM properties WHERE id = ? AND organization_id = ?`,
-      [id, 'default_org'],
+      [id, orgId],
     );
   } catch (err: any) {
     console.error('[DELETE /api/properties] MySQL error:', err.message);

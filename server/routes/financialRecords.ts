@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 import express from 'express';
 import crypto from 'crypto';
-import pool from '../db.js';
+import pool, { ensureDefaultOrg } from '../db.js';
 
 const router = express.Router();
 
@@ -12,13 +12,14 @@ const router = express.Router();
  */
 router.get('/', async (_req, res) => {
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query<any[]>(
       `SELECT id, contract_id, property_id, date, type, category, description, amount,
               attachment_url, created_at
        FROM financial_records
        WHERE organization_id = ?
        ORDER BY date DESC, created_at DESC`,
-      ['default_org'],
+      [orgId],
     );
     res.json({ records: rows });
   } catch (err: any) {
@@ -44,11 +45,12 @@ router.post('/', async (req, res) => {
 
   const id = crypto.randomUUID();
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `INSERT INTO financial_records
         (id, organization_id, contract_id, property_id, date, type, category, description, amount, attachment_url)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, 'default_org', contractId || null, propertyId, date, type, category, description, amount, attachmentUrl || null],
+      [id, orgId, contractId || null, propertyId, date, type, category, description, amount, attachmentUrl || null],
     );
     res.json({ success: true, recordId: id });
   } catch (err: any) {
@@ -81,9 +83,10 @@ router.patch('/:id', async (req, res) => {
 
   values.push(id);
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `UPDATE financial_records SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
-      [...values, 'default_org'],
+      [...values, orgId],
     );
     res.json({ success: true });
   } catch (err: any) {
@@ -96,9 +99,10 @@ router.patch('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `DELETE FROM financial_records WHERE id = ? AND organization_id = ?`,
-      [req.params.id, 'default_org'],
+      [req.params.id, orgId],
     );
     res.json({ success: true });
   } catch (err: any) {

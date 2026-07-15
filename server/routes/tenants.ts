@@ -4,7 +4,7 @@ import express from 'express';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import { Readable } from 'stream';
-import pool from '../db.js';
+import pool, { ensureDefaultOrg } from '../db.js';
 import { isTokenExpiringSoon } from '../lib/googleAuth.js';
 
 const router = express.Router();
@@ -171,8 +171,9 @@ router.post('/', async (req, res) => {
     }
   }
 
-  // 3. Guardar en MySQL (usamos 'default_org' como org hardcodeada por ahora)
+  // 3. Guardar en MySQL (usamos ensureDefaultOrg() que devuelve el UUID de la org)
   try {
+    const orgId = await ensureDefaultOrg();
     // Si propertyId viene vacío o apunta a un ID inexistente en MySQL, lo guardamos NULL
     let safePropertyId: string | null = null;
     if (propertyId) {
@@ -193,7 +194,7 @@ router.post('/', async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', ?)`,
       [
         tenantId,
-        'default_org',          // TODO: org real del usuario autenticado
+        orgId,                  // UUID real de la org
         safePropertyId,
         name.toUpperCase(),
         idNumber,
@@ -228,13 +229,14 @@ router.post('/', async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query<any[]>(
       `SELECT id, property_id, name, document_id, email, phone, rent, admin_fee, lease_start_date, status,
               tenant_drive_folder_id, drive_folder_path, created_at
        FROM tenants
        WHERE organization_id = ?
        ORDER BY created_at DESC`,
-      ['default_org'],
+      [orgId],
     );
     res.json({ tenants: rows });
   } catch (err: any) {
@@ -602,9 +604,10 @@ router.patch('/:id', async (req, res) => {
   }
   values.push(id);
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `UPDATE tenants SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
-      [...values, 'default_org'],
+      [...values, orgId],
     );
     res.json({ success: true });
   } catch (err: any) {
@@ -617,9 +620,10 @@ router.patch('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `DELETE FROM tenants WHERE id = ? AND organization_id = ?`,
-      [req.params.id, 'default_org'],
+      [req.params.id, orgId],
     );
     res.json({ success: true });
   } catch (err: any) {

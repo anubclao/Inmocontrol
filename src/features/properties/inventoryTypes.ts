@@ -21,6 +21,34 @@ export interface InventoryPhoto {
   fileName?: string;          // ej: "cocina_01_cocina"
 }
 
+/**
+ * Media (foto o video) adjuntada a un item específico del inventario.
+ * Se guarda en IndexedDB con key `<inventoryId>:<mediaId>`.
+ * El dataUrl de la foto / thumbnail del video entra como dataURL base64.
+ */
+export interface ItemMedia {
+  id: string;
+  type: 'photo' | 'video';
+  /**
+   * Para `photo`: dataURL JPEG de la imagen ya comprimida.
+   * Para `video`: dataURL JPEG del primer frame (thumbnail estática).
+   * Se usa en el PDF y en el preview del editor.
+   */
+  dataUrl: string;
+  /**
+   * Solo para `video`: dataURL del video completo. En el PDF se reemplaza
+   * por un marcador "▶ VIDEO" porque jsPDF no embebe video.
+   * Vacío para `photo`.
+   */
+  videoDataUrl?: string;
+  fileName?: string;
+  takenAt: string;
+  /** Duración del video en segundos (si está disponible). 0 para fotos. */
+  durationSec?: number;
+  /** Tamaño en bytes (informativo, opcional). */
+  sizeBytes?: number;
+}
+
 export interface InventoryItem {
   id: string;                 // id del ItemDef
   label: string;
@@ -46,6 +74,22 @@ export interface InventoryItem {
    * copia `notes` → `observations` al cargar inventarios viejos.
    */
   notes?: string;
+  /**
+   * Fotos y videos asociados a ESTE item específico durante el recorrido.
+   * Si está vacío y el item fue marcado para no aplicar (`status: 'na'` +
+   * `removed: true`), se omite del PDF. Esto le da al agente la opción de
+   * "sacar" un item que no existe en el inmueble (tina, horno, etc.) en
+   * lugar de tener que llenarlo con N/A.
+   */
+  media?: ItemMedia[];
+  /**
+   * Marcado cuando el agente confirma que el item NO existe en el inmueble
+   * y decide excluirlo del inventario. Se renderiza con badge "No aplica"
+   * en el PDF y tachado en la UI.
+   */
+  removed?: boolean;
+  /** Motivo de exclusión (opcional, ej: "Este apto no tiene tina"). */
+  removalReason?: string;
 }
 
 export interface InventoryArea {

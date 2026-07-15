@@ -4,7 +4,7 @@ import express from 'express';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import { Readable } from 'stream';
-import pool from '../db.js';
+import pool, { ensureDefaultOrg } from '../db.js';
 import { isTokenExpiringSoon } from '../lib/googleAuth.js';
 
 const router = express.Router();
@@ -120,6 +120,7 @@ router.post('/', async (req, res) => {
     res.status(400).json({ error: "phase debe ser 'inicial' o 'final'" });
     return;
   }
+  const orgId = await ensureDefaultOrg();
 
   // `inventories.id` es CHAR(36) en MySQL. Si el cliente envía un id ≤36 chars lo usamos
   // (compat con la convención UUID). Si no, generamos uno nuevo — NUNCA concatenar con ':'.
@@ -142,7 +143,7 @@ router.post('/', async (req, res) => {
          updated_at = CURRENT_TIMESTAMP`,
       [
         id,
-        'default_org',
+        orgId,
         body.propertyId,
         body.contractId ?? null,
         body.phase,

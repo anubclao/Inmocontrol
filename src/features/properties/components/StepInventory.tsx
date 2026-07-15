@@ -5,7 +5,7 @@ import { AreaEditor } from './AreaEditor';
 import { SignatureStep } from './SignatureStep';
 import { inventoryDB } from '../inventoryDB';
 import { getPropertyTypeConfig, resolveAreas, type PropertyType } from '../inventoryConfig';
-import type { Inventory, InventoryArea, InventoryPhoto, InventoryItem, Signature } from '../inventoryTypes';
+import type { Inventory, InventoryArea, InventoryItem, InventoryPhoto, ItemMedia, Signature } from '../inventoryTypes';
 import { generateInventoryPDF } from '../inventoryPdf';
 import { useAppStore } from '../../../shared/store/appStore';
 
@@ -73,7 +73,8 @@ export function StepInventory({
   // Modal de confirmación al finalizar inventario (reemplaza window.confirm)
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [resumenFinalizacion, setResumenFinalizacion] = useState<{
-    areasConFotos: number; totalAreas: number; totalPhotos: number;
+    areasConFotos: number; totalAreas: number; totalMedia: number;
+    totalPhotos: number; totalItemMedia: number;
     totalItemsEvaluados: number; areasSinFotos: InventoryArea[];
   } | null>(null);
 
@@ -232,15 +233,24 @@ export function StepInventory({
       return;
     }
 
-    // Validación final: áreas sin fotos
+    // Validación final: áreas sin fotos (cuenta fotos de área + media de items)
     const areasSinFotos = inventory.areas.filter((a) => {
-      const photoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
-      return photoCount === 0;
+      const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
+      const itemMediaCount = Object.values(a.items).reduce<number>(
+        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+      );
+      return areaPhotoCount + itemMediaCount === 0;
     });
 
     // Conteos para mostrar
     const totalAreas = inventory.areas.length;
     const totalPhotos = inventory.photos.length;
+    const totalItemMedia = inventory.areas.reduce(
+      (acc, a) => acc + Object.values(a.items).reduce<number>(
+        (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0), 0,
+      ), 0,
+    );
+    const totalMedia = totalPhotos + totalItemMedia;
     const areasConFotos = totalAreas - areasSinFotos.length;
     const totalItemsEvaluados = inventory.areas.reduce(
       (acc, a) => acc + Object.values(a.items).filter((it: InventoryItem) => it.status).length,
@@ -250,7 +260,7 @@ export function StepInventory({
     // En lugar de window.confirm, mostramos un Modal con el resumen y la opción de revisar.
     // Esto le da al usuario la chance de volver si olvidó algo, sin alerta nativa fea.
     setResumenFinalizacion({
-      areasConFotos, totalAreas, totalPhotos, totalItemsEvaluados, areasSinFotos,
+      areasConFotos, totalAreas, totalMedia, totalPhotos, totalItemMedia, totalItemsEvaluados, areasSinFotos,
     });
     setConfirmFinalize(true);
   };
@@ -260,7 +270,7 @@ export function StepInventory({
     if (!inventory || !resumenFinalizacion) return;
     setConfirmFinalize(false);
 
-    const { areasConFotos, totalAreas, totalPhotos, totalItemsEvaluados, areasSinFotos } = resumenFinalizacion;
+    const { areasConFotos, totalAreas, totalMedia, totalItemsEvaluados, areasSinFotos } = resumenFinalizacion;
     console.log('[inventory] Iniciando finalización...');
     try {
       // Guardar inventario con signedAt vacío (es captación, sin firmas)
@@ -287,7 +297,7 @@ export function StepInventory({
 
       // Toast final con resumen
       showToast(
-        `✓ Inventario guardado: ${areasConFotos}/${totalAreas} áreas · ${totalPhotos} fotos · ${totalItemsEvaluados} ítems`,
+        `✓ Inventario guardado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${totalItemsEvaluados} ítems`,
         'success',
       );
       // Pasamos el inventario final explícitamente para evitar closures stale del padre
@@ -341,16 +351,70 @@ export function StepInventory({
     });
   };
 
+  /**
+   * Persiste el media (foto o video) de un item específico en el store
+   * `photos` de IndexedDB. Se guarda con la convención
+   * `<inventoryId>:<mediaId>` para que `getMediaDataUrl` (inyectado al PDF)
+   * pueda recuperarlo después.
+   *
+   * El media también queda inline en el `InventoryItem.media` para que la
+   * UI lo muestre sin tener que hacer un round-trip a IndexedDB.
+   */
+  const onSaveItemMedia = async (_itemId: string, media: ItemMedia): Promise<void> => {
+    if (!inventory) return;
+    try {
+      await inventoryDB.savePhoto({
+        id: `${inventory.id}:${media.id}`,
+        inventoryId: inventory.id,
+        dataUrl: media.dataUrl,
+        // Para videos guardamos AMBOS: el thumbnail (dataUrl) y el video completo (videoDataUrl).
+        // Lo guardamos en el mismo record para que un solo GET traiga todo.
+        ...(media.videoDataUrl ? { videoDataUrl: media.videoDataUrl } : {}),
+        fileName: media.fileName,
+        takenAt: media.takenAt,
+        type: media.type,
+        durationSec: media.durationSec,
+        sizeBytes: media.sizeBytes,
+      });
+    } catch (err) {
+      console.error('[itemMedia] savePhoto failed:', err);
+      throw err;
+    }
+  };
+
+  /** Borra el media persistido de un item. */
+  const onDeleteItemMedia = async (_itemId: string, mediaId: string): Promise<void> => {
+    if (!inventory) return;
+    try {
+      await inventoryDB.deletePhoto(`${inventory.id}:${mediaId}`);
+    } catch (err) {
+      console.error('[itemMedia] deletePhoto failed:', err);
+      throw err;
+    }
+  };
+
   const onSaveSignatures = async (signatures: Signature[]) => {
     if (!inventory) return;
 
     // Conteos para mostrar
     const totalAreas = inventory.areas.length;
     const totalPhotos = inventory.photos.length;
+    // Áreas evaluadas: cuentan las que tienen al menos 1 foto O item con media.
+    // (los items marcados `removed: true` también cuentan como "evaluados")
     const areasConFotos = inventory.areas.filter((a) => {
-      const photoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
-      return photoCount > 0;
+      const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
+      const itemMediaCount = Object.values(a.items).reduce<number>(
+        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+      );
+      return areaPhotoCount + itemMediaCount > 0;
     }).length;
+    // Total media: fotos de área + media de items
+    const totalItemMedia = inventory.areas.reduce(
+      (acc, a) => acc + Object.values(a.items).reduce<number>(
+        (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0), 0,
+      ), 0,
+    );
+    const totalMedia = totalPhotos + totalItemMedia;
     const totalItemsEvaluados = inventory.areas.reduce(
       (acc, a) => acc + Object.values(a.items).filter((it: InventoryItem) => it.status).length,
       0,
@@ -362,7 +426,7 @@ export function StepInventory({
       for (const area of inventory.areas) {
         const baseArea = baseInventory.areas.find((ba) => ba.id === area.id);
         if (!baseArea) continue;
-        for (const [itemId, currentItem] of Object.entries(area.items)) {
+        for (const [itemId, currentItem] of Object.entries(area.items) as [string, InventoryItem][]) {
           const baseItem = baseArea.items[itemId];
           if (!baseItem) continue;
           if (baseItem.status !== currentItem.status) novedadesCount++;
@@ -376,7 +440,7 @@ export function StepInventory({
       `¿Está seguro de firmar el inventario ${phaseLabel}?\n\n` +
       `• Firmantes: ${signatures.length} (${signatures.map((s) => s.signerRole).join(', ')})\n` +
       `• Áreas evaluadas: ${areasConFotos}/${totalAreas}\n` +
-      `• Fotos: ${totalPhotos}\n` +
+      `• Archivos: ${totalMedia} (fotos + videos)\n` +
       `• Ítems evaluados: ${totalItemsEvaluados}` +
       (novedadesCount > 0 ? `\n• Novedades detectadas: ${novedadesCount}` : '');
 
@@ -452,7 +516,7 @@ export function StepInventory({
         }
 
         showToast(
-          `✓ Inventario de colocación firmado: ${areasConFotos}/${totalAreas} áreas · ${totalPhotos} fotos · ${novedadesCount} novedades`,
+          `✓ Inventario de colocación firmado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${novedadesCount} novedades`,
           'success',
         );
 
@@ -501,7 +565,7 @@ export function StepInventory({
             <p className="text-sm font-semibold text-emerald-900 mb-2">Resumen del inventario</p>
             <ul className="text-xs text-emerald-800 space-y-1">
               <li>• <strong>Áreas evaluadas:</strong> {resumenFinalizacion.areasConFotos} de {resumenFinalizacion.totalAreas}</li>
-              <li>• <strong>Fotos subidas:</strong> {resumenFinalizacion.totalPhotos}</li>
+              <li>• <strong>Archivos:</strong> {resumenFinalizacion.totalMedia} ({resumenFinalizacion.totalPhotos} fotos de área + {resumenFinalizacion.totalItemMedia} fotos/videos de items)</li>
               <li>• <strong>Ítems evaluados:</strong> {resumenFinalizacion.totalItemsEvaluados}</li>
             </ul>
           </div>
@@ -622,13 +686,18 @@ export function StepInventory({
             onChange={onAreaChange}
             onPhotosChange={onPhotosChange}
             onRemovePhoto={onRemovePhoto}
+            onSaveItemMedia={onSaveItemMedia}
+            onDeleteItemMedia={onDeleteItemMedia}
             onBack={() => setCurrentAreaIndex(Math.max(0, currentAreaIndex - 1))}
             onNext={() => {
               if (!inventory) return;
               const area = inventory.areas[currentAreaIndex];
-              const photoCount = inventory.photos.filter((p) => p.areaId === area.id).length;
-              if (photoCount === 0) {
-                showToast(`Sube al menos una foto de "${area.label}" antes de continuar`, 'error');
+              const areaPhotoCount = inventory.photos.filter((p) => p.areaId === area.id).length;
+              const itemMediaCount = Object.values(area.items).reduce<number>(
+                (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+              );
+              if (areaPhotoCount + itemMediaCount === 0) {
+                showToast(`Sube al menos una foto o video de "${area.label}" antes de continuar`, 'error');
                 return;
               }
               setCurrentAreaIndex(Math.min(inventory.areas.length - 1, currentAreaIndex + 1));
@@ -648,9 +717,12 @@ export function StepInventory({
               <button
                 key={a.id}
                 onClick={() => {
-                  const photoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
-                  if (i !== currentAreaIndex && photoCount === 0 && !inventory.areas[currentAreaIndex]) {
-                    showToast(`Sube al menos una foto de "${a.label}" antes de ir`, 'error');
+                  const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
+                  const itemMediaCount = Object.values(a.items).reduce<number>(
+                    (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+                  );
+                  if (i !== currentAreaIndex && areaPhotoCount + itemMediaCount === 0 && !inventory.areas[currentAreaIndex]) {
+                    showToast(`Sube al menos una foto o video de "${a.label}" antes de ir`, 'error');
                     return;
                   }
                   setCurrentAreaIndex(i);

@@ -183,6 +183,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   const [inventoryPhase, setInventoryPhase] = useState<'inicial' | 'final' | null>(null);
   const [baseInventory, setBaseInventory] = useState<Inventory | null>(null);
   const [comparingProperty, setComparingProperty] = useState<any | null>(null);
+  /** Modal: confirmar descarte del draft del wizard. TRUE = mostrar el modal. */
+  const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Pista: qué propiedad del detalle estamos actualizando con el mandato firmado. */
   const [uploadingMandatoPropertyId, setUploadingMandatoPropertyId] = useState<string | null>(null);
@@ -264,47 +266,67 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   // Se activa SOLO cuando el wizard está abierto (showWizard=true) para no
   // escribir cada 200ms cuando el componente está en modo lista.
   //
-  // BUG FIX: en el ciclo de useEffects, el autosave corría ANTES que la
-  // hidratación (están en orden de declaración). Eso pisaba el draft viejo
-  // con el state inicial vacío cada vez que el user re-abría el wizard
-  // después de un F5. La solución es el `wizardHydrationDone` ref: el
-  // autosave se salta hasta que `useEffect` de hidratación haya tenido
-  // chance de restaurar. Un microtask marca el ref como listo después
-  // del primer render post-apertura.
-  const wizardHydrationDone = useRef(false);
+  // BUG FIX: cuando el user reabre el wizard después de un F5, el autosave
+  // corría UNA VEZ con el state inicial vacío antes de que la hidratación
+  // pudiera restaurar, pisando el draft viejo. La solución es skipear la
+  // PRIMERA ejecución del autosave post-apertura, dándole tiempo a la
+  // hidratación a restaurar. Cualquier cambio de estado posterior (sea de
+  // la hidratación o del user) triggerea el autosave con la data correcta.
+  //
+  // Orden clave: este useEffect se declara ANTES del autosave, así cuando
+  // showWizard cambia a true, setea el flag skipNextAutosave ANTES de que
+  // el autosave chequee.
+  const skipNextAutosave = useRef(false);
   useEffect(() => {
     if (showWizard) {
-      // Después de este render, la hidratación (definida más abajo) ya
-      // corrió y restauró el state. Marcamos el ref para que el autosave
-      // empiece a escribir el state restaurado, NO el inicial vacío.
-      queueMicrotask(() => { wizardHydrationDone.current = true; });
+      // El wizard se acaba de abrir. Marcamos el flag para que el autosave
+      // se salte la primera ejecución (donde el state todavía es el inicial
+      // vacío). La hidratación usa ese tick para restaurar el state desde
+      // localStorage, y luego el autosave empieza a guardar.
+      skipNextAutosave.current = true;
     } else {
-      wizardHydrationDone.current = false;
+      skipNextAutosave.current = false;
     }
   }, [showWizard]);
   useEffect(() => {
     if (!showWizard) return;
-    if (!wizardHydrationDone.current) return; // esperar a que hidrate
-    try {
-      // serializamos solo los campos serializables (sin Files ni blob URLs)
-      const draft = {
-        wizardPropertyId, // CRÍTICO: reusar el mismo id al reabrir para que
-                          // StepInventory re-hidrate el inventario desde IndexedDB
-        address, chip, folio, propertyType, step,
-        wizardOwners,
-        wizardUnits,
-        // uploadedDocs: solo guardamos las keys que tienen algo (las URLs blob
-        // no sirven post-refresh — el user tendrá que re-subir si no subió a Drive)
-        uploadedDocsKeys: Object.fromEntries(
-          Object.entries(uploadedDocs).map(([k, v]) => [k, v ? 'has-file' : null]),
-        ),
-        ownerIdNumber,
-        savedAt: Date.now(),
-      };
-      localStorage.setItem(STORAGE_KEYS.wizardPropertyDraft, JSON.stringify(draft));
-    } catch (err) {
-      console.warn('[wizard-draft] no se pudo guardar:', err);
+    if (skipNextAutosave.current) {
+      // Skip la primera ejecución post-apertura. Cualquier state change
+      // posterior (hidratación, user input) triggerea este useEffect de
+      // nuevo, esta vez con el flag en false → guarda normalmente.
+      skipNextAutosave.current = false;
+      return;
     }
+    // Debounce: 600ms. Cada keystroke cancela el write anterior y agenda
+    // uno nuevo. Si el user tipea "Calle 93", solo se hace 1 write al
+    // final en lugar de 7. Si navega entre steps o sube archivos, también
+    // cae acá. localStorage.setItem es síncrono y rápido, pero evitar
+    // 200 writes/seguro no hace daño.
+    const timeoutId = setTimeout(() => {
+      try {
+        // serializamos solo los campos serializables (sin Files ni blob URLs)
+        const draft = {
+          wizardPropertyId, // CRÍTICO: reusar el mismo id al reabrir para que
+                            // StepInventory re-hidrate el inventario desde IndexedDB
+          address, chip, folio, propertyType, step,
+          wizardOwners,
+          wizardUnits,
+          // uploadedDocs: solo guardamos las keys que tienen algo (las URLs blob
+          // no sirven post-refresh — el user tendrá que re-subir si no subió a Drive)
+          uploadedDocsKeys: Object.fromEntries(
+            Object.entries(uploadedDocs).map(([k, v]) => [k, v ? 'has-file' : null]),
+          ),
+          ownerIdNumber,
+          savedAt: Date.now(),
+        };
+        localStorage.setItem(STORAGE_KEYS.wizardPropertyDraft, JSON.stringify(draft));
+      } catch (err) {
+        console.warn('[wizard-draft] no se pudo guardar:', err);
+      }
+    }, 600);
+    // Cleanup: si el effect se vuelve a ejecutar antes de los 600ms
+    // (otro cambio de state), cancelamos el write anterior.
+    return () => clearTimeout(timeoutId);
   }, [
     showWizard, wizardPropertyId, address, chip, folio, propertyType, step,
     wizardOwners, wizardUnits, uploadedDocs, ownerIdNumber,
@@ -328,7 +350,20 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         wizardOwners?: WizardOwner[]; wizardUnits?: WizardUnit[];
         ownerIdNumber?: string;
         uploadedDocsKeys?: Record<string, string | null>;
+        savedAt?: number;
       };
+      // TTL: descartar drafts de más de 30 días. Evita que un draft olvidado
+      // de hace 3 meses aparezca cuando el user clickea "+ Agregar Propiedad".
+      // Si el draft no tiene savedAt (versión vieja), lo aceptamos por compat.
+      if (draft.savedAt) {
+        const ageMs = Date.now() - draft.savedAt;
+        const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días
+        if (ageMs > MAX_AGE_MS) {
+          console.log(`[wizard-draft] descartado por TTL: ${Math.round(ageMs / (24*60*60*1000))} días de antigüedad`);
+          try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
+          return;
+        }
+      }
       // Solo restauramos si hay algo significativo (al menos dirección o un owner)
       const hasContent = (draft.address && draft.address.length > 0)
         || (draft.wizardOwners && draft.wizardOwners.some((o) => o.name.trim().length > 0));
@@ -894,6 +929,31 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         await inventoryDB.deleteInventory(oldId);                          // borra la vieja (incluye fotos)
 
         // POST a MySQL (la FK ahora sí se cumple)
+        // IMPORTANTE: antes de serializar, eliminamos `videoDataUrl` de cada
+        // ItemMedia — el archivo de video completo puede pesar 10-50MB y
+        // rompería la columna JSON de MySQL. El video COMPLETO se queda en
+        // IndexedDB (key: <inventoryId>:<mediaId>) y se puede re-leer desde
+        // ahí cuando haga falta subirlo a Drive. Solo mandamos a MySQL el
+        // thumbnail + metadata, suficiente para renderizar el PDF.
+        const areasStripped = rekeyed.areas.map((a) => ({
+          ...a,
+          items: Object.fromEntries(
+            Object.entries(a.items).map(([k, v]) => [
+              k,
+              {
+                ...v,
+                media: (v.media ?? []).map((m) => {
+                  if (m.type === 'video') {
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    const { videoDataUrl, ...rest } = m;
+                    return rest;
+                  }
+                  return m;
+                }),
+              },
+            ]),
+          ),
+        }));
         const r1 = await fetch('/api/inventories', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -903,7 +963,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             phase: 'inicial',
             propertyType: rekeyed.propertyType,
             counters: rekeyed.counters,
-            areas: rekeyed.areas,
+            areas: areasStripped,
             photos: rekeyed.photos,
             signatures: rekeyed.signatures,
             customAreas: rekeyed.customAreas,
@@ -1094,6 +1154,31 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // Limpiar el draft del wizard en localStorage (el flujo terminó OK)
       try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     }
+  };
+
+  /**
+   * Descartar el draft actual del wizard. Llamado desde el modal de confirmación.
+   * Vacía todo el state del wizard y borra el localStorage. Equivale a
+   * "abrir el wizard desde cero, sin restaurar nada".
+   */
+  const discardDraft = () => {
+    setConfirmDiscardDraft(false);
+    setStep(1);
+    setShowWizard(false);
+    setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
+    setPropertyType('apartamento');
+    setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+    setWizardUnits([]);
+    // Liberar blob URLs antes de vaciar (memory leak fix)
+    (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+    setUploadedDocs({});
+    setWizardFiles({});
+    setWizardInventory(null);
+    // Generar un wizardPropertyId nuevo (el anterior ya estaba en localStorage)
+    setWizardPropertyId(`wizard-${Date.now()}`);
+    // Borrar de localStorage
+    try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
+    showToast('Borrador descartado. Empezás de cero.', 'success');
   };
 
   /** Re-fetches la propiedad desde el server para asegurar que el modal muestra
@@ -1408,7 +1493,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         {showWizard ? (
           /* ══ MODO WIZARD DE CAPTACIÓN ══════════════════════════════════ */
           <>
-            {/* Barra de pasos */}
+            {/* Barra de pasos + botón "Descartar draft" */}
             <div className="flex items-center gap-2">
               {(['Datos', 'Documentos', 'Inventario'] as const).map((label, i) => (
                 <div key={label} className="flex items-center gap-2 flex-1">
@@ -1421,6 +1506,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   {i < 2 && <div className={`flex-1 h-0.5 rounded-full ${step > i + 1 ? 'bg-blue-600' : 'bg-slate-200'}`} />}
                 </div>
               ))}
+              {/* Botón "Descartar borrador" — abre modal de confirmación */}
+              <button
+                type="button"
+                onClick={() => setConfirmDiscardDraft(true)}
+                className="text-xs text-slate-500 hover:text-red-600 font-semibold underline ml-2 flex-shrink-0"
+                title="Borrar el borrador actual (no se puede deshacer)"
+              >
+                Descartar borrador
+              </button>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -2173,11 +2267,51 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         </div>
       </Modal>
 
+      {/* ── Modal: confirmar descarte del draft del wizard ── */}
+      <Modal
+        isOpen={confirmDiscardDraft}
+        onClose={() => setConfirmDiscardDraft(false)}
+        title="¿Descartar el borrador?"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-900">
+            <p className="font-semibold mb-1">Vas a perder todo el progreso actual del wizard.</p>
+            <p className="text-xs text-red-700">
+              Se borran: dirección, CHIP, folio, propietarios, unidades, archivos subidos, fotos del inventario y
+              observaciones. Esta acción no se puede deshacer.
+            </p>
+          </div>
+          <p className="text-sm text-slate-600">
+            Si solo querés cerrar el wizard y volver después, usá el botón
+            <span className="font-semibold"> "← Ver Inmuebles (guardar borrador)" </span>
+            en la parte superior. El borrador se preserva automáticamente.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setConfirmDiscardDraft(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="danger"
+              className="flex-1"
+              onClick={discardDraft}
+            >
+              Sí, descartar borrador
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Modal visor de documento ──
           Montado DESPUÉS del Detalle del Inmueble para que aparezca ENCIMA
           del detalle cuando el usuario hace click en "Ver". Al cerrar el
           viewer, el detalle sigue abierto detrás — no hay que reabrirlo. */}
       <Modal isOpen={!!viewingDoc} onClose={() => { if (viewingDoc?.url?.startsWith('blob:')) URL.revokeObjectURL(viewingDoc.url); setViewingDoc(null); }} title={`Visualizando: ${viewingDoc?.label}`}>
+
         <div className="w-full bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
           {!viewingDoc?.url ? (
             <div className="h-[40vh] flex items-center justify-center text-slate-400 text-sm">No hay documento para mostrar</div>
