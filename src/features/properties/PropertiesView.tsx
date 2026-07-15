@@ -263,8 +263,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   //
   // Se activa SOLO cuando el wizard está abierto (showWizard=true) para no
   // escribir cada 200ms cuando el componente está en modo lista.
+  //
+  // BUG FIX: en el ciclo de useEffects, el autosave corría ANTES que la
+  // hidratación (están en orden de declaración). Eso pisaba el draft viejo
+  // con el state inicial vacío cada vez que el user re-abría el wizard
+  // después de un F5. La solución es el `wizardHydrationDone` ref: el
+  // autosave se salta hasta que `useEffect` de hidratación haya tenido
+  // chance de restaurar. Un microtask marca el ref como listo después
+  // del primer render post-apertura.
+  const wizardHydrationDone = useRef(false);
+  useEffect(() => {
+    if (showWizard) {
+      // Después de este render, la hidratación (definida más abajo) ya
+      // corrió y restauró el state. Marcamos el ref para que el autosave
+      // empiece a escribir el state restaurado, NO el inicial vacío.
+      queueMicrotask(() => { wizardHydrationDone.current = true; });
+    } else {
+      wizardHydrationDone.current = false;
+    }
+  }, [showWizard]);
   useEffect(() => {
     if (!showWizard) return;
+    if (!wizardHydrationDone.current) return; // esperar a que hidrate
     try {
       // serializamos solo los campos serializables (sin Files ni blob URLs)
       const draft = {
