@@ -310,28 +310,44 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
 - Estado futuro: wizard state en localStorage para permitir "Continuar registro" al volver. **NO implementar hasta que se cierre el flujo actual completo** (Cobranza + Comparativa + Acta).
 
-### "Guardar avance (este equipo)" — wizard steps 1 y 2 son LOCAL ONLY
-- Los botones "💾 Guardar avance (este equipo)" en `StepBasic` y `StepDocs`
-  **NO llaman al backend**. Persisten solo en Zustand/localStorage del navegador
-  y muestran un toast honesto: "Avance guardado en este navegador. Se sube al
-  servidor al finalizar el wizard."
-- El ÚNICO momento en que el wizard hace `POST /api/properties` es al FINAL del
-  step 3, dentro de `PropertiesView.handleFinalize` (línea ~757), cuando el
-  usuario hace clic en "Finalizar" el inventario de captación.
-- Esto es decisión consciente: si cada "Guardar avance" crease una fila en
-  `properties`, los wizards abandonados dejarían filas `Pendiente` huérfanas.
-- **Implicación de testing**: si querés ver la propiedad en MySQL, tenés que
-  completar el wizard entero (steps 1 + 2 + 3 + Finalizar). "Guardar avance"
-  sin finalizar = nada en el server. Esto se revisó en julio-2026 después de
-  que el cliente se confundiera al ver la tabla `properties` vacía pese a que
-  la UI decía "guardado".
+### "Guardar avance (este equipo)" — wizard pre-crea propiedad en MySQL al pasar a step 2
+- **Opción B (julio-2026)**: el botón "💾 Guardar avance (este equipo)" en
+  step 1 SÍ persiste al servidor. Al hacer click (o al pasar a step 2 vía
+  "Continuar a Documentación"), se hace un `POST /api/properties` con
+  `status='Pendiente'` y se guarda el `propertyDbId` real en state.
+- Esto habilita que las uploads a Drive en step 2 sean en **tiempo real**:
+  cada PDF que sube el agente va directo a la carpeta de Drive de la
+  propiedad, con el badge 🟢 "En Drive" apenas termina.
+- **Función clave**: `ensurePropertyPersisted()` en `PropertiesView.tsx:721`
+  — es idempotente. Si la propiedad ya está persistida, devuelve los IDs
+  cacheados sin hacer otro POST. Si no, valida campos mínimos y la crea.
+- **Inventario**: el `StepInventory` sigue usando `wizardPropertyId` (temp)
+  como propertyId. El re-key a UUID real se hace en `handleFinalize` (igual
+  que antes — el cambio no rompe este flujo).
+- **Finalizar**: `handleFinalize` ya NO crea la propiedad (asume que existe).
+  Solo sube el inventario a Drive + actualiza el status a 'Activo' si hay
+  mandato firmado, o lo deja en 'Pendiente'.
+- **Descartar borrador**: `discardDraft` ahora hace `DELETE /api/properties/:id`
+  si la propiedad fue pre-creada. El endpoint ya limpia la carpeta de Drive
+  si está vacía, y devuelve 409 si ya tiene inventarios (en cuyo caso solo
+  limpiamos el state local).
+- **Implicación de testing**: la propiedad aparece en MySQL apenas se llega
+  a step 2. Si el agente cierra el wizard sin hacer "Descartar borrador" o
+  "Finalizar", queda una fila `Pendiente` huérfana. **Mitigación**: un
+  endpoint `GET /api/properties?status=Pendiente&olderThan=7d` te lista los
+  huérfanos para revisarlos manualmente (TODO: agregar). Auto-cleanup con
+  cron después de 30 días: pendiente de discutir.
+- **Draft restoration**: el `wizardPropertyDbId` se guarda en el draft de
+  localStorage. Si el user cierra el browser y vuelve, la propiedad sigue
+  en MySQL y el wizard se reconecta a ella sin re-crear.
 
 ### Estados de almacenamiento de documentos (wizard) — siempre honestos
 - Cada card de documento en `StepDocs` muestra un **badge explícito de estado**:
   - 🟢 **En Drive** (verde, `CheckCircle2`): todos los archivos del slot ya están
     en Google Drive (URL `https://drive.google.com/...`).
   - 🟠 **Pendiente → Drive** (amber, `CloudUpload`): el archivo existe solo como
-    `blob:` URL local — se subirá a Drive al finalizar el wizard.
+    `blob:` URL local — porque Drive está desconectado o porque la subida a
+    Drive falló. Reintentá al finalizar o reconectá Drive.
   - ⚪ vacío: el slot todavía no tiene archivos.
 - El estado se deriva de la URL real del archivo (`getDocStorageState` en
   `StepDocs.tsx:13-22`). NO hay un "mentiroso" toast: el badge y el texto

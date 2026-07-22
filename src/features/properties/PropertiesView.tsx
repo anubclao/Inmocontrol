@@ -181,6 +181,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   // mismo id al reabrir el wizard (así la autosave del inventario en IndexedDB
   // se reconecta). Se renombra a un UUID real en handleFinalize.
   const [wizardPropertyId, setWizardPropertyId] = useState<string>(`wizard-${Date.now()}`);
+  // Migración a Option B: al pasar del step 1 al step 2 (o al click en "Guardar
+  // avance"), pre-creamos la propiedad en MySQL para que las uploads a Drive en
+  // step 2 sean en tiempo real. Estos IDs se llenan cuando se hace el POST.
+  // - wizardPropertyDbId: UUID real retornado por el server
+  // - wizardDriveFolderId/Path: idem para la carpeta en Drive
+  // Si son null, todavía no se persistió (estado inicial del wizard).
+  const [wizardPropertyDbId, setWizardPropertyDbId] = useState<string | null>(null);
+  const [wizardDriveFolderId, setWizardDriveFolderId] = useState<string | null>(null);
+  const [wizardDriveFolderPath, setWizardDriveFolderPath] = useState<string | null>(null);
   const [viewingDoc, setViewingDoc] = useState<{ label: string; url: string } | null>(null);
   const [viewingProperty, setViewingProperty] = useState<any>(null);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
@@ -336,6 +345,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         const draft = {
           wizardPropertyId, // CRÍTICO: reusar el mismo id al reabrir para que
                             // StepInventory re-hidrate el inventario desde IndexedDB
+          // Option B: si la propiedad ya está persistida en MySQL, guardamos
+          // el UUID real para que al re-abrir el wizard sepamos que NO hay
+          // que volver a crearla. También guardamos el driveFolderPath para
+          // mostrarlo en el banner de step 2 si quiere re-abrir.
+          wizardPropertyDbId,
+          wizardDriveFolderId,
+          wizardDriveFolderPath,
           address, chip, folio, propertyType, step,
           wizardOwners,
           wizardUnits,
@@ -360,7 +376,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // (otro cambio de state), cancelamos el write anterior.
     return () => clearTimeout(timeoutId);
   }, [
-    showWizard, wizardPropertyId, address, chip, folio, propertyType, step,
+    showWizard, wizardPropertyId, wizardPropertyDbId, wizardDriveFolderId, wizardDriveFolderPath,
+    address, chip, folio, propertyType, step,
     wizardOwners, wizardUnits, uploadedDocs, ownerIdNumber,
   ]);
 
@@ -377,6 +394,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       if (!raw) return;
       const draft = JSON.parse(raw) as {
         wizardPropertyId?: string;
+        // Option B: estos campos pueden estar en el draft si la propiedad ya
+        // fue persistida en MySQL antes de cerrar el browser.
+        wizardPropertyDbId?: string | null;
+        wizardDriveFolderId?: string | null;
+        wizardDriveFolderPath?: string | null;
         address?: string; chip?: string; folio?: string;
         propertyType?: PropertyType; step?: number;
         wizardOwners?: WizardOwner[]; wizardUnits?: WizardUnit[];
@@ -405,6 +427,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // reconecte al reabrir el wizard. Si generamos uno nuevo, el inventario
       // queda huérfano.
       if (draft.wizardPropertyId) setWizardPropertyId(draft.wizardPropertyId);
+      // Option B: restaurar el UUID real y los IDs de Drive si la propiedad
+      // ya estaba persistida. Si el server no reconoce este id (caso edge
+      // donde se borró manualmente), el siguiente ensurePropertyPersisted
+      // creará una propiedad nueva sin drama.
+      if (draft.wizardPropertyDbId) setWizardPropertyDbId(draft.wizardPropertyDbId);
+      if (draft.wizardDriveFolderId) setWizardDriveFolderId(draft.wizardDriveFolderId);
+      if (draft.wizardDriveFolderPath) setWizardDriveFolderPath(draft.wizardDriveFolderPath);
       if (draft.address) setAddress(draft.address);
       if (draft.chip) setChip(draft.chip);
       if (draft.folio) setFolio(draft.folio);
@@ -629,22 +658,74 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     }
 
     // --- Caso C: subida desde el wizard de captación (slotKey, soporta N archivos) ---
+    // Migración a Option B: si la propiedad ya está persistida (wizardPropertyDbId
+    // set), subimos el PDF a Drive EN TIEMPO REAL. Si no, caemos al fallback de
+    // blob URL + wizardFiles (igual que antes).
     if (!showWizard) return;
     setUploadingDoc(currentDocLabel);
-    const blobUrl = URL.createObjectURL(file);
-    // Append al array existente (no reemplaza). El agente puede subir varias
-    // hojas de un mismo documento (ej: cara + respaldo de la cédula).
-    const prevArr = uploadedDocs[currentDocLabel] ?? [];
-    // NOTA: NO revocamos los blob URLs previos — quedan vivos hasta que el
-    // wizard termine o se descarte el draft. Si el agente sube y luego decide
-    // reemplazar TODOS, los blobs viejos se limpian en el cleanup final.
-    setWizardFiles({ ...wizardFiles, [currentDocLabel]: [...(wizardFiles[currentDocLabel] ?? []), file] });
-    setUploadedDocs({ ...uploadedDocs, [currentDocLabel]: [...prevArr, blobUrl] });
-    showToast(`Documento listo (se subirá a Drive al finalizar el registro)`, 'success');
+    const slotKey = currentDocLabel;
+
+    // Asegurarnos de que la propiedad esté persistida. Si no, la creamos acá mismo.
+    // Esto cubre el caso: usuario va directo al step 2 sin pasar por "Continuar".
+    const persisted = await ensurePropertyPersisted();
+    if (!persisted) {
+      setUploadingDoc(null);
+      setCurrentDocLabel(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // ── Si Drive está conectado → subir AHORA (real-time) ──
+    if (persisted.driveFolderId) {
+      try {
+        const fileName = slotKeyToFilename(
+          slotKey,
+          wizardOwners,
+          wizardUnits,
+        );
+        const base64 = await fileToBase64(file);
+        const result = await uploadFileToDrive(
+          persisted.propertyDbId,
+          persisted.driveFolderId,
+          'Propietario',
+          fileName,
+          base64,
+        );
+        const prevArr = uploadedDocs[slotKey] ?? [];
+        if (result.webViewLink) {
+          // Reemplazamos la URL del archivo en uploadedDocs por la de Drive.
+          // Guardamos también en wizardFiles por compat con handleFinalize
+          // (que lee wizardFiles para re-keyear al UUID real del server).
+          setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
+          setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, result.webViewLink] });
+          showToast(`✓ ${fileName} subido a Drive`, 'success');
+        } else {
+          // Falla de Drive → fallback a blob URL + wizardFiles
+          const blobUrl = URL.createObjectURL(file);
+          setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
+          setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, blobUrl] });
+          showToast(`Error al subir a Drive (${result.error}); guardado localmente. Reintentá al finalizar.`, 'error');
+        }
+      } catch (err: any) {
+        console.error('[wizard doc upload] error:', err);
+        const blobUrl = URL.createObjectURL(file);
+        setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
+        setUploadedDocs({ ...uploadedDocs, [slotKey]: [...(blobUrl ? [blobUrl] : [])] });
+        showToast('Error al subir a Drive; guardado localmente', 'error');
+      }
+    } else {
+      // Drive no conectado → fallback a blob URL + wizardFiles
+      const blobUrl = URL.createObjectURL(file);
+      const prevArr = uploadedDocs[slotKey] ?? [];
+      setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
+      setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, blobUrl] });
+      showToast(`Documento guardado localmente (Drive no conectado). Se subirá cuando conectes tu Drive.`, 'error');
+    }
+
     setUploadingDoc(null);
     setCurrentDocLabel(null);
     // Disparar el modal "¿Querés subir otro?" en StepDocs.
-    setLastUploadedSlot(currentDocLabel);
+    setLastUploadedSlot(slotKey);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -707,6 +788,108 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
    *  (documentos a nivel de propiedad, sin owner/unit específico). */
   const triggerPropertyDocUpload = (propertyId: string, slotKey: 'predial' | 'certificado_tradicion:main') => {
     triggerDetailDocUpload(propertyId, slotKey);
+  };
+
+  /**
+   * Migración a Option B: pre-crea la propiedad en MySQL cuando el usuario
+   * pasa del step 1 al step 2 (o hace click en "Guardar avance"). Esto
+   * habilita uploads a Drive en TIEMPO REAL durante el step 2.
+   *
+   * - Si la propiedad YA está persistida (`wizardPropertyDbId` set), devuelve
+   *   los IDs existentes sin hacer un POST nuevo.
+   * - Si no, valida los campos mínimos del step 1 (address, chip, folio,
+   *   al menos 1 owner) y hace POST /api/properties con status='Pendiente'.
+   *   Guarda los IDs retornados en state.
+   * - Devuelve `{ propertyDbId, driveFolderId, driveFolderPath }` o `null`
+   *   si falló la validación o el POST.
+   */
+  const ensurePropertyPersisted = async (): Promise<{
+    propertyDbId: string;
+    driveFolderId: string | null;
+    driveFolderPath: string | null;
+  } | null> => {
+    // Ya persistida → devolver cache
+    if (wizardPropertyDbId) {
+      return {
+        propertyDbId: wizardPropertyDbId,
+        driveFolderId: wizardDriveFolderId,
+        driveFolderPath: wizardDriveFolderPath,
+      };
+    }
+    // Validación de campos básicos (mismas reglas que handleFinalize)
+    if (!address || !chip || !folio) {
+      showToast('Por favor complete dirección, CHIP y folio', 'error');
+      return null;
+    }
+    const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
+    if (validOwners.length === 0) {
+      showToast('Agregá al menos un propietario con nombre', 'error');
+      return null;
+    }
+    // Validar suma de % de participación (si hay)
+    const definedPcts = wizardOwners
+      .map((o) => Number(o.ownershipPct))
+      .filter((n) => !isNaN(n) && n > 0);
+    if (definedPcts.length > 0) {
+      const sum = definedPcts.reduce((a, b) => a + b, 0);
+      if (Math.abs(sum - 100) > 0.01) {
+        showToast(`Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`, 'error');
+        return null;
+      }
+    }
+
+    // POST al backend
+    const firstOwner = validOwners[0];
+    try {
+      const res = await fetch('/api/properties', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          localId: wizardPropertyId,
+          address, chip, folio,
+          ownerName: firstOwner.name,
+          ownerIdNumber: firstOwner.idNumber,
+          propertyType,
+          status: 'Pendiente', // antes de tener mandato, queda Pendiente
+          owners: validOwners.map((o, i) => ({
+            id: o.id,
+            name: o.name,
+            idNumber: o.idNumber || null,
+            phone: o.phone || null,
+            email: o.email || null,
+            ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+            position: i + 1,
+          })),
+          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
+            id: u.id,
+            type: u.type,
+            label: u.label,
+            folioMatricula: u.folioMatricula || null,
+            areaM2: u.areaM2 ? Number(u.areaM2) : null,
+            position: i + 1,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('Error guardando en servidor: ' + (data.error ?? 'unknown'), 'error');
+        return null;
+      }
+      const newId = data.propertyId as string;
+      setWizardPropertyDbId(newId);
+      setWizardDriveFolderId(data.driveFolderId ?? null);
+      setWizardDriveFolderPath(data.driveFolderPath ?? null);
+      console.log('[ensurePropertyPersisted] OK — propertyId:', newId, 'drive:', data.driveFolderPath);
+      return {
+        propertyDbId: newId,
+        driveFolderId: data.driveFolderId ?? null,
+        driveFolderPath: data.driveFolderPath ?? null,
+      };
+    } catch (err: any) {
+      console.error('[ensurePropertyPersisted] error:', err);
+      showToast('Error de conexión al guardar propiedad', 'error');
+      return null;
+    }
   };
 
   const handleFinalize = async (capturedInventory?: Inventory) => {
@@ -776,60 +959,27 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // Si nos pasaron el inventario desde StepInventory, lo usamos. Si no, caemos al state.
     // Esto evita el bug de closure stale donde wizardInventory era null al leerlo desde
     // un handler pasado como prop (onComplete={handleFinalize}).
-    // 1. Crear la propiedad en MySQL + Drive (carpeta vacía por ahora)
-    let driveFolderPath: string | null = null;
-    let driveFolderId: string | null = null;
-    let propertyDbId: string | null = null;
-    const firstOwner = validOwners[0];
-    try {
-      const res = await fetch('/api/properties', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          localId: wizardPropertyId,
-          address, chip, folio,
-          ownerName: firstOwner.name,
-          ownerIdNumber: firstOwner.idNumber,
-          propertyType,
-          // Migración 010+
-          owners: validOwners.map((o, i) => ({
-            id: o.id, // slotKey temporal; el server lo reemplaza por UUID
-            name: o.name,
-            idNumber: o.idNumber || null,
-            phone: o.phone || null,
-            email: o.email || null,
-            ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
-            position: i + 1,
-          })),
-          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
-            id: u.id,
-            type: u.type,
-            label: u.label,
-            folioMatricula: u.folioMatricula || null,
-            areaM2: u.areaM2 ? Number(u.areaM2) : null,
-            position: i + 1,
-          })),
-        }),
-      });
-      const data = await res.json();
-      console.log('[finalize] POST #1 OK — propertyId:', data.propertyId, 'driveFolderId:', data.driveFolderId);
-      if (!res.ok) {
-        showToast('Error guardando en servidor: ' + (data.error ?? 'unknown'), 'error');
+
+    // ── 1. Asegurar que la propiedad ya está persistida (Option B) ──
+    // En el flujo normal, ensurePropertyPersisted ya corrió en la transición
+    // step 1→2. Pero por si llegamos a finalize sin pasar por ahí (ej: el
+    // usuario cerró el browser, lo reabrió con draft, y fue directo a step 3),
+    // aseguramos el POST acá también.
+    let propertyDbId: string | null = wizardPropertyDbId;
+    let driveFolderId: string | null = wizardDriveFolderId;
+    let driveFolderPath: string | null = wizardDriveFolderPath;
+    if (!propertyDbId) {
+      console.warn('[finalize] wizardPropertyDbId no estaba seteado, llamando ensurePropertyPersisted...');
+      const ensured = await ensurePropertyPersisted();
+      if (!ensured) {
+        showToast('No se pudo persistir la propiedad', 'error');
         return;
       }
-      driveFolderPath = data.driveFolderPath ?? null;
-      driveFolderId = data.driveFolderId ?? null;
-      propertyDbId = data.propertyId ?? null;
-    } catch (err: any) {
-      console.error('Error guardando propiedad en backend:', err);
-      showToast('Error de conexión al guardar propiedad', 'error');
-      return; // sin servidor no podemos persistir Drive URLs
+      propertyDbId = ensured.propertyDbId;
+      driveFolderId = ensured.driveFolderId;
+      driveFolderPath = ensured.driveFolderPath;
     }
-
-    if (!propertyDbId) {
-      showToast('El servidor no devolvió ID de la propiedad', 'error');
-      return;
-    }
+    const firstOwner = validOwners[0];
 
     // ── Re-keyear owners/units: el server devolvió UUIDs reales (distintos
     //    a los slotKeys del wizard). Hacemos GET para mapear wizard-XXX → UUID.
@@ -882,6 +1032,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     //    como "principal" (compat con la DB) y los demás en un array `extra`.
     //    El backend acepta `documents` como JSON: string (1 archivo, legacy) o
     //    { primary, extras[] } (N archivos, nuevo).
+    //
+    //    Migración a Option B: con el upload en tiempo real durante step 2,
+    //    la mayoría de los archivos YA están en Drive al llegar a finalize
+    //    (uploadedDocs[wizardSlotKey][i] empieza con https://). Solo subimos
+    //    los que quedaron locales (blob:) por error de Drive o por flujo
+    //    heredado (wizard abierto antes de este cambio).
     const finalDocuments: Record<string, string | { primary: string; extras: string[] }> = {};
     const driveConnected = !!driveFolderId;
     const uploadedToDrive: string[] = [];
@@ -895,9 +1051,25 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       const baseFileName = slotKeyToFilename(realKey, validOwners, wizardUnits);
       const stripExt = baseFileName.replace(/\.pdf$/i, '');
       const uploadedUrls: string[] = [];
+      // URLs de Drive ya conocidas (las que Option B subió en tiempo real).
+      const existingDriveUrls = uploadedDocs[wizardSlotKey] ?? [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const fileName = files.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
+        // ── ¿Ya está en Drive? (Option B) ──
+        const existingUrl = existingDriveUrls[i] ?? '';
+        if (existingUrl && /^https:\/\/(drive|docs)\.google\.com\//.test(existingUrl)) {
+          // Ya en Drive → reusamos la URL sin re-subir
+          uploadedUrls.push(existingUrl);
+          uploadedToDrive.push(realKey);
+          continue;
+        }
+        if (existingUrl && /^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(existingUrl)) {
+          uploadedUrls.push(existingUrl);
+          uploadedToDrive.push(realKey);
+          continue;
+        }
+        // ── No está en Drive → subir ahora ──
         if (driveConnected && driveFolderId) {
           try {
             const base64 = await fileToBase64(file);
@@ -1220,6 +1392,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       setWizardFiles({});
       setWizardInventory(null);
       setLastUploadedSlot(null);
+      // Option B: limpiar también los IDs de persistencia (la propiedad
+      // ya está creada en MySQL, NO hay que re-crearla al próximo wizard)
+      setWizardPropertyDbId(null);
+      setWizardDriveFolderId(null);
+      setWizardDriveFolderPath(null);
       // Limpiar el draft del wizard en localStorage (el flujo terminó OK)
       try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     }
@@ -1229,9 +1406,32 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
    * Descartar el draft actual del wizard. Llamado desde el modal de confirmación.
    * Vacía todo el state del wizard y borra el localStorage. Equivale a
    * "abrir el wizard desde cero, sin restaurar nada".
+   *
+   * Migración a Option B: si la propiedad YA fue persistida en MySQL
+   * (wizardPropertyDbId set), la borramos también para no dejar huérfanas.
+   * El endpoint DELETE /api/properties/:id también limpia la carpeta en Drive
+   * si está vacía, y rechaza con 409 si ya tiene inventarios.
    */
-  const discardDraft = () => {
+  const discardDraft = async () => {
     setConfirmDiscardDraft(false);
+    // Si hay propertyDbId, intentar borrarla del server (best-effort)
+    if (wizardPropertyDbId) {
+      try {
+        const res = await fetch(`/api/properties/${wizardPropertyDbId}`, { method: 'DELETE' });
+        if (res.status === 409) {
+          // Ya tiene inventarios (raro en discard de draft, pero posible) →
+          // igual limpiamos el wizard local. El agente la verá en la lista de
+          // propiedades y puede seguir editando.
+          console.warn('[discardDraft] server rechazó DELETE (409): ya tiene inventarios');
+        } else if (!res.ok) {
+          console.warn('[discardDraft] server DELETE no OK:', res.status);
+        } else {
+          console.log('[discardDraft] propiedad borrada del server:', wizardPropertyDbId);
+        }
+      } catch (err) {
+        console.warn('[discardDraft] error llamando DELETE:', err);
+      }
+    }
     setStep(1);
     setShowWizard(false);
     setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
@@ -1247,6 +1447,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     setWizardInventory(null);
     // Generar un wizardPropertyId nuevo (el anterior ya estaba en localStorage)
     setWizardPropertyId(`wizard-${Date.now()}`);
+    // Limpiar también los IDs de la persistencia (Option B)
+    setWizardPropertyDbId(null);
+    setWizardDriveFolderId(null);
+    setWizardDriveFolderPath(null);
     // Borrar de localStorage
     try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     showToast('Borrador descartado. Empezás de cero.', 'success');
@@ -1594,8 +1798,26 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       owners={wizardOwners} setOwners={setWizardOwners}
                       units={wizardUnits} setUnits={setWizardUnits}
                       showToast={showToast}
-                      onContinue={() => setStep(2)}
-                      onSaveDraft={() => { /* el autosave ya persiste; el toast lo da el botón */ }}
+                      onContinue={async () => {
+                        // Option B: persistir la propiedad en MySQL antes de
+                        // avanzar al step 2 (necesitamos el propertyDbId real
+                        // para que las uploads a Drive en step 2 sean en
+                        // tiempo real). Si falla, no avanzamos.
+                        const result = await ensurePropertyPersisted();
+                        if (result) setStep(2);
+                      }}
+                      onSaveDraft={async () => {
+                        // Option B: "Guardar avance" ahora SÍ persiste al server.
+                        // Devolvemos el toast honesto confirmando que quedó
+                        // guardado en MySQL (en estado Pendiente).
+                        const result = await ensurePropertyPersisted();
+                        if (result) {
+                          showToast(
+                            '✓ Avance guardado en el servidor (MySQL). Estado: Pendiente hasta subir el Mandato.',
+                            'success',
+                          );
+                        }
+                      }}
                     />
                   </Card>
                 )}
