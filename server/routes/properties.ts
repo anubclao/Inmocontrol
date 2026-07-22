@@ -218,7 +218,21 @@ router.post('/', async (req, res) => {
   // Resolvemos orgId ANTES del try principal porque los loops de owners/units
   // están en try blocks separados más abajo. Si lo declaráramos adentro del
   // try, no sería visible fuera.
-  const orgId = await ensureDefaultOrg();
+  //
+  // FIX 2026-07-22: si `ensureDefaultOrg()` tira (ej: tabla `organizations`
+  // no existe, schema drift, FK corrupta), el error se propagaba sin ser
+  // atrapado y Express devolvía HTML 500 (su default error page) en vez de
+  // JSON. Eso hacía que el frontend reciba un body no parseable y el
+  // usuario vea "el botón no hace nada". Ahora lo capturamos explícito y
+  // devolvemos JSON con el mensaje real.
+  let orgId: string;
+  try {
+    orgId = await ensureDefaultOrg();
+  } catch (err: any) {
+    console.error('[POST /api/properties] Error resolviendo orgId:', err.message);
+    res.status(500).json({ error: 'Error resolviendo organización por defecto: ' + (err.message ?? String(err)) });
+    return;
+  }
 
   try {
     if (isUpsert) {
