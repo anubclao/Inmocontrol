@@ -849,6 +849,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           address, chip, folio,
           ownerName: firstOwner.name,
           ownerIdNumber: firstOwner.idNumber,
+          // FIX 2026-07-22: enviar también ownerPhone/ownerEmail al top level
+          // para que las columnas legacy de la tabla `properties` se
+          // pueblen. Sin esto, las legacy columns quedaban NULL aunque
+          // el server SÍ guardaba el phone/email en la tabla nueva
+          // `property_owners`. El server hace INSERT con los campos
+          // top-level y después hace INSERT en property_owners desde la
+          // array `owners` — los dos deben quedar sincronizados.
+          ownerPhone: firstOwner.phone || null,
+          ownerEmail: firstOwner.email || null,
           propertyType,
           status: 'Pendiente', // antes de tener mandato, queda Pendiente
           owners: validOwners.map((o, i) => ({
@@ -1117,6 +1126,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           mandateSignedAt: mandateSignedAt,
           documents: finalDocuments,
           status,
+          // FIX 2026-07-22: enviar también ownerPhone/ownerEmail al top level
+          // (mismo motivo que en ensurePropertyPersisted — las legacy columns
+          // de la tabla `properties` se actualizan con COALESCE).
+          ownerName: firstOwner.name,
+          ownerIdNumber: firstOwner.idNumber || null,
+          ownerPhone: firstOwner.phone || null,
+          ownerEmail: firstOwner.email || null,
           // Re-mandar owners/units con UUIDs reales (por si el server los
           // re-keyeó distinto en el primer POST — debería ser estable, pero
           // mandarlos de nuevo garantiza consistencia).
