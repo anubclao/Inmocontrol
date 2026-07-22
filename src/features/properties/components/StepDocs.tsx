@@ -1,7 +1,27 @@
 import { useState } from 'react';
-import { Users, FileText, Wallet, ClipboardCheck, Eye, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle, Plus, X } from 'lucide-react';
+import { Users, FileText, Wallet, ClipboardCheck, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle, Plus, X, CloudUpload, CloudOff, CheckCircle2, Loader2 } from 'lucide-react';
 import { Button, Card, Modal, Input } from '../../../shared/ui';
 import type { WizardOwner, WizardUnit } from './StepBasic';
+
+/**
+ * Estado real de un archivo en un slot del wizard.
+ * - 'drive'   → el archivo está en Google Drive (URL https://drive.google.com/...)
+ * - 'local'   → solo en el navegador (blob: URL) — se subirá a Drive al finalizar el wizard
+ * - 'pending' → slot vacío o archivo en tránsito (no aplica cuando hay archivos)
+ */
+export type DocStorageState = 'drive' | 'local' | 'pending';
+
+/** Determina el estado real de un archivo a partir de su URL.
+ *  - blob: → local (aún no se subió a Drive)
+ *  - https://*.googleusercontent.com o https://drive.google.com/ → en Drive
+ *  - cualquier otra cosa → local (asumimos fallback) */
+export function getDocStorageState(url: string): DocStorageState {
+  if (!url) return 'pending';
+  if (url.startsWith('blob:')) return 'local';
+  if (/^https:\/\/(drive|docs)\.google\.com\//.test(url)) return 'drive';
+  if (/^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(url)) return 'drive';
+  return 'local';
+}
 
 /** Llave del slot de un documento en `uploadedDocs`. */
 export type DocSlotKey =
@@ -369,10 +389,10 @@ export function StepDocs({
           className="flex-1 gap-2"
           onClick={() => {
             onSaveDraft();
-            showToast('✓ Documentos guardados como borrador', 'success');
+            showToast('✓ Avance guardado en este navegador. Se sube al servidor al finalizar el wizard.', 'success');
           }}
         >
-          💾 Guardar borrador
+          💾 Guardar avance (este equipo)
         </Button>
         <Button
           className="flex-1"
@@ -518,37 +538,67 @@ interface DocCardProps {
 function DocCard(props: DocCardProps) {
   const { docKey, label, Icon, files, required, isMandato, helpText, uploading, onPick, onAddAnother, onRemove, onView } = props;
   const hasFiles = files.length > 0;
+  // Estado del almacenamiento: derivado de la URL real de cada archivo.
+  // Si TODOS están en Drive → 'drive'. Si al menos uno es local → 'local'.
+  const allDrive = hasFiles && files.every((u) => getDocStorageState(u) === 'drive');
+  const anyLocal = hasFiles && files.some((u) => getDocStorageState(u) === 'local');
+  const storageState: DocStorageState | null = !hasFiles ? null : (allDrive ? 'drive' : anyLocal ? 'local' : 'pending');
+
   return (
     <div
       className={`p-4 border-2 border-dashed rounded-xl transition-all group relative ${
-        isMandato && hasFiles
+        isMandato && storageState === 'drive'
           ? 'border-emerald-300 bg-emerald-50/30'
-          : hasFiles
-            ? 'border-blue-200 bg-blue-50/20'
-            : 'border-slate-200 hover:border-blue-400'
+          : storageState === 'drive'
+            ? 'border-emerald-200 bg-emerald-50/20'
+            : storageState === 'local'
+              ? 'border-amber-200 bg-amber-50/20'
+              : 'border-slate-200 hover:border-blue-400'
       }`}
       data-testid={`doc-card-${docKey}`}
     >
       <div className="flex justify-between items-start">
-        <Icon className={`w-6 h-6 ${hasFiles ? 'text-emerald-500' : uploading ? 'text-blue-500 animate-pulse' : 'text-slate-400 group-hover:text-blue-500'} mb-2`} />
-        {hasFiles && (
-          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+        <Icon className={`w-6 h-6 ${storageState === 'drive' ? 'text-emerald-500' : uploading ? 'text-blue-500 animate-pulse' : storageState === 'local' ? 'text-amber-500' : 'text-slate-400 group-hover:text-blue-500'} mb-2`} />
+        {storageState === 'drive' && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 flex items-center gap-1" title="Archivo ya está en Google Drive">
+            <CheckCircle2 className="w-3 h-3" />
+            En Drive
+          </span>
+        )}
+        {storageState === 'local' && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1" title="Archivo solo en este navegador — se subirá a Drive al finalizar el wizard">
+            <CloudUpload className="w-3 h-3" />
+            Pendiente → Drive
+          </span>
+        )}
+        {!storageState && hasFiles && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-slate-50 border border-slate-200 rounded-full px-2 py-0.5">
             {files.length} {files.length === 1 ? 'archivo' : 'archivos'}
           </span>
         )}
       </div>
       <p className="text-sm font-semibold text-slate-700">{label}</p>
       {helpText && <p className="text-[10px] text-slate-500 mt-0.5">{helpText}</p>}
-      <p className="text-xs text-slate-400 mt-1">
-        {uploading
-          ? 'Subiendo...'
-          : hasFiles
-            ? isMandato
-              ? 'PDF firmado — estado 100%'
-              : 'Documento(s) listo(s)'
-            : required
-              ? 'Click para subir PDF (opcional, no bloquea)'
-              : 'Click para subir PDF (opcional)'}
+      <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+        {uploading ? (
+          <>
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Subiendo a Drive...
+          </>
+        ) : storageState === 'drive' ? (
+          isMandato ? 'PDF firmado — propiedad al 100%' : 'Documento en Google Drive'
+        ) : storageState === 'local' ? (
+          isMandato
+            ? 'Firmado, falta subir a Drive al finalizar'
+            : 'Listo localmente. Se sube a Drive al finalizar el wizard'
+        ) : required ? (
+          <>
+            <CloudOff className="w-3 h-3" />
+            Pendiente (opcional, no bloquea)
+          </>
+        ) : (
+          'Click para subir PDF (opcional)'
+        )}
       </p>
 
       {/* ── Lista de archivos subidos ── */}
@@ -614,17 +664,9 @@ function DocCard(props: DocCardProps) {
         )}
       </div>
 
-      {/* Botón "Ver" del primer archivo (atajo rápido, legacy compat) */}
-      {hasFiles && (
-        <button
-          type="button"
-          onClick={() => onView(files[0])}
-          className="absolute top-3 right-3 p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-          title="Ver primer PDF"
-        >
-          <Eye className="w-3.5 h-3.5" />
-        </button>
-      )}
+      {/* Botón "Ver" del primer archivo (atajo rápido, legacy compat) — ocultado
+          porque el nuevo badge de estado de Drive ocupa el top-right. El ojo
+          sigue disponible por archivo en la lista de arriba. */}
     </div>
   );
 }

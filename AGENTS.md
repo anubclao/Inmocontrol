@@ -310,3 +310,35 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
 - Estado futuro: wizard state en localStorage para permitir "Continuar registro" al volver. **NO implementar hasta que se cierre el flujo actual completo** (Cobranza + Comparativa + Acta).
 
+### "Guardar avance (este equipo)" — wizard steps 1 y 2 son LOCAL ONLY
+- Los botones "💾 Guardar avance (este equipo)" en `StepBasic` y `StepDocs`
+  **NO llaman al backend**. Persisten solo en Zustand/localStorage del navegador
+  y muestran un toast honesto: "Avance guardado en este navegador. Se sube al
+  servidor al finalizar el wizard."
+- El ÚNICO momento en que el wizard hace `POST /api/properties` es al FINAL del
+  step 3, dentro de `PropertiesView.handleFinalize` (línea ~757), cuando el
+  usuario hace clic en "Finalizar" el inventario de captación.
+- Esto es decisión consciente: si cada "Guardar avance" crease una fila en
+  `properties`, los wizards abandonados dejarían filas `Pendiente` huérfanas.
+- **Implicación de testing**: si querés ver la propiedad en MySQL, tenés que
+  completar el wizard entero (steps 1 + 2 + 3 + Finalizar). "Guardar avance"
+  sin finalizar = nada en el server. Esto se revisó en julio-2026 después de
+  que el cliente se confundiera al ver la tabla `properties` vacía pese a que
+  la UI decía "guardado".
+
+### Estados de almacenamiento de documentos (wizard) — siempre honestos
+- Cada card de documento en `StepDocs` muestra un **badge explícito de estado**:
+  - 🟢 **En Drive** (verde, `CheckCircle2`): todos los archivos del slot ya están
+    en Google Drive (URL `https://drive.google.com/...`).
+  - 🟠 **Pendiente → Drive** (amber, `CloudUpload`): el archivo existe solo como
+    `blob:` URL local — se subirá a Drive al finalizar el wizard.
+  - ⚪ vacío: el slot todavía no tiene archivos.
+- El estado se deriva de la URL real del archivo (`getDocStorageState` en
+  `StepDocs.tsx:13-22`). NO hay un "mentiroso" toast: el badge y el texto
+  debajo del título siempre coinciden con el estado real del storage.
+- Al finalizar el wizard, `PropertiesView.handleFinalize` arma un **modal de
+  resumen** (`finalizeSummary` state, modal en `PropertiesView.tsx:1914+`) que
+  lista explícitamente: en Drive / solo local / faltantes / errores. NO se
+  auto-dismiss — el usuario decide cuándo cerrarlo. Botón "Ver carpeta en
+  Drive" si hubo uploads exitosos.
+

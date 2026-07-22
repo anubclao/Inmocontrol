@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { generateMandatoPdf } from './mandatoPdf';
 import { useSettingsStore } from '../../shared/store/settingsStore';
 import { motion } from 'motion/react';
-import { FileText, Image, Eye, ClipboardCheck, GitCompare, Download, FileSignature, Upload, Building2, Hash, CreditCard, Power, Trash2, Lock, ListChecks, Camera, X, ChevronLeft, ChevronRight, RefreshCw, Users, Car, Package, Box, User as UserIcon, Mail, Phone, IdCard, Percent } from 'lucide-react';
+import { FileText, Image, Eye, ClipboardCheck, GitCompare, Download, FileSignature, Upload, Building2, Hash, CreditCard, Power, Trash2, Lock, ListChecks, Camera, X, ChevronLeft, ChevronRight, RefreshCw, Users, Car, Package, Box, User as UserIcon, Mail, Phone, IdCard, Percent, CheckCircle2, CloudOff, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Button, Card, Modal } from '../../shared/ui';
 import { ProcessOrderBanner } from '../../shared/ui/ProcessOrderBanner';
 import { formatAddress, isValidCHIP } from '../../utils/validators';
@@ -201,6 +201,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   const [pendingDelete, setPendingDelete] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [detailRefreshing, setDetailRefreshing] = useState(false);
+
+  /**
+   * Resumen estructurado que se muestra en el modal al finalizar el wizard.
+   * - `driveFolderPath`: link humano a la carpeta en Drive
+   * - `uploadedToDrive[]`: slotKeys que SÍ se subieron a Drive
+   * - `uploadedLocalOnly[]`: slotKeys que quedaron solo en el navegador (se perdieron al cerrar)
+   * - `missingDocs[]`: slotKeys que el usuario nunca llegó a subir
+   * - `failedUploads[]`: slotKeys que tiraron error durante la subida
+   * - `address`, `driveFolderId`: para el botón "Ver en Drive"
+   */
+  const [finalizeSummary, setFinalizeSummary] = useState<null | {
+    address: string;
+    driveFolderId: string | null;
+    driveFolderPath: string | null;
+    driveConnected: boolean;
+    uploadedToDrive: string[];
+    uploadedLocalOnly: string[];
+    missingDocs: string[];
+    failedUploads: string[];
+    inventoryUploaded: boolean;
+    totalDocs: number;
+  }>(null);
 
   // Galería de fotos del inventario: modal para visualizar las imágenes almacenadas
   // en IndexedDB agrupadas por área. Cada foto se ve en tamaño completo con lightbox.
@@ -718,22 +740,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // en `missingDocs` para que el modal de confirmación los muestre.
     const hasFile = (slot: string | undefined) => Array.isArray(slot) && slot.length > 0;
     const missingDocs: string[] = [];
+    // También trackeamos los slotKeys faltantes para el summary modal post-finalize.
+    const missingSlotKeys: string[] = [];
     for (const o of validOwners) {
       if (!hasFile(uploadedDocs[`cedula:${o.id}`])) {
         missingDocs.push(`Cédula de ${o.name}`);
+        missingSlotKeys.push(`cedula:${o.id}`);
       }
     }
     if (!hasFile(uploadedDocs['certificado_tradicion:main'])) {
       missingDocs.push('Certificado de Tradición (unidad principal)');
+      missingSlotKeys.push('certificado_tradicion:main');
     }
     for (const u of wizardUnits) {
       if (!u.label.trim()) continue;
       if (!hasFile(uploadedDocs[`certificado_tradicion:${u.id}`])) {
         missingDocs.push(`Certificado de ${u.label}`);
+        missingSlotKeys.push(`certificado_tradicion:${u.id}`);
       }
     }
     if (!hasFile(uploadedDocs[MANDATO_KEY])) {
       missingDocs.push('Contrato de Mandato');
+      missingSlotKeys.push(MANDATO_KEY);
     }
     // No bloqueamos el finalize si faltan docs: el agente los puede subir
     // después desde el Detalle del Inmueble. La propiedad quedará "Pendiente"
@@ -954,6 +982,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     //      Antes esto se hacía en onInventoryFinalized con el wizard-X → FK fallaba.
     //      Ahora diferimos hasta tener propertyDbId válido.
     const inventoryToPersist = capturedInventory ?? wizardInventory;
+    let inventoryUploadedToDrive = false; // para el summary modal post-finalize
     if (inventoryToPersist) {
       try {
         const oldId = inventoryToPersist.id;                                // `${wizardPropertyId}:inicial`
@@ -1037,7 +1066,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 inventoryDate: new Date().toISOString().slice(0, 10),
               }),
             });
-            if (r2.ok) console.log('[finalize] PDF inventario → Drive');
+            if (r2.ok) { console.log('[finalize] PDF inventario → Drive'); inventoryUploadedToDrive = true; }
             else console.warn('[finalize] PDF inventario → Drive falló:', r2.status);
           } catch (e: any) {
             console.warn('[finalize] PDF inventario error:', e.message);
@@ -1146,34 +1175,31 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       },
     });
 
-    // 5. Toast honesto: decir qué se subió a Drive y qué quedó solo local
-    const folderName = driveFolderPath ?? `InmoControl/${address}`;
+    // 5. Toast breve + modal de resumen. El toast avisa que hay resumen; el modal
+    //    queda visible hasta que el usuario lo cierra y lista explícitamente
+    //    qué quedó en Drive, qué quedó local, qué falta y si hubo errores.
     const totalDocs = Object.keys(finalDocuments).length;
     const realOwnersCount = validOwners.length;
     const realUnitsCount = wizardUnits.filter((u) => u.label.trim()).length;
-    let body =
-      `✓ ¡Propiedad creada!\n\n` +
-      `📁 Drive:\n` +
-      `Mi unidad / ${folderName}/\n` +
-      `• Propietario/ (${uploadedToDrive.length}/${totalDocs} docs)\n` +
-      `• Inventarios/\n` +
-      `\nPropietarios: ${realOwnersCount}` +
-      (realUnitsCount > 0 ? ` · Unidades adicionales: ${realUnitsCount}` : '');
+    const allDriveOk = uploadedToDrive.length === totalDocs && uploadedLocalOnly.length === 0;
+    const shortToast = allDriveOk
+      ? `✓ ¡Propiedad creada! Todo en Drive. Resumen abajo.`
+      : `⚠ Propiedad creada con ${uploadedLocalOnly.length + missingSlotKeys.length} pendiente(s). Resumen abajo.`;
+    showToast(shortToast, allDriveOk ? 'success' : 'error');
 
-    if (uploadedToDrive.length > 0) {
-      body += `\n\nSubidos a Drive:\n• ${uploadedToDrive.map((k) => slotKeyToLabel(k, wizardOwners, wizardUnits)).join('\n• ')}`;
-    }
-    if (uploadedLocalOnly.length > 0) {
-      const motivo = driveConnected
-        ? 'falló la subida a Drive (reintentá desde el detalle)'
-        : 'Drive no estaba conectado';
-      body += `\n\nGuardados solo en este navegador (${motivo}):\n• ${uploadedLocalOnly.map((k) => slotKeyToLabel(k, wizardOwners, wizardUnits)).join('\n• ')}`;
-    }
-    if (failedUploads.length > 0) {
-      body += `\n\nErrores:\n• ${failedUploads.join('\n• ')}`;
-    }
-
-    showToast(body, uploadedToDrive.length === totalDocs ? 'success' : 'error');
+    // Guardamos el summary en el state — el modal se renderiza en el JSX abajo.
+    setFinalizeSummary({
+      address,
+      driveFolderId,
+      driveFolderPath,
+      driveConnected,
+      uploadedToDrive,
+      uploadedLocalOnly,
+      missingDocs: missingSlotKeys,
+      failedUploads,
+      inventoryUploaded: inventoryUploadedToDrive,
+      totalDocs,
+    });
     } finally {
       // Garantía: el wizard SIEMPRE cierra, incluso si una excepción escapó los
       // try/catch internos (ej. onAddProperty tirando, o un fallo de React en
@@ -1880,6 +1906,131 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 <Trash2 className="w-4 h-4" />
                 {deleting ? 'Eliminando…' : 'Sí, eliminar'}
               </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Modal: resumen post-finalize del wizard ──
+          Se muestra automáticamente al terminar el wizard de captación. Lista
+          explícitamente qué documentos se subieron a Drive, cuáles quedaron
+          solo en local, cuáles faltaron y si hubo errores. El usuario decide
+          cuándo cerrarlo (no se auto-dismiss). */}
+      <Modal
+        isOpen={!!finalizeSummary}
+        onClose={() => setFinalizeSummary(null)}
+        title={finalizeSummary?.uploadedToDrive.length === finalizeSummary?.totalDocs
+          && (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
+            ? '✓ Propiedad creada — todo en Drive'
+            : '⚠ Propiedad creada con pendientes'}
+        size="lg"
+      >
+        {finalizeSummary && (
+          <div className="space-y-4">
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
+              <p><strong>{finalizeSummary.address}</strong></p>
+              {finalizeSummary.driveFolderPath && (
+                <p className="text-xs text-slate-500 mt-1">
+                  📁 Drive: Mi unidad / {finalizeSummary.driveFolderPath}/
+                </p>
+              )}
+            </div>
+
+            {/* 🟢 Subidos a Drive */}
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <p className="text-sm font-semibold text-emerald-900 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4" />
+                En Google Drive ({finalizeSummary.uploadedToDrive.length})
+              </p>
+              {finalizeSummary.uploadedToDrive.length > 0 ? (
+                <ul className="text-xs text-emerald-800 mt-2 space-y-0.5 list-disc pl-5">
+                  {finalizeSummary.uploadedToDrive.map((k) => (
+                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                  ))}
+                  {finalizeSummary.inventoryUploaded && (
+                    <li>PDF de Inventario de captación</li>
+                  )}
+                </ul>
+              ) : (
+                <p className="text-xs text-emerald-700 mt-1">Ninguno.</p>
+              )}
+            </div>
+
+            {/* 🟠 Solo local (se perdió al cerrar el navegador) */}
+            {finalizeSummary.uploadedLocalOnly.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm font-semibold text-amber-900 flex items-center gap-1.5">
+                  <CloudOff className="w-4 h-4" />
+                  Solo en este navegador ({finalizeSummary.uploadedLocalOnly.length})
+                </p>
+                <p className="text-xs text-amber-800 mt-1">
+                  {finalizeSummary.driveConnected
+                    ? 'Falló la subida a Drive. Reintentá desde el Detalle del Inmueble.'
+                    : 'Drive no estaba conectado. Reintentá desde el Detalle del Inmueble.'}
+                </p>
+                <ul className="text-xs text-amber-800 mt-2 space-y-0.5 list-disc pl-5">
+                  {finalizeSummary.uploadedLocalOnly.map((k) => (
+                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* ❌ Faltantes (no se subieron ni local ni a Drive) */}
+            {finalizeSummary.missingDocs.length > 0 && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm font-semibold text-red-900 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4" />
+                  Faltantes — no subiste ({finalizeSummary.missingDocs.length})
+                </p>
+                <p className="text-xs text-red-800 mt-1">
+                  Quedan como <strong>pendientes</strong>. La propiedad queda en estado
+                  <strong> Pendiente</strong> hasta que subas el Contrato de Mandato.
+                  Subilos desde el Detalle del Inmueble.
+                </p>
+                <ul className="text-xs text-red-800 mt-2 space-y-0.5 list-disc pl-5">
+                  {finalizeSummary.missingDocs.map((k) => (
+                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* 🔴 Errores de subida */}
+            {finalizeSummary.failedUploads.length > 0 && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm font-semibold text-red-900 flex items-center gap-1.5">
+                  <X className="w-4 h-4" />
+                  Errores durante la subida
+                </p>
+                <ul className="text-xs text-red-800 mt-2 space-y-0.5 list-disc pl-5">
+                  {finalizeSummary.failedUploads.map((msg, i) => (
+                    <li key={i}>{msg}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              {finalizeSummary.driveFolderId && (
+                <Button
+                  variant="outline"
+                  className="flex-1 gap-2"
+                  onClick={() => {
+                    window.open(
+                      `https://drive.google.com/drive/folders/${finalizeSummary.driveFolderId}`,
+                      '_blank',
+                      'noopener,noreferrer',
+                    );
+                  }}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Ver carpeta en Drive
+                </Button>
+              )}
+              <Button className="flex-1" onClick={() => setFinalizeSummary(null)}>
+                Cerrar
+              </Button>
             </div>
           </div>
         )}

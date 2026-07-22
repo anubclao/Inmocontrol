@@ -578,8 +578,9 @@ export function StepInventory({
           )}
 
           <p className="text-sm text-slate-600">
-            Al confirmar, el inventario se guardará, se generará el PDF y la propiedad
-            quedará en estado <strong>Activo</strong>.
+            Al confirmar, el inventario se guardará en MySQL, se generará el PDF y se
+            subirá a Google Drive (carpeta <code>Inventarios/</code> de la propiedad),
+            junto con todas las fotos. La propiedad quedará en estado <strong>Activo</strong>.
           </p>
 
           <div className="flex gap-3 pt-2">

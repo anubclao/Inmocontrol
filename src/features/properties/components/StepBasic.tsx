@@ -394,10 +394,10 @@ export function StepBasic({
             className="flex-1 gap-2"
             onClick={() => {
               onSaveDraft();
-              showToast('✓ Datos básicos guardados como borrador', 'success');
+              showToast('✓ Avance guardado en este navegador. Se sube al servidor al finalizar el wizard.', 'success');
             }}
           >
-            💾 Guardar borrador
+            💾 Guardar avance (este equipo)
           </Button>
           <Button
             className="flex-1"
