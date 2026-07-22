@@ -14,26 +14,66 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI,
 );
 
-async function getFreshDriveClient() {
-  const [rows] = await pool.query<any[]>(
-    'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-    ['default_user', 'google_drive'],
-  );
-  if (!rows.length || !rows[0].access_token) return null;
-  oauth2Client.setCredentials({
-    access_token: rows[0].access_token,
-    refresh_token: rows[0].refresh_token ?? undefined,
-    expiry_date: rows[0].expiry_date ?? undefined,
-  });
-  if (isTokenExpiringSoon(rows[0].expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-    await pool.query(
-      'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
-      [credentials.access_token, credentials.expiry_date, 'default_user', 'google_drive'],
+/**
+ * Timeout estricto para llamadas a Google OAuth/Drive. Sin esto, si Google
+ * está lento o inalcanzable desde el server de Hostinger, el
+ * `oauth2Client.refreshAccessToken()` se cuelga para siempre y el request
+ * POST /api/properties nunca termina → el frontend ve "el botón no hace
+ * nada". 8 segundos es generoso (Google suele responder en <2s) y evita
+ * que un problema de red tire abajo el wizard.
+ */
+const GOOGLE_API_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
     );
+  });
+}
+
+async function getFreshDriveClient() {
+  try {
+    const [rows] = await withTimeout(
+      pool.query<any[]>(
+        'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+        ['default_user', 'google_drive'],
+      ),
+      GOOGLE_API_TIMEOUT_MS,
+      'user_oauth_tokens SELECT',
+    );
+    if (!rows.length || !rows[0].access_token) return null;
+    oauth2Client.setCredentials({
+      access_token: rows[0].access_token,
+      refresh_token: rows[0].refresh_token ?? undefined,
+      expiry_date: rows[0].expiry_date ?? undefined,
+    });
+    if (isTokenExpiringSoon(rows[0].expiry_date)) {
+      const { credentials } = await withTimeout(
+        oauth2Client.refreshAccessToken(),
+        GOOGLE_API_TIMEOUT_MS,
+        'oauth2 refreshAccessToken',
+      );
+      oauth2Client.setCredentials(credentials);
+      await withTimeout(
+        pool.query(
+          'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
+          [credentials.access_token, credentials.expiry_date, 'default_user', 'google_drive'],
+        ),
+        GOOGLE_API_TIMEOUT_MS,
+        'user_oauth_tokens UPDATE',
+      );
+    }
+    return google.drive({ version: 'v3', auth: oauth2Client });
+  } catch (err: any) {
+    // No rompemos el request entero si Drive está lento/caído. El caller
+    // chequea `if (drive)` y sigue sin Drive — los docs se subirán después
+    // cuando el agente los reintente desde el Detalle del Inmueble.
+    console.warn('[Drive] getFreshDriveClient falló (continuando sin Drive):', err.message);
+    return null;
   }
-  return google.drive({ version: 'v3', auth: oauth2Client });
 }
 
 /**
@@ -133,6 +173,15 @@ router.post('/', async (req, res) => {
     propertyType, mandatePdfUrl, mandateSignedAt, status,
     owners, units, documents,
   } = req.body as Record<string, any>;
+
+  // FIX 2026-07-22: top-level try/catch para garantizar respuesta JSON.
+  // Antes, si algo throw-eaba entre los try/catch internos (ej: el Drive
+  // folder creation, el ensureDefaultOrg, o algo en el body parsing),
+  // Express agarraba con su default error handler y devolvía HTML 500.
+  // Ahora todo error no manejado se convierte en JSON 500, así el
+  // frontend puede mostrarlo en consola y el usuario no se queda
+  // colgado con "el botón no hace nada".
+  try {
 
   // Validación: address + ownerName son requeridos solo en INSERT.
   const isUpsert = !!(localId && !String(localId).startsWith('wizard-'));
@@ -489,6 +538,18 @@ router.post('/', async (req, res) => {
       ? 'Propiedad guardada en MySQL y Drive'
       : 'Propiedad guardada en MySQL (sin Drive — conecta tu Google Drive)',
   });
+  } catch (err: any) {
+    // Cualquier error no manejado por los try/catch internos cae acá.
+    // Devolvemos JSON para que el frontend pueda parsearlo (antes era HTML
+    // y el browser tiraba SyntaxError en consola).
+    console.error('[POST /api/properties] UNHANDLED:', err.message ?? err);
+    if (err?.stack) console.error(err.stack);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Error inesperado guardando propiedad: ' + (err.message ?? String(err)),
+      });
+    }
+  }
 });
 
 /**
