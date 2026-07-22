@@ -660,6 +660,11 @@ export function StepInventory({
         }}
         onStart={() => setStage('editing')}
         onCancel={onBack}
+        onSaveDraft={() => {
+          // El autosave a IndexedDB ya persiste en cada cambio (vía `persist`).
+          // Este botón es un checkpoint explícito: confirmamos al agente.
+          showToast('✓ Configuración del inventario guardada como borrador', 'success');
+        }}
       />
       {confirmModal}
       </>
@@ -708,6 +713,23 @@ export function StepInventory({
             hideSignatures={hideSignatures}
           />
         </Card>
+        {/* Banner de autoguardado + botón de checkpoint explícito.
+            El state del inventario se persiste en IndexedDB en cada cambio
+            (vía `persist()`), pero el agente necesita un botón visible para
+            confirmar que su progreso está a salvo sin tener que finalizar. */}
+        <div className="flex items-center justify-between gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+          <div className="text-xs text-emerald-800">
+            <strong>Autoguardado activo.</strong> Tus cambios se guardan automáticamente al cambiar de área o de step.
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => showToast('✓ Inventario guardado en este dispositivo', 'success')}
+            className="gap-1.5 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
+          >
+            💾 Guardar borrador
+          </Button>
+        </div>
         {/* Stepper de áreas */}
         <div className="flex items-center justify-center gap-1.5 flex-wrap">
           {inventory.areas.map((a, i) => {

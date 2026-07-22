@@ -10,7 +10,7 @@ import { createPropertyFolders, uploadFileToDrive, fileToBase64 } from '../../li
 import { useGoogleDriveStore } from '../../shared/store/googleDriveStore';
 import { useAppStore } from '../../shared/store/appStore';
 import { StepBasic, type WizardOwner, type WizardUnit } from './components/StepBasic';
-import { StepDocs } from './components/StepDocs';
+import { StepDocs, type UploadedDocsMap } from './components/StepDocs';
 import { StepInventory } from './components/StepInventory';
 import { Role } from '../auth/permissions';
 import { useContractStore } from '../contracts/contractStore';
@@ -162,10 +162,16 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   /** Si false → se muestra la lista de inmuebles. Si true → se muestra el wizard de captación. */
   const [showWizard, setShowWizard] = useState(false);
   const [step, setStep] = useState(1);
-  /** Docs subidos en el wizard. key = slotKey (ej: "cedula:<ownerId>", "predial", "mandato"). */
-  const [uploadedDocs, setUploadedDocs] = useState<Record<string, string | null>>({});
-  /** Files en memoria del wizard de captación. Se suben a Drive en handleFinalize. */
-  const [wizardFiles, setWizardFiles] = useState<Record<string, File | null>>({});
+  /** Docs subidos en el wizard. key = slotKey (ej: "cedula:<ownerId>", "predial", "mandato").
+   *  Ahora cada slot acepta N archivos (no solo 1): un propietario puede tener
+   *  varias hojas de cédula, varios RUTs, etc. */
+  const [uploadedDocs, setUploadedDocs] = useState<UploadedDocsMap>({});
+  /** Files en memoria del wizard de captación. Se suben a Drive en handleFinalize.
+   *  Ahora es Record<slotKey, File[]> para soportar múltiples PDFs por slot. */
+  const [wizardFiles, setWizardFiles] = useState<Record<string, File[]>>({});
+  /** Slot al que el agente acaba de subir un PDF exitosamente. Se usa para
+   *  disparar el modal "¿Querés subir otro documento?" en el paso 2. */
+  const [lastUploadedSlot, setLastUploadedSlot] = useState<string | null>(null);
   /** Inventario de captación capturado por el wizard. NO se postea a MySQL durante
    *  el wizard (porque la propiedad aún no existe y el FK explota). En su lugar,
    *  se persiste en IndexedDB con id `wizard-X:inicial` y se re-keyea + postea a
@@ -311,10 +317,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           address, chip, folio, propertyType, step,
           wizardOwners,
           wizardUnits,
-          // uploadedDocs: solo guardamos las keys que tienen algo (las URLs blob
-          // no sirven post-refresh — el user tendrá que re-subir si no subió a Drive)
+          // uploadedDocs: solo guardamos las keys que tienen al menos 1 archivo
+          // (las URLs blob no sirven post-refresh — el user tendrá que re-subir
+          // si no subió a Drive). El value es el conteo, no la URL.
           uploadedDocsKeys: Object.fromEntries(
-            Object.entries(uploadedDocs).map(([k, v]) => [k, v ? 'has-file' : null]),
+            Object.entries(uploadedDocs).map(([k, v]) => {
+              const arr = Array.isArray(v) ? v : [];
+              return [k, arr.length > 0 ? `${arr.length}-files` : null];
+            }),
           ),
           ownerIdNumber,
           savedAt: Date.now(),
@@ -349,7 +359,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         propertyType?: PropertyType; step?: number;
         wizardOwners?: WizardOwner[]; wizardUnits?: WizardUnit[];
         ownerIdNumber?: string;
-        uploadedDocsKeys?: Record<string, string | null>;
+        uploadedDocsKeys?: Record<string, string | null>; // valor = `${n}-files` o null
         savedAt?: number;
       };
       // TTL: descartar drafts de más de 30 días. Evita que un draft olvidado
@@ -596,17 +606,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       return;
     }
 
-    // --- Caso C: subida desde el wizard de captación (slotKey) ---
+    // --- Caso C: subida desde el wizard de captación (slotKey, soporta N archivos) ---
     if (!showWizard) return;
     setUploadingDoc(currentDocLabel);
     const blobUrl = URL.createObjectURL(file);
-    const prev = uploadedDocs[currentDocLabel];
-    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-    setWizardFiles({ ...wizardFiles, [currentDocLabel]: file });
-    setUploadedDocs({ ...uploadedDocs, [currentDocLabel]: blobUrl });
+    // Append al array existente (no reemplaza). El agente puede subir varias
+    // hojas de un mismo documento (ej: cara + respaldo de la cédula).
+    const prevArr = uploadedDocs[currentDocLabel] ?? [];
+    // NOTA: NO revocamos los blob URLs previos — quedan vivos hasta que el
+    // wizard termine o se descarte el draft. Si el agente sube y luego decide
+    // reemplazar TODOS, los blobs viejos se limpian en el cleanup final.
+    setWizardFiles({ ...wizardFiles, [currentDocLabel]: [...(wizardFiles[currentDocLabel] ?? []), file] });
+    setUploadedDocs({ ...uploadedDocs, [currentDocLabel]: [...prevArr, blobUrl] });
     showToast(`Documento listo (se subirá a Drive al finalizar el registro)`, 'success');
     setUploadingDoc(null);
     setCurrentDocLabel(null);
+    // Disparar el modal "¿Querés subir otro?" en StepDocs.
+    setLastUploadedSlot(currentDocLabel);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -697,28 +713,33 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       }
     }
 
-    // ── Validar docs requeridos (migración 010+) ──
+    // ── Validar docs requeridos (migración 010+, soporta N archivos por slot) ──
+    // Docs son opcionales: no bloqueamos el finalize si faltan, solo los listamos
+    // en `missingDocs` para que el modal de confirmación los muestre.
+    const hasFile = (slot: string | undefined) => Array.isArray(slot) && slot.length > 0;
     const missingDocs: string[] = [];
     for (const o of validOwners) {
-      if (!uploadedDocs[`cedula:${o.id}`]) {
+      if (!hasFile(uploadedDocs[`cedula:${o.id}`])) {
         missingDocs.push(`Cédula de ${o.name}`);
       }
     }
-    if (!uploadedDocs['certificado_tradicion:main']) {
+    if (!hasFile(uploadedDocs['certificado_tradicion:main'])) {
       missingDocs.push('Certificado de Tradición (unidad principal)');
     }
     for (const u of wizardUnits) {
       if (!u.label.trim()) continue;
-      if (!uploadedDocs[`certificado_tradicion:${u.id}`]) {
+      if (!hasFile(uploadedDocs[`certificado_tradicion:${u.id}`])) {
         missingDocs.push(`Certificado de ${u.label}`);
       }
     }
-    if (!uploadedDocs[MANDATO_KEY]) {
+    if (!hasFile(uploadedDocs[MANDATO_KEY])) {
       missingDocs.push('Contrato de Mandato');
     }
+    // No bloqueamos el finalize si faltan docs: el agente los puede subir
+    // después desde el Detalle del Inmueble. La propiedad quedará "Pendiente"
+    // hasta que suba el Mandato. Solo loggeamos para visibilidad.
     if (missingDocs.length > 0) {
-      showToast(`Faltan documentos obligatorios: ${missingDocs.join(', ')}`, 'error');
-      return;
+      console.log('[finalize] Continúa con documentos pendientes:', missingDocs);
     }
 
     // Refactor: garantizar SIEMPRE que el wizard cierre al terminar, incluso si algo
@@ -829,37 +850,54 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
     // 2. Subir los PDFs a Drive (carpeta Propietario/).
     //    Construimos `finalDocuments` con slotKeys ya en formato REAL (UUIDs).
-    const finalDocuments: Record<string, string> = {};
+    //    AHORA cada slot puede tener N archivos: guardamos solo el primero
+    //    como "principal" (compat con la DB) y los demás en un array `extra`.
+    //    El backend acepta `documents` como JSON: string (1 archivo, legacy) o
+    //    { primary, extras[] } (N archivos, nuevo).
+    const finalDocuments: Record<string, string | { primary: string; extras: string[] }> = {};
     const driveConnected = !!driveFolderId;
     const uploadedToDrive: string[] = [];
     const uploadedLocalOnly: string[] = [];
     const failedUploads: string[] = [];
 
-    for (const [wizardSlotKey, file] of Object.entries(wizardFiles)) {
-      if (!file) continue;
+    for (const [wizardSlotKey, files] of Object.entries(wizardFiles)) {
+      if (!Array.isArray(files) || files.length === 0) continue;
       const realKey = realSlotKey(wizardSlotKey);
-      // Nombre "bautizado" en Drive, no algo tipo "cedula_uuid.pdf"
-      const fileName = slotKeyToFilename(realKey, validOwners, wizardUnits);
-      if (driveConnected && driveFolderId) {
-        try {
-          const base64 = await fileToBase64(file as File);
-          const result = await uploadFileToDrive(propertyDbId, driveFolderId, 'Propietario', fileName, base64);
-          if (result.webViewLink) {
-            finalDocuments[realKey] = result.webViewLink;
-            uploadedToDrive.push(realKey);
-          } else {
-            finalDocuments[realKey] = URL.createObjectURL(file as File);
+      // Nombre "bautizado" en Drive: si hay varios archivos, les ponemos sufijo _1, _2, etc.
+      const baseFileName = slotKeyToFilename(realKey, validOwners, wizardUnits);
+      const stripExt = baseFileName.replace(/\.pdf$/i, '');
+      const uploadedUrls: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileName = files.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
+        if (driveConnected && driveFolderId) {
+          try {
+            const base64 = await fileToBase64(file);
+            const result = await uploadFileToDrive(propertyDbId, driveFolderId, 'Propietario', fileName, base64);
+            if (result.webViewLink) {
+              uploadedUrls.push(result.webViewLink);
+              uploadedToDrive.push(realKey);
+            } else {
+              uploadedUrls.push(URL.createObjectURL(file));
+              uploadedLocalOnly.push(realKey);
+              console.warn(`[finalize] ${realKey}[${i}]: Drive upload failed (${result.error}) → local blob fallback`);
+            }
+          } catch (err: any) {
+            uploadedUrls.push(URL.createObjectURL(file));
             uploadedLocalOnly.push(realKey);
-            console.warn(`[finalize] ${realKey}: Drive upload failed (${result.error}) → local blob fallback`);
+            failedUploads.push(`${realKey}[${i}]: ${err.message}`);
           }
-        } catch (err: any) {
-          finalDocuments[realKey] = URL.createObjectURL(file as File);
+        } else {
+          uploadedUrls.push(URL.createObjectURL(file));
           uploadedLocalOnly.push(realKey);
-          failedUploads.push(`${realKey}: ${err.message}`);
         }
-      } else {
-        finalDocuments[realKey] = URL.createObjectURL(file as File);
-        uploadedLocalOnly.push(realKey);
+      }
+      // Compat: si hay 1 solo archivo, guardamos la URL plana (legacy). Si hay
+      // varios, guardamos el objeto { primary, extras }.
+      if (uploadedUrls.length === 1) {
+        finalDocuments[realKey] = uploadedUrls[0];
+      } else if (uploadedUrls.length > 1) {
+        finalDocuments[realKey] = { primary: uploadedUrls[0], extras: uploadedUrls.slice(1) };
       }
     }
 
@@ -1147,10 +1185,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
       setWizardUnits([]);
       // Liberamos los blob URLs del wizard antes de vaciar el state (memory leak fix)
-      (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+      // Liberar TODOS los blob URLs del wizard antes de vaciar el state (memory leak fix).
+      // uploadedDocs es ahora Record<slotKey, string[]> — hay que iterar cada array.
+      Object.values(uploadedDocs).forEach((arr) => {
+        if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+      });
       setUploadedDocs({});
       setWizardFiles({});
       setWizardInventory(null);
+      setLastUploadedSlot(null);
       // Limpiar el draft del wizard en localStorage (el flujo terminó OK)
       try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
     }
@@ -1170,7 +1213,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
     setWizardUnits([]);
     // Liberar blob URLs antes de vaciar (memory leak fix)
-    (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+    Object.values(uploadedDocs).forEach((arr) => {
+      if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+    });
     setUploadedDocs({});
     setWizardFiles({});
     setWizardInventory(null);
@@ -1394,27 +1439,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     }
   };
 
-  /** Valida que los slots requeridos estén subidos y avanza al inventario.
-   *  En realidad, StepDocs ya hace su propia validación y deshabilita el botón
-   *  Continuar si faltan docs. Esta función queda como red de seguridad. */
+  /** Avanza del paso 2 al paso 3. Los documentos son OPCIONALES — el agente
+   *  puede continuar con pendientes (la propiedad quedará en "Pendiente"
+   *  hasta que suba el Mandato). El modal de confirmación en StepDocs ya
+   *  muestra la lista de pendientes para que el agente los vea antes de
+   *  avanzar. Esta función solo se asegura de que NO se bloquee el flujo
+   *  por falta de docs. */
   const validateStep2 = () => {
-    const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
-    const missingDocs: string[] = [];
-    for (const o of validOwners) {
-      if (!uploadedDocs[`cedula:${o.id}`]) missingDocs.push(`Cédula de ${o.name}`);
-    }
-    if (!uploadedDocs['certificado_tradicion:main']) {
-      missingDocs.push('Certificado de Tradición');
-    }
-    for (const u of wizardUnits) {
-      if (!u.label.trim()) continue;
-      if (!uploadedDocs[`certificado_tradicion:${u.id}`]) {
-        missingDocs.push(`Certificado de ${u.label}`);
-      }
-    }
-    if (!uploadedDocs[MANDATO_KEY]) missingDocs.push('Contrato de Mandato');
-    if (missingDocs.length > 0) {
-      showToast(`Faltan documentos: ${missingDocs.join(', ')}`, 'error');
+    // Validación de campos básicos del paso 1: aunque estén en otro step,
+    // no tiene sentido avanzar al inventario si no tenemos ni dirección.
+    if (!address || !chip || !folio) {
+      showToast('Volvé al paso 1 y completá dirección, CHIP y folio', 'error');
       return;
     }
     setStep(3);
@@ -1456,13 +1491,16 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             <Button
               onClick={() => {
                 // Liberar blob URLs del wizard anterior antes de empezar uno nuevo (memory leak fix)
-                (Object.values(uploadedDocs) as Array<string | null>).forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+                Object.values(uploadedDocs).forEach((arr) => {
+                  if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+                });
                 setShowWizard(true); setStep(1);
                 setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
                 setPropertyType('apartamento');
                 setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
                 setWizardUnits([]);
                 setUploadedDocs({});
+                setLastUploadedSlot(null);
                 // Si hay draft en localStorage, el useEffect de hidratación lo
                 // restaura al paso 1 (los archivos se re-suben desde el paso 2).
                 try { if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft)) setRestoreDraftOnOpen(true); } catch { /* silent */ }
@@ -1531,6 +1569,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       units={wizardUnits} setUnits={setWizardUnits}
                       showToast={showToast}
                       onContinue={() => setStep(2)}
+                      onSaveDraft={() => { /* el autosave ya persiste; el toast lo da el botón */ }}
                     />
                   </Card>
                 )}
@@ -1547,6 +1586,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     onBack={() => setStep(1)}
                     onContinue={validateStep2}
                     triggerFileInput={triggerFileInput}
+                    onSaveDraft={() => { /* el autosave ya persiste; el toast lo da el botón */ }}
+                    // Conectamos el slot del último upload exitoso para abrir el modal
+                    // "¿Querés subir otro documento?" en StepDocs.
+                    lastUploadedSlot={lastUploadedSlot}
+                    setLastUploadedSlot={setLastUploadedSlot}
                   />
                 )}
                 {step === 3 && (
@@ -1607,7 +1651,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-slate-100">
                     <span className="text-slate-500">Mandato</span>
-                    {uploadedDocs[MANDATO_KEY] ? (
+                    {Array.isArray(uploadedDocs[MANDATO_KEY]) && uploadedDocs[MANDATO_KEY]!.length > 0 ? (
                       <span className="inline-flex items-center gap-1 text-emerald-700 font-bold">
                         <ClipboardCheck className="w-3.5 h-3.5" />
                         FIRMADO

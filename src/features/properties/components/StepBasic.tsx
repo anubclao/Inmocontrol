@@ -40,6 +40,10 @@ export interface StepBasicProps {
   setUnits: (v: WizardUnit[]) => void;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onContinue: () => void;
+  /** Persiste el progreso del paso 1 (datos básicos) sin avanzar. El padre
+   *  ya hace autosave en localStorage; este botón es un "checkpoint" explícito
+   *  que muestra confirmación al usuario. */
+  onSaveDraft: () => void;
 }
 
 /** Catálogo de tipos de unidad con etiqueta legible. */
@@ -58,7 +62,7 @@ export function StepBasic({
   propertyType, setPropertyType,
   owners, setOwners,
   units, setUnits,
-  showToast, onContinue,
+  showToast, onContinue, onSaveDraft,
 }: StepBasicProps) {
   const validate = () => {
     if (!address || !chip || !folio) {
@@ -384,7 +388,24 @@ export function StepBasic({
           )}
         </div>
 
-        <Button className="w-full" onClick={validate}>Continuar a Documentación</Button>
+        <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          <Button
+            variant="outline"
+            className="flex-1 gap-2"
+            onClick={() => {
+              onSaveDraft();
+              showToast('✓ Datos básicos guardados como borrador', 'success');
+            }}
+          >
+            💾 Guardar borrador
+          </Button>
+          <Button
+            className="flex-1"
+            onClick={validate}
+          >
+            Continuar a Documentación
+          </Button>
+        </div>
       </div>
     </div>
   );

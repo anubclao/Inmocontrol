@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Users, FileText, Wallet, ClipboardCheck, Eye, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle } from 'lucide-react';
+import { Users, FileText, Wallet, ClipboardCheck, Eye, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle, Plus, X } from 'lucide-react';
 import { Button, Card, Modal, Input } from '../../../shared/ui';
 import type { WizardOwner, WizardUnit } from './StepBasic';
 
@@ -11,6 +11,12 @@ export type DocSlotKey =
   | `certificado_tradicion:${string}`
   | `predial`
   | `mandato`;
+
+/** Cada slot ahora puede tener N archivos subidos (no solo 1).
+ *  Antes: `Record<slotKey, string | null>` — limitaba a 1 PDF por slot.
+ *  Ahora: `Record<slotKey, string[]>` — el agente puede subir varias hojas
+ *  de vida de un propietario, varios RUTs, etc. */
+export type UploadedDocsMap = Record<string, string[]>;
 
 /** Etiqueta humana para mostrar al usuario en cards / toasts / logs. */
 function labelForKey(key: string, owners: WizardOwner[], units: WizardUnit[]): string {
@@ -39,9 +45,10 @@ export interface StepDocsProps {
   // Estado del wizard
   owners: WizardOwner[];
   units: WizardUnit[];
-  // Docs subidos (key = slotKey, value = url)
-  uploadedDocs: Record<string, string | null>;
-  setUploadedDocs: (next: Record<string, string | null>) => void;
+  /** Mapa de documentos subidos. Clave = slotKey, valor = array de URLs/Blob URLs.
+   *  Vacío `[]` = no hay archivos; `["blob:..."]` o `["https://..."]` = N archivos. */
+  uploadedDocs: UploadedDocsMap;
+  setUploadedDocs: (next: UploadedDocsMap) => void;
   uploadingDoc: string | null;
   setUploadingDoc: (v: string | null) => void;
   currentDocLabel: string | null;
@@ -55,7 +62,23 @@ export interface StepDocsProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onBack: () => void;
   onContinue: () => void;
+  /** Dispara el file picker. El padre maneja la subida (Drive o blob local)
+   *  y vuelve a llamar a `setUploadedDocs` con el array actualizado. */
   triggerFileInput: (label: string) => void;
+  /** Persiste el estado del paso 2 (documentos) sin avanzar al inventario.
+   *  El padre ya hace autosave; este botón da feedback explícito al agente. */
+  onSaveDraft: () => void;
+  /** Slot al que el padre acaba de subir un PDF exitosamente. Cuando cambia a
+   *  un valor no-null, abrimos el modal "¿Querés subir otro documento?".
+   *  El padre lo limpia (set null) cuando el modal se cierra. */
+  lastUploadedSlot: string | null;
+  setLastUploadedSlot: (v: string | null) => void;
+}
+
+/** Helper: cantidad de archivos en un slot (0 si el slot no existe o está vacío). */
+function countInSlot(map: UploadedDocsMap, slotKey: string): number {
+  const arr = map[slotKey];
+  return Array.isArray(arr) ? arr.length : 0;
 }
 
 /** Cards que se renderizan en el paso 2. Cada card tiene su slotKey, ícono
@@ -142,15 +165,16 @@ export function StepDocs({
   currentDocLabel, setCurrentDocLabel,
   ownerIdNumber, setOwnerIdNumber,
   viewingDoc, setViewingDoc,
-  showToast, onBack, onContinue, triggerFileInput,
+  showToast, onBack, onContinue, triggerFileInput, onSaveDraft,
+  lastUploadedSlot, setLastUploadedSlot,
 }: StepDocsProps) {
   const [isIdModalOpen, setIsIdModalOpen] = useState(false);
   const [confirmContinue, setConfirmContinue] = useState(false);
 
   const slots = buildRequiredSlots(owners, units);
-  const isMandatoReady = !!uploadedDocs['mandato'];
-  // Para activar: todos los slots "required" deben estar subidos
-  const missingRequired = slots.filter((s) => s.required && !uploadedDocs[s.slotKey]);
+  const isMandatoReady = countInSlot(uploadedDocs, 'mandato') > 0;
+  // Para activar: todos los slots "required" deben tener al menos 1 archivo.
+  const missingRequired = slots.filter((s) => s.required && countInSlot(uploadedDocs, s.slotKey) === 0);
 
   // Agrupar slots por sección visual
   const ownerSlots = slots.filter((s) => s.group === 'owner');
@@ -174,12 +198,22 @@ export function StepDocs({
     return FileText;
   }
 
+  /** Quita un PDF específico del array de un slot. */
+  const removeFileFromSlot = (slotKey: string, index: number) => {
+    const current = uploadedDocs[slotKey] ?? [];
+    const next = current.filter((_, i) => i !== index);
+    setUploadedDocs({ ...uploadedDocs, [slotKey]: next });
+    showToast(`Archivo quitado de ${labelForKey(slotKey, owners, units)}`);
+  };
+
   return (
     <Card className="p-8">
       <h3 className="font-bold text-lg mb-2">2. Carga de Documentos Legales</h3>
       <p className="text-xs text-slate-500 mb-6">
-        Subí los documentos por propietario y por unidad. El <strong>Contrato de Mandato</strong> firmado por
-        todos los propietarios es el que activa el inmueble al 100% (estado <em>Activo</em>).
+        Subí los documentos por propietario y por unidad. <strong>Todos los documentos son opcionales</strong>:
+        podés subir los que tengas a mano ahora y completar los que falten después desde
+        el Detalle del Inmueble. El <strong>Contrato de Mandato</strong> firmado por todos los
+        propietarios es el que activa el inmueble al 100% (estado <em>Activo</em>).
       </p>
 
       {/* Banner del check de validación: el contrato de mandato desbloquea el 100% */}
@@ -231,29 +265,28 @@ export function StepDocs({
                     {[
                       { slotKey: cedulaKey, label: 'Cédula', icon: Users, required: true },
                       { slotKey: rutKey, label: 'RUT', icon: ClipboardCheck, required: false },
-                    ].map(({ slotKey, label, icon: Icon, required }) => {
-                      const url = uploadedDocs[slotKey];
-                      return (
-                        <DocCard
-                          key={slotKey}
-                          docKey={slotKey}
-                          label={`${label} de ${o.name}`}
-                          Icon={Icon}
-                          isReady={!!url}
-                          required={required}
-                          isMandato={false}
-                          uploading={uploadingDoc === slotKey}
-                          onPick={() => {
-                            if (slotKey === cedulaKey && !ownerIdNumber && !o.idNumber) {
-                              // heredamos el idNumber del owner si está
-                              if (o.idNumber) setOwnerIdNumber(o.idNumber);
-                            }
-                            triggerFileInput(slotKey);
-                          }}
-                          onView={() => url && setViewingDoc({ label: labelForKey(slotKey, owners, units), url })}
-                        />
-                      );
-                    })}
+                    ].map(({ slotKey, label, icon: Icon, required }) => (
+                      <DocCard
+                        key={slotKey}
+                        docKey={slotKey}
+                        label={`${label} de ${o.name}`}
+                        Icon={Icon}
+                        files={uploadedDocs[slotKey] ?? []}
+                        required={required}
+                        isMandato={false}
+                        uploading={uploadingDoc === slotKey}
+                        onPick={() => {
+                          if (slotKey === cedulaKey && !ownerIdNumber && !o.idNumber) {
+                            // heredamos el idNumber del owner si está
+                            if (o.idNumber) setOwnerIdNumber(o.idNumber);
+                          }
+                          triggerFileInput(slotKey);
+                        }}
+                        onAddAnother={() => triggerFileInput(slotKey)}
+                        onRemove={(i) => removeFileFromSlot(slotKey, i)}
+                        onView={(url) => setViewingDoc({ label: labelForKey(slotKey, owners, units), url })}
+                      />
+                    ))}
                   </div>
                 </div>
               );
@@ -272,25 +305,23 @@ export function StepDocs({
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {unitSlots.map((s) => {
-              const url = uploadedDocs[s.slotKey];
-              const Icon = iconForKey(s.slotKey, s.group, s.unitId);
-              return (
-                <DocCard
-                  key={s.slotKey}
-                  docKey={s.slotKey}
-                  label={labelForKey(s.slotKey, owners, units)}
-                  Icon={Icon}
-                  isReady={!!url}
-                  required={s.required}
-                  isMandato={false}
-                  helpText={s.helpText}
-                  uploading={uploadingDoc === s.slotKey}
-                  onPick={() => triggerFileInput(s.slotKey)}
-                  onView={() => url && setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
-                />
-              );
-            })}
+            {unitSlots.map((s) => (
+              <DocCard
+                key={s.slotKey}
+                docKey={s.slotKey}
+                label={labelForKey(s.slotKey, owners, units)}
+                Icon={iconForKey(s.slotKey, s.group, s.unitId)}
+                files={uploadedDocs[s.slotKey] ?? []}
+                required={s.required}
+                isMandato={false}
+                helpText={s.helpText}
+                uploading={uploadingDoc === s.slotKey}
+                onPick={() => triggerFileInput(s.slotKey)}
+                onAddAnother={() => triggerFileInput(s.slotKey)}
+                onRemove={(i) => removeFileFromSlot(s.slotKey, i)}
+                onView={(url) => setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -306,7 +337,6 @@ export function StepDocs({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {propertySlots.map((s) => {
-              const url = uploadedDocs[s.slotKey];
               const Icon = iconForKey(s.slotKey, s.group, s.unitId);
               const isMandato = s.slotKey === 'mandato';
               return (
@@ -315,13 +345,15 @@ export function StepDocs({
                   docKey={s.slotKey}
                   label={labelForKey(s.slotKey, owners, units)}
                   Icon={Icon}
-                  isReady={!!url}
+                  files={uploadedDocs[s.slotKey] ?? []}
                   required={s.required}
                   isMandato={isMandato}
                   helpText={s.helpText}
                   uploading={uploadingDoc === s.slotKey}
                   onPick={() => triggerFileInput(s.slotKey)}
-                  onView={() => url && setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
+                  onAddAnother={() => triggerFileInput(s.slotKey)}
+                  onRemove={(i) => removeFileFromSlot(s.slotKey, i)}
+                  onView={(url) => setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
                 />
               );
             })}
@@ -330,8 +362,18 @@ export function StepDocs({
       )}
 
       {/* ── Acciones ── */}
-      <div className="flex gap-4 mt-8">
+      <div className="flex flex-col sm:flex-row gap-3 mt-8">
         <Button variant="outline" className="flex-1" onClick={onBack}>Atrás</Button>
+        <Button
+          variant="outline"
+          className="flex-1 gap-2"
+          onClick={() => {
+            onSaveDraft();
+            showToast('✓ Documentos guardados como borrador', 'success');
+          }}
+        >
+          💾 Guardar borrador
+        </Button>
         <Button
           className="flex-1"
           onClick={() => setConfirmContinue(true)}
@@ -393,79 +435,195 @@ export function StepDocs({
           }}>Guardar y Continuar</Button>
         </div>
       </Modal>
+
+      {/* ── Modal: "¿Querés subir otro documento de este tipo?" ──
+          Se dispara justo después de que el padre terminó de subir un PDF
+          a un slot. Le da al agente la opción de encadenar varias hojas
+          (ej: 2 PDFs de cédula) sin tener que volver a buscar el slot. */}
+      <Modal
+        isOpen={!!lastUploadedSlot}
+        onClose={() => setLastUploadedSlot(null)}
+        title="¿Querés subir otro documento?"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            {lastUploadedSlot && (
+              <>
+                Subiste <strong>1 archivo</strong> a
+                {' '}<strong>{labelForKey(lastUploadedSlot, owners, units)}</strong>.
+              </>
+            )}
+          </p>
+          <p className="text-xs text-slate-500">
+            Si este documento tiene varias hojas (ej: cara y respaldo de la cédula,
+            o varias páginas del RUT), podés subir más archivos del mismo tipo acá mismo.
+            Cuando termines, presioná <strong>"No, ya está"</strong> para volver a la lista.
+          </p>
+          {lastUploadedSlot && (
+            <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
+              <strong>Archivos subidos hasta ahora:</strong> {countInSlot(uploadedDocs, lastUploadedSlot)}
+            </div>
+          )}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setLastUploadedSlot(null)}
+            >
+              No, ya está
+            </Button>
+            <Button
+              className="flex-1 gap-2"
+              onClick={() => {
+                if (lastUploadedSlot) {
+                  triggerFileInput(lastUploadedSlot);
+                }
+                setLastUploadedSlot(null);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Sí, subir otro
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
     </Card>
   );
 }
 
-/** ── DocCard: tarjeta individual de un documento. Se usa en todas las
- *  secciones (owner / unit / property). Mantiene el estilo del componente
- *  original. ── */
-// En React+TS 5, pasar `key={...}` en JSX agrega implícitamente la prop
-// `key` al type de las props del componente. La marcamos como opcional y
-// la ignoramos (React la consume a nivel de reconciliación, no llega al
-// componente).
+/** ── DocCard: tarjeta individual de un documento. Soporta N archivos por
+ *  slot. Muestra la cantidad de PDFs subidos, la lista con botón ver/quitar,
+ *  y dos CTAs: "Subir/Reemplazar" (abre el file picker) y "Agregar otro"
+ *  (lo mismo, para encadenar varias hojas). ── */
 interface DocCardProps {
+  // React pasa `key` automáticamente en JSX; lo aceptamos como opcional para
+  // que TS no se queje. (El componente no la usa — es solo para reconciliación.)
   key?: string | number;
   docKey: string;
   label: string;
   Icon: typeof Users;
-  isReady: boolean;
+  /** Lista de URLs/Blob URLs de los archivos subidos para este slot. */
+  files: string[];
   required: boolean;
   isMandato: boolean;
   helpText?: string;
   uploading: boolean;
   onPick: () => void;
-  onView: () => void;
+  onAddAnother: () => void;
+  onRemove: (index: number) => void;
+  onView: (url: string) => void;
 }
 function DocCard(props: DocCardProps) {
-  const { key: _key, docKey, label, Icon, isReady, required, isMandato, helpText, uploading, onPick, onView } = props;
+  const { docKey, label, Icon, files, required, isMandato, helpText, uploading, onPick, onAddAnother, onRemove, onView } = props;
+  const hasFiles = files.length > 0;
   return (
     <div
-      className={`p-4 border-2 border-dashed rounded-xl transition-all cursor-pointer group relative ${
-        isMandato && isReady
+      className={`p-4 border-2 border-dashed rounded-xl transition-all group relative ${
+        isMandato && hasFiles
           ? 'border-emerald-300 bg-emerald-50/30'
-          : 'border-slate-200 hover:border-blue-400'
+          : hasFiles
+            ? 'border-blue-200 bg-blue-50/20'
+            : 'border-slate-200 hover:border-blue-400'
       }`}
-      onClick={() => {
-        if (uploading) return;
-        onPick();
-      }}
       data-testid={`doc-card-${docKey}`}
     >
       <div className="flex justify-between items-start">
-        <Icon className={`w-6 h-6 ${isReady ? 'text-emerald-500' : uploading ? 'text-blue-500 animate-pulse' : 'text-slate-400 group-hover:text-blue-500'} mb-2`} />
-        {isReady && <ClipboardCheck className="w-4 h-4 text-emerald-500" />}
+        <Icon className={`w-6 h-6 ${hasFiles ? 'text-emerald-500' : uploading ? 'text-blue-500 animate-pulse' : 'text-slate-400 group-hover:text-blue-500'} mb-2`} />
+        {hasFiles && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+            {files.length} {files.length === 1 ? 'archivo' : 'archivos'}
+          </span>
+        )}
       </div>
       <p className="text-sm font-semibold text-slate-700">{label}</p>
       {helpText && <p className="text-[10px] text-slate-500 mt-0.5">{helpText}</p>}
       <p className="text-xs text-slate-400 mt-1">
         {uploading
           ? 'Subiendo...'
-          : isReady
+          : hasFiles
             ? isMandato
               ? 'PDF firmado — estado 100%'
-              : 'Documento listo'
+              : 'Documento(s) listo(s)'
             : required
-              ? 'Click para subir PDF (requerido)'
+              ? 'Click para subir PDF (opcional, no bloquea)'
               : 'Click para subir PDF (opcional)'}
       </p>
-      {isReady && (
-        <div className="absolute bottom-3 right-3 flex gap-1.5">
+
+      {/* ── Lista de archivos subidos ── */}
+      {hasFiles && (
+        <ul className="mt-3 space-y-1">
+          {files.map((url, i) => (
+            <li
+              key={i}
+              className="flex items-center justify-between gap-2 text-[11px] bg-white/80 border border-slate-200 rounded px-2 py-1"
+            >
+              <button
+                type="button"
+                onClick={() => onView(url)}
+                className="flex items-center gap-1.5 text-blue-600 hover:underline truncate flex-1 text-left"
+                title="Ver PDF"
+              >
+                <FileText className="w-3 h-3 flex-shrink-0" />
+                <span className="truncate">Archivo {i + 1}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onRemove(i)}
+                className="text-red-500 hover:text-red-700 p-0.5"
+                title="Quitar este archivo"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* ── Acciones: subir/reemplazar + agregar otro ── */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onPick}
+          disabled={uploading}
+          className="flex-1 min-w-[110px] px-2.5 py-1.5 text-[11px] font-bold bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-700 flex items-center justify-center gap-1 disabled:opacity-50"
+        >
+          {hasFiles ? (
+            <>
+              <RefreshCw className="w-3 h-3" />
+              Reemplazar
+            </>
+          ) : (
+            <>
+              <FileText className="w-3 h-3" />
+              Subir PDF
+            </>
+          )}
+        </button>
+        {hasFiles && (
           <button
-            onClick={(e) => { e.stopPropagation(); onPick(); }}
-            title="Reemplazar PDF"
-            className="p-2 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100 transition-colors"
+            type="button"
+            onClick={onAddAnother}
+            disabled={uploading}
+            className="flex-1 min-w-[110px] px-2.5 py-1.5 text-[11px] font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1 disabled:opacity-50"
           >
-            <RefreshCw className="w-4 h-4" />
+            <Plus className="w-3 h-3" />
+            Agregar otro
           </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onView(); }}
-            title="Ver PDF"
-            className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-          >
-            <Eye className="w-4 h-4" />
-          </button>
-        </div>
+        )}
+      </div>
+
+      {/* Botón "Ver" del primer archivo (atajo rápido, legacy compat) */}
+      {hasFiles && (
+        <button
+          type="button"
+          onClick={() => onView(files[0])}
+          className="absolute top-3 right-3 p-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+          title="Ver primer PDF"
+        >
+          <Eye className="w-3.5 h-3.5" />
+        </button>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
 import { motion } from 'motion/react';
-import { Edit, Eye, Plus, Search, User, Phone, Mail, FileText, FileSignature, Trash2 } from 'lucide-react';
+import { Edit, Eye, Plus, Search, User, Phone, Mail, FileText, FileSignature, Trash2, X, RefreshCw } from 'lucide-react';
 import { Button, Card, Input, Modal } from '../../shared/ui';
 import { ProcessOrderBanner } from '../../shared/ui/ProcessOrderBanner';
 import { StepInventory } from '../properties/components/StepInventory';
@@ -46,8 +46,15 @@ export function TenantsView({
   const [viewingTenant, setViewingTenant] = useState<any>(null);
 
   const openTenantDetail = (tenant: any) => {
-    setUploadStatus({});
+    // Inicializar el uploadStatus con folders vacíos (no {} como antes) para
+    // que la UI pueda mostrar "0 archivos" en cada folder desde el primer render.
+    setUploadStatus({
+      Cedula: { files: [] },
+      Contrato: { files: [] },
+      Recibos: { files: [] },
+    });
     setActaStatus(null);
+    setLastUploadedFolder(null);
     setViewingTenant(tenant);
     // Pre-cargar el estado de Drive para este tenant consultando los archivos
     // que ya existen en su carpeta Cedula/. Esto hace que la cédula "subida"
@@ -97,10 +104,8 @@ export function TenantsView({
 
   /**
    * Consulta Drive para ver si este tenant ya tiene archivos en su carpeta
-   * Cedula/. Si hay al menos uno, marcamos cedulaUploaded = true.
-   * Esto evita el bug de que el botón "Inventario de Colocación" se desbloquee
-   * solo porque el usuario acaba de subir, pero se bloquee de nuevo tras un
-   * refresh si no nos acordamos.
+   * Cedula/. Hidratamos la lista COMPLETA (no solo el primero) para que la UI
+   * muestre todos los archivos que el agente subió previamente, no solo uno.
    */
   const refreshCedulaStatus = async (tenant: any) => {
     const folderId = await ensureTenantDriveFolder(tenant);
@@ -113,7 +118,14 @@ export function TenantsView({
       if (files.length > 0) {
         setUploadStatus((s) => ({
           ...s,
-          Cedula: { success: true, link: files[0].webViewLink ?? undefined },
+          Cedula: {
+            files: files.map((f: any) => ({
+              name: f.name ?? 'Archivo',
+              link: f.webViewLink,
+              webViewLink: f.webViewLink,
+              fileId: f.id,
+            })),
+          },
         }));
       }
     } catch (e) {
@@ -139,12 +151,24 @@ export function TenantsView({
     }
   };
   const [searchQuery, setSearchQuery] = useState('');
-  const [uploadStatus, setUploadStatus] = useState<Record<string, { uploading?: boolean; success?: boolean; link?: string }>>({});
+  /** Estado de subida por folder del tenant. Ahora soporta N archivos por folder
+   *  (antes: solo 1, vía `success/link`). Un folder puede tener varios PDFs:
+   *  ej: cara y respaldo de la cédula, varios recibos. */
+  const [uploadStatus, setUploadStatus] = useState<Record<string, {
+    uploading?: boolean;
+    files: Array<{ name: string; link?: string; webViewLink?: string; fileId?: string }>;
+  }>>({});
   const [placementInventoryOpen, setPlacementInventoryOpen] = useState(false);
   const [placementProperty, setPlacementProperty] = useState<any>(null);
   const [placementBaseInventory, setPlacementBaseInventory] = useState<any>(null);
   const [actaModalOpen, setActaModalOpen] = useState(false);
   const [actaStatus, setActaStatus] = useState<{ fileId?: string; webViewLink?: string } | null>(null);
+  /** Folder al que el agente acaba de subir un PDF exitosamente. Cuando se
+   *  setea, abrimos el modal "¿Querés subir otro documento?" para que pueda
+   *  encadenar varias hojas (ej: 2 PDFs de cédula). */
+  const [lastUploadedFolder, setLastUploadedFolder] = useState<'Cedula' | 'Contrato' | 'Recibos' | null>(null);
+  /** Estado del modal "¿subir otro?" para re-disparar el file picker. */
+  const [pendingFolderForAnother, setPendingFolderForAnother] = useState<'Cedula' | 'Contrato' | 'Recibos' | null>(null);
 
   // Confirmación de borrado de tenant (usado para limpiar duplicados).
   const [tenantToDelete, setTenantToDelete] = useState<any>(null);
@@ -420,6 +444,10 @@ export function TenantsView({
       reader.readAsDataURL(file);
     });
 
+  /** Sube un PDF al folder de Drive del tenant. Soporta N archivos por folder
+   *  (antes solo 1): cada upload agrega un item a `files[]` en lugar de
+   *  pisar el anterior. Después de subir, dispara el modal "¿Querés subir
+   *  otro documento?" para que el agente pueda encadenar varias hojas. */
   const handleDocUpload = async (
     e: ChangeEvent<HTMLInputElement>,
     folder: 'Cedula' | 'Contrato' | 'Recibos',
@@ -440,7 +468,10 @@ export function TenantsView({
     // Trabajamos siempre con el folderId fresco (puede haber cambiado).
     const tenantWithFolder = { ...tenant, tenantDriveFolderId: folderId };
 
-    setUploadStatus((s) => ({ ...s, [folder]: { uploading: true } }));
+    setUploadStatus((s) => ({
+      ...s,
+      [folder]: { ...(s[folder] ?? { files: [] }), uploading: true },
+    }));
 
     try {
       const base64 = await fileToBase64(file);
@@ -460,16 +491,42 @@ export function TenantsView({
       const data = await res.json();
       if (!res.ok) {
         showToast(data.error || 'Error subiendo documento', 'error');
-        setUploadStatus((s) => ({ ...s, [folder]: {} }));
+        setUploadStatus((s) => ({
+          ...s,
+          [folder]: { ...(s[folder] ?? { files: [] }), uploading: false },
+        }));
         return;
       }
 
-      setUploadStatus((s) => ({ ...s, [folder]: { success: true, link: data.webViewLink } }));
+      // Append el nuevo archivo al array (no pisar anteriores).
+      setUploadStatus((s) => {
+        const current = s[folder] ?? { files: [] };
+        return {
+          ...s,
+          [folder]: {
+            uploading: false,
+            files: [
+              ...current.files,
+              {
+                name: fileName,
+                link: data.webViewLink,
+                webViewLink: data.webViewLink,
+                fileId: data.fileId,
+              },
+            ],
+          },
+        };
+      });
       showToast(`Documento subido a ${folder}/ en Google Drive`);
+      // Disparar el modal "¿Querés subir otro?" después de un upload exitoso.
+      setLastUploadedFolder(folder);
     } catch (err) {
       console.error(err);
       showToast('Error de conexión al subir documento', 'error');
-      setUploadStatus((s) => ({ ...s, [folder]: {} }));
+      setUploadStatus((s) => ({
+        ...s,
+        [folder]: { ...(s[folder] ?? { files: [] }), uploading: false },
+      }));
     }
 
     // Reset file input
@@ -595,8 +652,20 @@ export function TenantsView({
               error={formErrors.adminFee}
             />
           </div>
-          <div className="pt-4 flex justify-end gap-3">
+          <div className="pt-4 flex flex-col sm:flex-row justify-end gap-3">
             <Button variant="outline" onClick={handleCloseCreate}>Cancelar</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                // El form de creación de tenant es chico: no necesitamos
+                // persistencia local. "Guardar borrador" muestra feedback al
+                // agente de que revise los datos antes de hacer el POST final.
+                showToast('✓ Datos del arrendatario listos (botón "Crear" los guarda)', 'success');
+              }}
+              className="gap-2"
+            >
+              💾 Guardar borrador
+            </Button>
             <Button onClick={handleAskCreate}>Crear Arrendatario</Button>
           </div>
         </div>
@@ -767,45 +836,30 @@ export function TenantsView({
               <p className="text-xs text-slate-500 mb-4">
                 Carga el inventario de captación, revisa si hay novedades y genera el PDF firmado con fotos.
               </p>
-              {(() => {
-                const cedulaUploaded = !!uploadStatus.Cedula?.success;
-                return (
-                  <>
-                    {!cedulaUploaded && (
-                      <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
-                        <svg className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
-                        </svg>
-                        <span>
-                          <strong>Obligatorio:</strong> subí primero la <strong>cédula del arrendatario</strong> en la sección Documentos de abajo. Sin la cédula en Drive no podés firmar el Inventario de Colocación.
-                        </span>
-                      </div>
-                    )}
-                    <Button
-                      className="w-full gap-2"
-                      disabled={!cedulaUploaded}
-                      title={!cedulaUploaded ? 'Subí primero la cédula del arrendatario' : ''}
-                      onClick={() => {
-                        if (!viewingTenant.propertyId) {
-                          showToast('Este arrendatario no tiene inmueble asignado', 'error');
-                          return;
-                        }
-                        if (!cedulaUploaded) {
-                          showToast('Subí primero la cédula del arrendatario', 'error');
-                          return;
-                        }
-                        void openPlacementInventory(viewingTenant);
-                      }}
-                    >
-                      <FileText className="w-4 h-4" />
-                      Abrir Inventario de Colocación
-                    </Button>
-                  </>
-                );
-              })()}
+              {/* NOTA: la cédula ya NO bloquea el Inventario de Colocación. La
+                  subís cuando puedas desde la sección Documentos de abajo;
+                  firmar el inventario sigue funcionando aunque la cédula no
+                  esté subida. Esto le da flexibilidad al agente para no
+                  quedar trabado por una suba de Drive que puede fallar. */}
+              <Button
+                className="w-full gap-2"
+                onClick={() => {
+                  if (!viewingTenant.propertyId) {
+                    showToast('Este arrendatario no tiene inmueble asignado', 'error');
+                    return;
+                  }
+                  void openPlacementInventory(viewingTenant);
+                }}
+              >
+                <FileText className="w-4 h-4" />
+                Abrir Inventario de Colocación
+              </Button>
             </div>
 
-            {/* Documentos */}
+            {/* Documentos — soporta N archivos por folder. Cada upload se apila
+                en una lista con botón Ver por archivo. Después de subir, el
+                modal "¿Querés subir otro?" permite encadenar varias hojas
+                (ej: cara y respaldo de la cédula, varios recibos). */}
             <div className="border-t border-slate-100 pt-5">
               <div className="flex items-center justify-between mb-4">
                 <h4 className="font-bold text-sm text-slate-900">Documentos en Google Drive</h4>
@@ -814,57 +868,75 @@ export function TenantsView({
                 )}
               </div>
               <div className="space-y-3">
-                {[
+                {([
                   { folder: 'Cedula', label: 'Cédula de Ciudadanía', icon: '🪪' },
                   { folder: 'Contrato', label: 'Contrato de Arrendamiento', icon: '📄' },
                   { folder: 'Recibos', label: 'Recibos de Pago', icon: '🧾' },
-                ].map((doc) => (
-                  <div key={doc.folder} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{doc.icon}</span>
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{doc.label}</p>
-                        <p className="text-[10px] text-slate-400">Se guarda en Drive → {doc.folder}/</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {uploadStatus[doc.folder]?.uploading ? (
-                        <span className="text-xs text-blue-500 animate-pulse">Subiendo...</span>
-                      ) : uploadStatus[doc.folder]?.success ? (
+                ] as const).map((doc) => {
+                  const folderStatus = uploadStatus[doc.folder];
+                  const files = folderStatus?.files ?? [];
+                  const uploading = !!folderStatus?.uploading;
+                  return (
+                    <div key={doc.folder} className="p-3 bg-slate-50 rounded-lg border border-slate-100 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xl">{doc.icon}</span>
+                          <div>
+                            <p className="text-sm font-medium text-slate-900">{doc.label}</p>
+                            <p className="text-[10px] text-slate-400">
+                              Drive → {doc.folder}/{files.length > 0 && ` · ${files.length} archivo${files.length === 1 ? '' : 's'}`}
+                            </p>
+                          </div>
+                        </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-emerald-500 font-bold">✓ Subido</span>
-                          {uploadStatus[doc.folder]?.link && (
-                            <a
-                              href={uploadStatus[doc.folder]!.link}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-blue-500 hover:underline"
-                            >
-                              Ver
-                            </a>
+                          {uploading ? (
+                            <span className="text-xs text-blue-500 animate-pulse">Subiendo...</span>
+                          ) : (
+                            <>
+                              <input
+                                type="file"
+                                id={`upload-${doc.folder}`}
+                                accept=".pdf,image/*"
+                                className="hidden"
+                                onChange={(e) => handleDocUpload(e, doc.folder, viewingTenant)}
+                              />
+                              <label
+                                htmlFor={`upload-${doc.folder}`}
+                                className="cursor-pointer px-3 py-1.5 text-xs font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                {files.length === 0 ? 'Subir PDF' : 'Agregar otro'}
+                              </label>
+                            </>
                           )}
                         </div>
-                      ) : (
-                        <>
-                          <input
-                            type="file"
-                            id={`upload-${doc.folder}`}
-                            accept=".pdf,image/*"
-                            className="hidden"
-                            onChange={(e) => handleDocUpload(e, doc.folder, viewingTenant)}
-                          />
-                          <label
-                            htmlFor={`upload-${doc.folder}`}
-                            className="cursor-pointer px-3 py-1.5 text-xs font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1"
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            {uploadStatus[doc.folder]?.link ? 'Reemplazar' : 'Subir PDF'}
-                          </label>
-                        </>
+                      </div>
+                      {/* ── Lista de archivos subidos ── */}
+                      {files.length > 0 && (
+                        <ul className="space-y-1 pl-9">
+                          {files.map((f, i) => (
+                            <li
+                              key={i}
+                              className="flex items-center justify-between gap-2 text-[11px] bg-white border border-slate-200 rounded px-2 py-1"
+                            >
+                              <a
+                                href={f.webViewLink ?? f.link ?? '#'}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1.5 text-blue-600 hover:underline truncate flex-1"
+                                title={f.name}
+                              >
+                                <FileText className="w-3 h-3 flex-shrink-0" />
+                                <span className="truncate">{f.name}</span>
+                              </a>
+                              <span className="text-emerald-600 font-bold text-[10px]">✓</span>
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {/* ── Acta de Entrega (generada desde la app, no subida) ── */}
                 <div className="flex items-center justify-between p-3 bg-blue-50/50 rounded-lg border border-blue-100">
@@ -1273,6 +1345,79 @@ export function TenantsView({
           </div>
         </Modal>
       )}
+
+      {/* ── Modal: "¿Querés subir otro documento?" ──
+          Se dispara después de cada upload exitoso a un folder del tenant.
+          Le da al agente la opción de encadenar varias hojas (ej: cara y
+          respaldo de la cédula, varios recibos de pago) sin tener que volver
+          a buscar el botón. */}
+      <Modal
+        isOpen={!!lastUploadedFolder}
+        onClose={() => {
+          setLastUploadedFolder(null);
+          setPendingFolderForAnother(null);
+        }}
+        title="¿Querés subir otro documento?"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            {lastUploadedFolder && (
+              <>
+                Subiste <strong>1 archivo</strong> a
+                {' '}<strong>
+                  {lastUploadedFolder === 'Cedula' && 'Cédula de Ciudadanía'}
+                  {lastUploadedFolder === 'Contrato' && 'Contrato de Arrendamiento'}
+                  {lastUploadedFolder === 'Recibos' && 'Recibos de Pago'}
+                </strong>.
+              </>
+            )}
+          </p>
+          <p className="text-xs text-slate-500">
+            Si este documento tiene varias hojas (ej: cara y respaldo de la cédula,
+            o varios recibos de pago), podés subir más archivos del mismo tipo acá mismo.
+            Cuando termines, presioná <strong>"No, ya está"</strong> para volver a la lista.
+          </p>
+          {lastUploadedFolder && (
+            <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
+              <strong>Archivos en este folder:</strong> {uploadStatus[lastUploadedFolder]?.files.length ?? 0}
+            </div>
+          )}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                setLastUploadedFolder(null);
+                setPendingFolderForAnother(null);
+              }}
+            >
+              No, ya está
+            </Button>
+            <Button
+              className="flex-1 gap-2"
+              onClick={() => {
+                // Dispara el file picker del folder correspondiente. El input
+                // file está en el doc.<folder>; lo activamos por id.
+                if (lastUploadedFolder) {
+                  setPendingFolderForAnother(lastUploadedFolder);
+                  // Pequeño delay para asegurar que el modal se cierre antes
+                  // de abrir el picker (algunos browsers lo ignoran si está
+                  // abierto un dialog).
+                  setTimeout(() => {
+                    const el = document.getElementById(`upload-${lastUploadedFolder}`) as HTMLInputElement | null;
+                    el?.click();
+                  }, 100);
+                }
+                setLastUploadedFolder(null);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Sí, subir otro
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

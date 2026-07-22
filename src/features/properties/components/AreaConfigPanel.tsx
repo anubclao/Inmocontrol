@@ -13,6 +13,10 @@ interface AreaConfigPanelProps {
   onCustomAreasChange: (next: { id: string; label: string }[]) => void;
   onStart: () => void;
   onCancel?: () => void;
+  /** Persiste el estado del inventario sin empezar a evaluar áreas. El padre
+   *  ya hace autosave en IndexedDB en cada cambio; este botón da feedback
+   *  explícito al agente. */
+  onSaveDraft?: () => void;
 }
 
 /**
@@ -22,7 +26,7 @@ interface AreaConfigPanelProps {
 export function AreaConfigPanel({
   propertyType, counters, customAreas,
   onPropertyTypeChange, onCountersChange, onCustomAreasChange,
-  onStart, onCancel,
+  onStart, onCancel, onSaveDraft,
 }: AreaConfigPanelProps) {
   const config = getPropertyTypeConfig(propertyType);
   const resolved = resolveAreas(config, counters, customAreas);
@@ -171,9 +175,18 @@ export function AreaConfigPanel({
           </p>
         </div>
 
-        <div className="flex gap-3 pt-2">
+        <div className="flex flex-col sm:flex-row gap-3 pt-2">
           {onCancel && (
             <Button variant="outline" className="flex-1" onClick={onCancel}>Atrás</Button>
+          )}
+          {onSaveDraft && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-2"
+              onClick={onSaveDraft}
+            >
+              💾 Guardar borrador
+            </Button>
           )}
           <Button className="flex-1" onClick={onStart}>
             Empezar Inventario ({resolved.length} áreas)
