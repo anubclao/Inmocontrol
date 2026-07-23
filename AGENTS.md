@@ -310,6 +310,58 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
 - Estado futuro: wizard state en localStorage para permitir "Continuar registro" al volver. **NO implementar hasta que se cierre el flujo actual completo** (Cobranza + Comparativa + Acta).
 
+### Metodología Karpathy (Agent Skill) — Spec + Verifier + Environment
+Adoptada el 2026-07-22 después de la cadena de bugs en producción
+("Guardar borrador" mintiendo, "Continuar a Documentación" colgando,
+phone/email NULL, modal de tenant cerrándose antes del POST, etc.).
+**Reglas obligatorias para cualquier feature nuevo o fix grande.**
+
+#### Workflow (5 fases, ejecución estricta)
+
+1. **FASE 1 — ENVIRONMENT** (5 min): leer `docs/env/ARCHITECTURE.md` +
+   `docs/env/CONSTRAINTS.md` + este AGENTS.md. Confirmar al user que
+   entendiste el stack. **NO escribir código todavía.**
+
+2. **FASE 2 — SPEC**: crear `docs/specs/{nombre}.md` desde el template.
+   Definir: User Story + Acceptance Criteria numerados (binarios,
+   testeables) + Edge Cases + Technical Contract (interfaces TS, endpoints,
+   props) + Dependencias + Out of Scope + **Tostadas exactas** (copy
+   approved, NO improvisar) + **Timeouts explícitos**. Pedirle al user
+   que apruebe. **NO escribir código de implementación todavía.**
+
+3. **FASE 3 — VERIFIER**: una vez aprobado el spec, crear
+   `tests/verifiers/{nombre}.md` desde el template E2E. Cada AC debe
+   tener 1+ pasos verificables (curl + checklist manual). **NO
+   modificar el verifier para hacer pasar los checks** (eso es
+   trampa). Si falla, el código está mal.
+
+4. **FASE 4 — IMPLEMENTACIÓN** (recién ahora, después de verifier
+   aprobado). Tocar código **mínimo** para que el verifier pase.
+   No agregar features fuera del spec. Si aparece un bug que requiere
+   cambiar el spec, volver a Fase 2 (no "arreglar por las suyas").
+
+5. **FASE 5 — REFACTOR & VERIFY**: correr el verifier de nuevo. `npm
+   run lint` debe pasar. Commit solo cuando el verifier pasa 100%.
+
+#### Anti-patrones explícitos (vistos en prod)
+- ❌ Escribir código antes del spec → bugs que se ven en prod.
+- ❌ Tostadas que mienten ("guardado" cuando solo se guardó en localStorage).
+- ❌ Endpoints sin timeout → el server se cuelga para siempre.
+- ❌ Modales que se cierran antes del POST → el user piensa que falló.
+- ❌ Errores que devuelven HTML en vez de JSON → el frontend tira SyntaxError.
+- ❌ Modificar el verifier para que pase.
+
+#### Aplicación a los wizards actuales (julio-2026)
+Por cada wizard roto, vamos a:
+1. Escribir `docs/specs/wizard_{X}.md` (qué DEBE hacer)
+2. Escribir `tests/verifiers/wizard_{X}.md` (cómo verificar)
+3. Correr el verifier contra prod (esperamos que FALLE en varios puntos)
+4. Fijar los fallos uno a uno, corriendo el verifier después de cada uno
+5. Commit + push solo cuando el verifier pasa 100%
+
+Orden de aplicación: `wizard_property` (más roto) → `wizard_tenant`
+→ `wizard_contract` → `wizard_inventory` → `wizard_billing`.
+
 ### "Guardar avance (este equipo)" — wizard pre-crea propiedad en MySQL al pasar a step 2
 - **Opción B (julio-2026)**: el botón "💾 Guardar avance (este equipo)" en
   step 1 SÍ persiste al servidor. Al hacer click (o al pasar a step 2 vía
