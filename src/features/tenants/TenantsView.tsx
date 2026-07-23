@@ -75,8 +75,15 @@ export function TenantsView({
    * para que el botón "Abrir Inventario de Colocación" se habilite.
    *
    * Devuelve el `tenantDriveFolderId` o `null` si falló.
+   *
+   * FIX Karpathy (jul-2026): agregamos `silent` para que las llamadas de
+   * background (refreshCedulaStatus, refreshActaStatus) NO muestren el
+   * toast rojo gritón. El DriveStatusBanner persistente arriba del
+   * contenido ya muestra el mensaje correcto cuando Drive está
+   * desconectado. Solo las llamadas user-initiated (handleDocUpload,
+   * ActaEntregaModal) deben mostrar toast.
    */
-  const ensureTenantDriveFolder = async (tenant: any): Promise<string | null> => {
+  const ensureTenantDriveFolder = async (tenant: any, silent = false): Promise<string | null> => {
     if (!tenant?.id) return null;
     if (tenant.tenantDriveFolderId) return tenant.tenantDriveFolderId;
     try {
@@ -86,7 +93,11 @@ export function TenantsView({
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        showToast(data?.error ?? 'No se pudo crear la carpeta del arrendatario en Drive', 'error');
+        if (!silent) {
+          showToast(data?.error ?? 'No se pudo crear la carpeta del arrendatario en Drive', 'error');
+        } else {
+          console.warn('[tenants] ensure-drive-folder failed (silent):', data?.error ?? res.status);
+        }
         return null;
       }
       const newFolderId = data.tenantDriveFolderId as string;
@@ -95,13 +106,15 @@ export function TenantsView({
       setViewingTenant((prev: any) =>
         prev?.id === tenant.id ? { ...prev, tenantDriveFolderId: newFolderId } : prev,
       );
-      if (data.created) {
+      if (data.created && !silent) {
         showToast('Carpeta de Drive creada para el arrendatario', 'success');
       }
       return newFolderId;
     } catch (e) {
       console.warn('[tenants] ensure-drive-folder failed:', e);
-      showToast('Error de conexión al preparar Drive', 'error');
+      if (!silent) {
+        showToast('Error de conexión al preparar Drive', 'error');
+      }
       return null;
     }
   };
@@ -110,9 +123,15 @@ export function TenantsView({
    * Consulta Drive para ver si este tenant ya tiene archivos en su carpeta
    * Cedula/. Hidratamos la lista COMPLETA (no solo el primero) para que la UI
    * muestre todos los archivos que el agente subió previamente, no solo uno.
+   *
+   * FIX Karpathy (jul-2026): `silent: true` en ensureTenantDriveFolder para
+   * que el toast rojo 'No hay conexión con Google Drive' NO se dispare
+   * cuando el user abre el Detalle. El DriveStatusBanner persistente arriba
+   * del contenido ya muestra el mensaje correcto. Solo las acciones
+   * user-initiated (subir doc, generar acta) muestran el toast.
    */
   const refreshCedulaStatus = async (tenant: any) => {
-    const folderId = await ensureTenantDriveFolder(tenant);
+    const folderId = await ensureTenantDriveFolder(tenant, true);
     if (!folderId) return;
     try {
       const res = await fetch(`/api/tenants/${encodeURIComponent(tenant.id)}/documents?folder=Cedula`);
@@ -138,9 +157,10 @@ export function TenantsView({
     }
   };
 
-  /** Misma idea que refreshCedulaStatus pero para el Acta de Entrega. */
+  /** Misma idea que refreshCedulaStatus pero para el Acta de Entrega.
+   *  FIX Karpathy (jul-2026): `silent: true` — ver refreshCedulaStatus. */
   const refreshActaStatus = async (tenant: any) => {
-    const folderId = await ensureTenantDriveFolder(tenant);
+    const folderId = await ensureTenantDriveFolder(tenant, true);
     if (!folderId) return;
     try {
       const res = await fetch(`/api/tenants/${encodeURIComponent(tenant.id)}/documents?folder=Acta`);
