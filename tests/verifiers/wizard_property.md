@@ -272,6 +272,238 @@ Write-Host $h.Content
 
 ---
 
+### AC-15: NUNCA se persisten blob URLs (drive URL o nada)
+
+> **Contexto del bug** (23-jul-2026): 3 docs (Cédula de Fredy, Cédula de Esperanza,
+> Certificado de Tradición principal) NO se persistieron en MySQL cuando el agente
+> subió docs al wizard. El server tenía `blob:https://inmocontrol.tecnowebs...` en
+> `property_documents.file_url` y al refrescar el browser el blob expiró.
+> El Detalle del Inmueble mostraba "Ver" verde pero el visor decía "moved, edited,
+> or deleted" porque el blob URL ya no existía.
+
+**Fix implementado** (3 capas de defensa — ver `docs/specs/wizard_property.md` AC-15):
+1. Cliente Caso B (`PropertiesView.tsx:626-647`): si `docUrl` es `blob:`, NO postea a `/api/properties`.
+2. Cliente `handleFinalize` (`PropertiesView.tsx:1071+`): fuente de verdad es `uploadedDocs` (no `wizardFiles`).
+3. Server (`server/routes/properties.ts:475-484`): rechaza `blob:`/`data:` URLs con log warning.
+
+**Sub-test AC-15.A: Server rechaza blob URLs (capa 3 — defensa raíz)**
+
+```powershell
+# Test: enviar un POST a /api/properties con un blob URL en documents.
+# Esperado: el server NO crea la fila en property_documents, log warning.
+$body = @"
+{
+  "localId": "TEST-AC15A",
+  "address": "TEST AC-15.A",
+  "chip": "AAATEST15A",
+  "folio": "50NTEST15A",
+  "ownerName": "Test Owner",
+  "documents": {
+    "cedula:OWNERID": "blob:https://inmocontrol.tecnowebsupportia.com/fake-uuid-1234"
+  }
+}
+"@
+$res = Invoke-WebRequest "https://inmocontrol.tecnowebsupportia.com/api/properties" `
+  -Method POST -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 15
+Write-Host "Status: $($res.StatusCode)"
+# Esperado: 200 (la propiedad se crea OK), pero property_documents NO tiene la fila blob.
+
+# Verificar en phpMyAdmin:
+# SELECT * FROM property_documents
+#  WHERE property_id = (SELECT id FROM properties WHERE address = 'TEST AC-15.A')
+#    AND file_url LIKE 'blob:%';
+# Esperado: 0 filas. Si hay 1+ → FAIL.
+```
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-15.B: Cliente NO postea blob URLs (capa 1)**
+
+**Pasos manuales:**
+1. DevTools → Network → Block `*googleapis.com*` (simular Drive caído).
+2. Abrir Detalle del Inmueble de cualquier propiedad (debe tener Drive folder asociado).
+3. Subir un PDF a la card de Cédula de un owner.
+4. **Verificar toast**: NO debe decir "Documento guardado en este navegador" — debe decir algo como "Reconectá Drive y reintentá la subida".
+5. En phpMyAdmin:
+   ```sql
+   SELECT file_url FROM property_documents
+    WHERE property_id = 'X' AND file_url LIKE 'blob:%';
+   ```
+   Esperado: **0 filas** (el cliente NO mandó el POST al server).
+6. **Verificar el card en la UI**: muestra botón ámbar "Re-subir" + tooltip "Archivo previo perdido" (porque la URL es blob en el state local del card).
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-15.C: Caso C del wizard — URLs de Drive SÍ se persisten inmediatamente**
+
+**Pasos manuales (el fix más importante):**
+1. Hard refresh del browser.
+2. Wizard → step 1 → llenar datos válidos → "Continuar a Documentación" (debe persistir en MySQL con `status='Pendiente'`).
+3. Step 2: subir un PDF a la card de Cédula de un owner.
+4. **Verificar toast**: "✓ Cedula_Nombre_Owner.pdf subido a Drive".
+5. **Refrescar la página INMEDIATAMENTE (Ctrl+Shift+R)** sin finalizar el wizard.
+6. Re-abrir el wizard → debería restaurar `wizardPropertyDbId` y los `uploadedDocs`.
+7. Click "Finalizar" (incluso con wizard sin inventario).
+8. En phpMyAdmin:
+   ```sql
+   SELECT file_url FROM property_documents WHERE property_id = 'X';
+   ```
+   Esperado: la URL es `https://drive.google.com/...`, NO `blob:...`.
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-15.D: handleFinalize usa uploadedDocs como fuente de verdad (capa 2)**
+
+**Pasos:**
+1. Wizard → step 1 → "Continuar a Documentación" (AC-1 ya validado).
+2. Step 2: subir 2 PDFs a slots distintos (caso Cédula + Predial).
+3. **Refrescar la página** antes de finalizar → el `wizardFiles` (en memoria) se pierde, pero `uploadedDocs` (en localStorage) se restaura.
+4. Re-abrir wizard → restaurar state.
+5. Step 3: completar inventario mínimamente → click "Finalizar".
+6. En phpMyAdmin:
+   ```sql
+   SELECT file_url FROM property_documents WHERE property_id = 'X';
+   ```
+   Esperado: 2 filas con URLs `https://drive.google.com/...` (las del Caso C). **Si hay 0 filas o URLs blob → FAIL.**
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-16: URLs de Drive persistidas siempre son válidas (proxy funciona)
+
+> **Contexto**: el bug fue que `property_documents.file_url` tenía un `webViewLink`
+> de Drive (`https://drive.google.com/file/d/.../view?usp=drivesdk`) pero al abrir
+> el visor embebido decía "moved, edited, or deleted". La causa: el archivo en
+> Drive SÍ existía pero la URL directa al visor de Drive requiere login de Google.
+> El fix: el viewer de InmoControl usa `/api/drive/file?fileId=X` (proxy server-side)
+> que sirve el PDF con el OAuth token del server.
+
+**Sub-test AC-16.A: El visor embebido usa el proxy, NO la URL directa**
+
+**Pasos:**
+1. Hard refresh del browser.
+2. Abrir Detalle del Inmueble de una propiedad con un doc subido (ej: Cédula).
+3. Click "Ver" en la card.
+4. **DevTools → Network**: filtrar por `file?fileId=`.
+5. **Verificar**: la request es a `/api/drive/file?fileId=XXXX`, NO a `https://drive.google.com/...`.
+6. **Verificar la response**: status 200, Content-Type `application/pdf`.
+7. **Verificar el iframe**: muestra el PDF, NO el mensaje "moved, edited, or deleted".
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-16.B: El proxy responde 200 para archivos válidos, 404 para inválidos**
+
+```powershell
+# Test: el proxy funciona para un fileId real (sacado de la DB).
+# Reemplazar FILE_ID con un valor de property_documents.file_url.
+$fileId = "1A2b3C4d5E6f7G8h"  # TODO: cambiar por uno real
+$res = Invoke-WebRequest "https://inmocontrol.tecnowebsupportia.com/api/drive/file?fileId=$fileId" `
+  -Method GET -UseBasicParsing -TimeoutSec 15
+Write-Host "Status: $($res.StatusCode)"
+Write-Host "Content-Type: $($res.Headers['Content-Type'])"
+# Esperado: 200 + Content-Type: application/pdf.
+# Si es 404 → el archivo en Drive no existe (FAIL del fix anterior).
+# Si es 503 → Drive no conectado (FAIL del check de status).
+# Si es 403 → token sin permisos (FAIL del OAuth).
+```
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-16.C: Las URLs zombie (blob) muestran badge honesto en el Detalle**
+
+**Pasos:**
+1. Limpiar TODAS las filas zombie de la DB primero:
+   ```sql
+   DELETE FROM property_documents WHERE file_url LIKE 'blob:%';
+   ```
+2. Re-abrir la propiedad donde estaban las zombie rows (KR 12 142 74 AP 303).
+3. **Verificar**: las cards (Cédulas, Certificados, Mandato) muestran botón ámbar "Re-subir", NO botón verde "Ver".
+4. Re-subir el PDF de Cédula de un owner.
+5. **Verificar**: ahora muestra "Ver" verde, y al click abre el PDF correctamente.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-17: Discard confirma antes de borrar archivos ya subidos a Drive
+
+> **Contexto**: si el agente sube un PDF a Drive durante el wizard y luego clickea
+> "Descartar borrador", se borra la propiedad de MySQL y la carpeta de Drive.
+> PERO los archivos ya subidos también desaparecen sin warning.
+> Fix: mostrar modal con lista de archivos a perder + advertencia explícita.
+
+**Sub-test AC-17.A: Modal de confirmación aparece si hay archivos en Drive**
+
+**Pasos:**
+1. Wizard → step 1 → "Continuar a Documentación" (propiedad persistida en MySQL).
+2. Step 2: subir 1 PDF a cualquier card con Drive conectado.
+3. Step 2: NO finalizar. Click en "Descartar borrador" (esquina superior).
+4. **Verificar modal**: aparece con la lista explícita:
+   > "Vas a perder 1 archivo ya subido a Drive:
+   > • Cedula_Nombre.pdf (1.2 MB)
+   > ¿Continuar?"
+5. Botones: "Cancelar" + "Sí, descartar".
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-17.B: Cancelar preserva todo (rollback) — happy path**
+
+**Pasos:**
+1. Wizard abierto con 1 PDF ya subido a Drive.
+2. Click "Descartar borrador" → modal aparece.
+3. Click "Cancelar".
+4. **Verificar**: el modal se cierra, la propiedad SIGUE en MySQL, los archivos SIGUEN en Drive.
+5. En phpMyAdmin: la fila de la propiedad y la fila de property_documents siguen existiendo.
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-17.C: Confirmar borra propiedad + archivos de Drive**
+
+**Pasos:**
+1. Wizard abierto con 1 PDF ya subido a Drive.
+2. Click "Descartar borrador" → modal aparece.
+3. Click "Sí, descartar".
+4. **Verificar**: modal se cierra, wizard se resetea a step 1.
+5. En phpMyAdmin:
+   ```sql
+   SELECT * FROM properties WHERE address = 'TEST-AC17';
+   SELECT * FROM property_documents WHERE property_id = 'X';
+   ```
+   Esperado: 0 filas en ambas.
+6. En Google Drive: el archivo YA NO está en la carpeta de la propiedad.
+
+**Status:** ⏳ Pending
+
+---
+
+**Sub-test AC-17.D: Discard sin archivos en Drive (propiedad solo persistida)**
+
+**Pasos:**
+1. Wizard → step 1 → "Continuar a Documentación" (AC-1) — sin subir ningún doc.
+2. Click "Descartar borrador".
+3. **Verificar modal**: aparece con texto simple "Esta propiedad todavía no tiene archivos. ¿Continuar?" (sin lista de archivos).
+4. Click "Sí, descartar".
+5. En phpMyAdmin: la fila de la propiedad debe haber sido borrada.
+
+**Status:** ⏳ Pending
+
+---
+
 ## Edge Cases
 
 ### EC-1: Drive caído completamente (todo el wizard)
@@ -302,13 +534,13 @@ Write-Host $h.Content
 
 | Check | Status | Notas |
 |-------|--------|-------|
-| PRE-1 | ⏳ | — |
+| PRE-1 | ✅ | health check OK |
 | AC-1 | ⏳ | — |
 | AC-2 | ⏳ | — |
 | AC-3 | ⏳ | — |
 | AC-4 | ⏳ | — |
 | AC-5 | ⏳ | — |
-| AC-6 | ⏳ | — |
+| AC-6 | ✅ | errores devuelven JSON, no HTML |
 | AC-7 | ⏳ | — |
 | AC-8 | ⏳ | — |
 | AC-9 | ⏳ | — |
@@ -317,6 +549,17 @@ Write-Host $h.Content
 | AC-12 | ⏳ | — |
 | AC-13 | ⏳ | — |
 | AC-14 | ⏳ | — |
+| **AC-15.A** | ⏳ | **server rechaza blob URLs** (defensa raíz) |
+| **AC-15.B** | ⏳ | **cliente NO postea blob** (Caso B del Detalle) |
+| **AC-15.C** | ⏳ | **Caso C wizard persiste inmediatamente** |
+| **AC-15.D** | ⏳ | **handleFinalize usa uploadedDocs** (sobrevive refresh) |
+| **AC-16.A** | ⏳ | **visor usa proxy** (no URL directa) |
+| **AC-16.B** | ⏳ | **proxy responde 200/404** (archivos válidos/inválidos) |
+| **AC-16.C** | ⏳ | **URLs zombie muestran badge honesto** |
+| **AC-17.A** | ⏳ | **modal aparece con archivos a perder** |
+| **AC-17.B** | ⏳ | **cancelar preserva todo** (rollback) |
+| **AC-17.C** | ⏳ | **confirmar borra propiedad + archivos** |
+| **AC-17.D** | ⏳ | **discard sin archivos** (mensaje simple) |
 | EC-1 | ⏳ | — |
 | EC-13 | ⏳ | — |
 
@@ -329,3 +572,5 @@ Write-Host $h.Content
 | Fecha | Commit deployado | Pass / Total | Notas |
 |-------|------------------|--------------|-------|
 | 2026-07-22 | baseline (post-deploys de la sesión) | 0/17 | primera ejecución — esperamos ver varios FAILs |
+| 2026-07-23 | (post-update del spec con AC-15/16/17) | ⏳ | esperando browser checks del user |
+| 2026-07-23 | `4c6a6e9` (3 capas defensa) + `47a8272` (Drive honesto) | ⏳ | deployado. AC-15, AC-16, AC-17 reescritos con sub-tests. Esperando ejecución en prod. |
