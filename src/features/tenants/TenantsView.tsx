@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
 import { motion } from 'motion/react';
-import { Edit, Eye, Plus, Search, User, Phone, Mail, FileText, FileSignature, Trash2, X, RefreshCw } from 'lucide-react';
+import { Edit, Eye, Plus, Search, User, Phone, Mail, FileText, FileSignature, Trash2, X, RefreshCw, Loader2 } from 'lucide-react';
 import { Button, Card, Input, Modal } from '../../shared/ui';
 import { ProcessOrderBanner } from '../../shared/ui/ProcessOrderBanner';
 import { StepInventory } from '../properties/components/StepInventory';
@@ -213,6 +213,10 @@ export function TenantsView({
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [confirmCreateOpen, setConfirmCreateOpen] = useState(false);
+  // FIX 2026-07-22: loading state para que el modal muestre "Guardando..."
+  // mientras el POST corre. Sin esto, el modal se cierra antes de que el
+  // server responda y el usuario no sabe si el guardado fue OK o no.
+  const [creatingTenant, setCreatingTenant] = useState(false);
 
   // Formato colombiano del celular: 3001234567 -> 300 123 4567
   const formatColombianPhone = (raw: string): string => {
@@ -327,7 +331,12 @@ export function TenantsView({
   };
 
   const handleConfirmAndCreate = async () => {
-    setConfirmCreateOpen(false);
+    // FIX 2026-07-22: NO cerrar el modal inmediatamente. Si lo cerramos
+    // antes de que el POST termine y el server tarda (ej: Drive está
+    // lento), el usuario ve el modal desaparecer y piensa "no se guardó"
+    // cuando en realidad el request sigue corriendo. Ahora mostramos un
+    // loading state en el mismo modal y solo cerramos cuando hay éxito
+    // (o mostramos el error manteniendo el modal abierto).
     const selectedProperty = properties.find((p: any) => p.id === form.propertyId);
     const rentValue = parseFloat(String(form.rent ?? '').replace(/[^0-9]/g, '')) || 0;
     const today = new Date().toISOString().split('T')[0];
@@ -338,23 +347,36 @@ export function TenantsView({
       return;
     }
 
+    setCreatingTenant(true); // ← loading state en el modal
     try {
-      const res = await fetch('/api/tenants', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          propertyId: form.propertyId,
-          propertyDriveFolderId: selectedProperty?.driveFolderId || null,
-          propertyAddress: selectedProperty?.address,
-          name: formatTenantName(form.name),
-          idNumber: formatIdNumber(form.idNumber),
-          email: form.email,
-          phone: form.phone,
-          rent: rentValue,
-          adminFee: parseFloat(String(form.adminFee ?? '').replace(/[^0-9]/g, '')) || 0,
-          leaseStartDate: today,
-        }),
-      });
+      // Timeout agresivo: si el server no responde en 15s, abortamos.
+      // El server tiene 8s de timeout en Drive + 1-2s en DB → 15s es
+      // generoso. Si pasa, el modal sigue abierto con error claro.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+      let res: Response;
+      try {
+        res = await fetch('/api/tenants', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            propertyId: form.propertyId,
+            propertyDriveFolderId: selectedProperty?.driveFolderId || null,
+            propertyAddress: selectedProperty?.address,
+            name: formatTenantName(form.name),
+            idNumber: formatIdNumber(form.idNumber),
+            email: form.email,
+            phone: form.phone,
+            rent: rentValue,
+            adminFee: parseFloat(String(form.adminFee ?? '').replace(/[^0-9]/g, '')) || 0,
+            leaseStartDate: today,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       const data = await res.json();
       if (!res.ok) {
@@ -364,6 +386,7 @@ export function TenantsView({
         } else {
           showToast(data.error || 'Error al crear arrendatario', 'error');
         }
+        setCreatingTenant(false); // ← modal sigue abierto para que el user corrija
         return;
       }
 
@@ -397,9 +420,15 @@ export function TenantsView({
       setForm({ name: '', idNumber: '', email: '', phone: '', propertyId: '', rent: '', adminFee: '' });
       setFormErrors({});
       setIsCreateModalOpen(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showToast('Error de conexión con el servidor', 'error');
+      if (err?.name === 'AbortError') {
+        showToast('El servidor tardó demasiado. Reintentá en unos segundos.', 'error');
+      } else {
+        showToast('Error de conexión con el servidor', 'error');
+      }
+    } finally {
+      setCreatingTenant(false);
     }
   };
 
@@ -676,7 +705,10 @@ export function TenantsView({
           estado de la propiedad a "Arrendado" + cree carpeta en Drive. */}
       <Modal
         isOpen={confirmCreateOpen}
-        onClose={() => setConfirmCreateOpen(false)}
+        // FIX 2026-07-22: si está creando, NO dejamos cerrar el modal con
+        // click afuera o ESC. Si no, se puede cancelar a mitad del POST y
+        // el server queda con el tenant creado pero la UI sin saberlo.
+        onClose={() => { if (!creatingTenant) setConfirmCreateOpen(false); }}
         title="¿Guardar arrendatario?"
         size="sm"
       >
@@ -708,11 +740,22 @@ export function TenantsView({
           </div>
 
           <div className="pt-2 flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setConfirmCreateOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmCreateOpen(false)}
+              disabled={creatingTenant}
+            >
               Modificar
             </Button>
-            <Button onClick={handleConfirmAndCreate}>
-              Sí, guardar
+            <Button onClick={handleConfirmAndCreate} disabled={creatingTenant}>
+              {creatingTenant ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                  Guardando...
+                </>
+              ) : (
+                'Sí, guardar'
+              )}
             </Button>
           </div>
         </div>

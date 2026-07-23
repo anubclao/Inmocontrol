@@ -7,6 +7,27 @@ import { Readable } from 'stream';
 import pool, { ensureDefaultOrg } from '../db.js';
 import { isTokenExpiringSoon } from '../lib/googleAuth.js';
 
+/**
+ * FIX 2026-07-22: timeout estricto para llamadas a Google Drive.
+ * Sin esto, si Google está lento o inalcanzable desde el server de
+ * Hostinger, `drive.files.create/list` se cuelga para siempre y el
+ * request POST /api/tenants nunca termina. Mismo problema que
+ * documenté en properties.ts (mismo fix). 8s es generoso (Google
+ * suele responder en <2s) y evita que un problema de red tire abajo
+ * el guardado del inquilino.
+ */
+const GOOGLE_API_TIMEOUT_MS = 8_000;
+
+function withTimeout<T = any>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 const router = express.Router();
 
 const oauth2Client = new google.auth.OAuth2(
@@ -52,6 +73,11 @@ async function getFreshDriveClient() {
  * Body: { propertyId, name, idNumber, email, phone, rent }
  */
 router.post('/', async (req, res) => {
+  // FIX 2026-07-22: top-level try/catch para que cualquier error no
+  // atrapado devuelva JSON (antes devolvía HTML 500 y el frontend
+  // tiraba SyntaxError).
+  try {
+
   const { propertyId, name, idNumber, email, phone, rent, leaseStartDate } = req.body as {
     propertyId: string;
     name: string;
@@ -107,30 +133,42 @@ router.post('/', async (req, res) => {
     try {
       // 1a. Si no hay carpeta del inmueble, crearla
       if (!propertyDriveFolderId && propertyAddress) {
-        const [tokensRows] = await pool.query<any[]>(
-          'SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-          ['default_user', 'google_drive'],
+        const [tokensRows] = await withTimeout(
+          pool.query<any[]>(
+            'SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+            ['default_user', 'google_drive'],
+          ),
+          GOOGLE_API_TIMEOUT_MS,
+          'tokens SELECT (tenant POST)',
         );
         const rootFolderId = tokensRows[0]?.drive_folder_id;
 
         if (rootFolderId) {
           // Buscar si ya existe una carpeta con este address
-          const existing = await drive.files.list({
-            q: `name='${propertyAddress.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
-            fields: 'files(id)',
-            spaces: 'drive',
-          });
+          const existing = await withTimeout(
+            drive.files.list({
+              q: `name='${propertyAddress.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+              fields: 'files(id)',
+              spaces: 'drive',
+            }),
+            GOOGLE_API_TIMEOUT_MS,
+            'drive.files.list (property folder)',
+          );
 
           let propertyFolderId = existing.data.files?.[0]?.id;
           if (!propertyFolderId) {
-            const created = await drive.files.create({
-              requestBody: {
-                name: propertyAddress,
-                mimeType: 'application/vnd.google-apps.folder',
-                parents: [rootFolderId],
-              },
-              fields: 'id',
-            });
+            const created = await withTimeout(
+              drive.files.create({
+                requestBody: {
+                  name: propertyAddress,
+                  mimeType: 'application/vnd.google-apps.folder',
+                  parents: [rootFolderId],
+                },
+                fields: 'id',
+              }),
+              GOOGLE_API_TIMEOUT_MS,
+              'drive.files.create (property folder)',
+            );
             propertyFolderId = created.data.id!;
             console.log(`[Drive] Carpeta de inmueble creada: "${propertyAddress}" → ${propertyFolderId}`);
           }
@@ -141,33 +179,46 @@ router.post('/', async (req, res) => {
       // 1b. Crear carpeta del arrendatario dentro de la carpeta del inmueble
       if (propertyDriveFolderId) {
         const folderName = `${name.trim()} (${String(idNumber).replace(/\D/g, '')})`;
-        const folderRes = await drive.files.create({
-          requestBody: {
-            name: folderName,
-            mimeType: 'application/vnd.google-apps.folder',
-            parents: [propertyDriveFolderId],
-          },
-          fields: 'id',
-        });
+        const folderRes = await withTimeout(
+          drive.files.create({
+            requestBody: {
+              name: folderName,
+              mimeType: 'application/vnd.google-apps.folder',
+              parents: [propertyDriveFolderId],
+            },
+            fields: 'id',
+          }),
+          GOOGLE_API_TIMEOUT_MS,
+          'drive.files.create (tenant folder)',
+        );
         tenantDriveFolderId = folderRes.data.id!;
 
         // Subcarpetas: Cedula, Contrato, Recibos
         const subfolders = ['Cedula', 'Contrato', 'Recibos'];
         for (const sf of subfolders) {
-          await drive.files.create({
-            requestBody: {
-              name: sf,
-              mimeType: 'application/vnd.google-apps.folder',
-              parents: [tenantDriveFolderId],
-            },
-            fields: 'id',
-          });
+          await withTimeout(
+            drive.files.create({
+              requestBody: {
+                name: sf,
+                mimeType: 'application/vnd.google-apps.folder',
+                parents: [tenantDriveFolderId],
+              },
+              fields: 'id',
+            }),
+            GOOGLE_API_TIMEOUT_MS,
+            `drive.files.create (subfolder ${sf})`,
+          );
         }
 
         console.log(`[Drive] Carpeta de arrendatario creada: "${folderName}" → ${tenantDriveFolderId}`);
       }
     } catch (err: any) {
-      console.warn('[Drive] Error creando carpetas:', err.message);
+      // FIX 2026-07-22: con los timeouts en cada llamada a Drive, el catch
+      // ahora también agarra timeouts. Continuamos sin Drive — el tenant
+      // se guarda en MySQL igual y la carpeta se puede crear después
+      // desde el Detalle del Inmueble.
+      console.warn('[Drive] Error creando carpetas (continuando sin Drive):', err.message);
+      tenantDriveFolderId = null;
     }
   }
 
@@ -221,6 +272,15 @@ router.post('/', async (req, res) => {
       ? 'Arrendatario creado con carpeta en Google Drive'
       : 'Arrendatario creado (sin Drive — conecta tu Google Drive en Configuración)',
   });
+  } catch (err: any) {
+    console.error('[POST /api/tenants] UNHANDLED:', err.message ?? err);
+    if (err?.stack) console.error(err.stack);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Error inesperado creando arrendatario: ' + (err.message ?? String(err)),
+      });
+    }
+  }
 });
 
 /**
