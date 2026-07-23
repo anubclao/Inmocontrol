@@ -1570,7 +1570,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     setPhotoGalleryLoading(true);
     try {
       let inventory = await inventoryDB.getInventory(`${property.id}:${phase}`);
-      if (!inventory) {
+      // FIX (jul-2026): disparar el fallback a MySQL no solo cuando NO hay
+      // row en IndexedDB, sino también cuando la row existe pero `photos` está
+      // vacío. Esto cubre el caso de IndexedDB stale (self-heal previo convirtió
+      // un Record a `[]`, o limpieza de caché del navegador dejó huérfano el
+      // `photos` store mientras MySQL sí tiene las 13 fotos con dataUrl).
+      const localPhotos = inventory ? normalizePhotosArray(inventory.photos) : [];
+      const shouldFetchFromMysql = !inventory || localPhotos.length === 0;
+      if (shouldFetchFromMysql) {
         // Fallback: traer de MySQL
         try {
           const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(property.id)}`);
@@ -1578,6 +1585,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             const data = await res.json();
             const remote = (data.inventories ?? []).find((i: any) => i.phase === phase);
             if (remote) {
+              const remotePhotos = normalizePhotosArray(remote.photos);
+              if (remotePhotos.length > 0) {
+                console.log(`[gallery] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`);
+              }
               inventory = {
                 id: remote.id,
                 propertyId: remote.property_id,
@@ -1587,7 +1598,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 areas: remote.areas ?? [],
                 // FIX (jul-2026): `remote.photos` puede llegar como Record/Object
                 // desde MySQL si la data se guardó mal. Normalizamos al array.
-                photos: normalizePhotosArray(remote.photos),
+                photos: remotePhotos,
                 signatures: remote.signatures ?? [],
                 customAreas: remote.custom_areas ?? [],
                 signedAt: remote.signed_at,
@@ -2955,6 +2966,74 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   Las fotos se guardan en el navegador (IndexedDB). Si limpiaste la caché del navegador,
                   podés volver a tomarlas desde el botón "Inicial" / "Final".
                 </p>
+                {/* FIX Karpathy (jul-2026): si MySQL tiene las fotos (caso típico:
+                    IndexedDB stale post-self-heal o limpieza de caché), este
+                    botón re-hidrata manualmente. La galería SI ya intentó
+                    re-hidratarse al abrir — este botón es para reintento. */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setPhotoGalleryLoading(true);
+                    try {
+                      const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(photoGallery.propertyId)}`);
+                      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                      const data = await res.json();
+                      const remote = (data.inventories ?? []).find((i: any) => i.phase === 'inicial' || i.phase === 'final');
+                      if (!remote) {
+                        showToast('No se encontró inventario en el servidor', 'error');
+                        return;
+                      }
+                      const remotePhotos = normalizePhotosArray(remote.photos);
+                      if (remotePhotos.length === 0) {
+                        showToast('El servidor tampoco tiene fotos para este inventario', 'error');
+                        return;
+                      }
+                      // Re-hidratar IndexedDB
+                      const inv = {
+                        id: remote.id,
+                        propertyId: remote.property_id,
+                        phase: remote.phase,
+                        propertyType: remote.property_type,
+                        counters: remote.counters ?? {},
+                        areas: remote.areas ?? [],
+                        photos: remotePhotos,
+                        signatures: remote.signatures ?? [],
+                        customAreas: remote.custom_areas ?? [],
+                        signedAt: remote.signed_at,
+                        createdAt: remote.created_at,
+                        updatedAt: remote.updated_at,
+                      };
+                      await inventoryDB.saveInventory(inv as any);
+                      for (const p of remotePhotos) {
+                        if ((p as any)?.dataUrl) {
+                          await inventoryDB.savePhoto({
+                            id: (p as any).id,
+                            inventoryId: remote.id,
+                            dataUrl: (p as any).dataUrl,
+                            areaId: (p as any).areaId,
+                            fileName: (p as any).fileName,
+                            takenAt: (p as any).takenAt,
+                          });
+                        }
+                      }
+                      showToast(`✓ ${remotePhotos.length} fotos recuperadas del servidor`, 'success');
+                      // Cerrar y reabrir la galería para que se muestren
+                      setPhotoGallery(null);
+                      void openPhotoGallery({ id: photoGallery.propertyId, address: photoGallery.address }, remote.phase as 'inicial' | 'final');
+                    } catch (err: any) {
+                      console.error('[gallery] manual re-hydrate failed:', err);
+                      showToast(`Error recuperando fotos: ${err?.message ?? err}`, 'error');
+                    } finally {
+                      setPhotoGalleryLoading(false);
+                    }
+                  }}
+                  disabled={photoGalleryLoading}
+                  className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors disabled:opacity-50"
+                  data-testid="gallery-recover-from-mysql"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${photoGalleryLoading ? 'animate-spin' : ''}`} />
+                  Recuperar fotos del servidor
+                </button>
               </div>
             ) : (
               <>

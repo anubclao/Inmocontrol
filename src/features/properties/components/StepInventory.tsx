@@ -85,11 +85,15 @@ export function StepInventory({
       setLoading(true);
       let existing = await inventoryDB.getInventory(inventoryId);
 
-      // FIX: si IndexedDB está vacío (porque el usuario corrió reset-data.js
-      // o porque el inventario se creó en otra sesión del browser), intentamos
-      // recuperar desde MySQL. El inventario se guarda en `inventories.photos`
-      // (JSON column) con `dataUrl` base64, así que las fotos NO se pierden.
-      if (!existing) {
+      // FIX (jul-2026): disparar el fallback a MySQL no solo cuando NO hay
+      // row en IndexedDB, sino también cuando la row existe pero `photos` está
+      // vacío. Cubre el caso de IndexedDB stale (self-heal previo convirtió
+      // un Record a `[]`, o limpieza de caché del navegador dejó huérfano el
+      // `photos` store mientras MySQL sí tiene las fotos con dataUrl).
+      const localPhotos = existing ? normalizePhotosArray(existing.photos) : [];
+      const shouldFetchFromMysql = !existing || localPhotos.length === 0;
+
+      if (shouldFetchFromMysql) {
         try {
           const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(propertyId)}`);
           if (res.ok) {
@@ -98,6 +102,10 @@ export function StepInventory({
               (i: any) => i.phase === phase,
             );
             if (remote) {
+              const remotePhotos = normalizePhotosArray(remote.photos);
+              if (remotePhotos.length > 0) {
+                console.log(`[inventory] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`);
+              }
               existing = {
                 id: remote.id,
                 propertyId: remote.property_id,
@@ -107,7 +115,7 @@ export function StepInventory({
                 areas: remote.areas ?? [],
                 // FIX (jul-2026): `remote.photos` puede llegar como Record/Object
                 // desde MySQL si la data legacy se guardó mal. Normalizamos.
-                photos: normalizePhotosArray(remote.photos),
+                photos: remotePhotos,
                 signatures: remote.signatures ?? [],
                 customAreas: remote.custom_areas ?? [],
                 signedAt: remote.signed_at,
