@@ -1623,12 +1623,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // desde IndexedDB o MySQL (data legacy). `?? []` no protege contra
       // objetos, solo contra null/undefined. `normalizePhotosArray()`
       // convierte cualquier forma (array | record | null) a array.
-      // Si detectamos forma objeto, re-save en IndexedDB para self-heal.
+      // Si detectamos forma objeto, re-save en IndexedDB para self-heal —
+      // así la próxima lectura ya no tiene que normalizar.
       const rawPhotos = inventory.photos;
       const photoList = normalizePhotosArray(rawPhotos);
-      if (photoList.length === 0 && rawPhotos && typeof rawPhotos === 'object' && !Array.isArray(rawPhotos)) {
-        console.warn('[gallery] inventory.photos era Record/Object — normalizado a array vacío. Self-heal save.');
-        void inventoryDB.saveInventory({ ...inventory, photos: [] });
+      if (rawPhotos && typeof rawPhotos === 'object' && !Array.isArray(rawPhotos)) {
+        const shape = photoList.length === 0 ? 'array vacío (id set sin metadata)' : 'array con metadata';
+        console.warn(`[gallery] inventory.photos era Record/Object — normalizado a ${shape}. Self-heal save.`);
+        void inventoryDB.saveInventory({ ...inventory, photos: photoList });
       }
       const allPhotoIds = photoList.map((p: any) => p.id);
       const photos: Array<{

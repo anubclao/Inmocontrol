@@ -140,11 +140,13 @@ export function StepInventory({
       if (existing) {
         // FIX (jul-2026): normalizar `photos` por si IndexedDB tiene data
         // legacy con forma Record/Object en vez de Array. Si la forma era
-        // objeto, re-save con la forma correcta (self-heal).
+        // objeto, re-save con la forma correcta (self-heal) — así la
+        // próxima lectura ya no tiene que normalizar.
         const normalizedPhotos = normalizePhotosArray(existing.photos);
-        if (normalizedPhotos.length === 0 && existing.photos && typeof existing.photos === 'object' && !Array.isArray(existing.photos)) {
-          console.warn(`[inventory] ${inventoryId}: photos era Record/Object — normalizado a array vacío. Self-heal save.`);
-          existing = { ...existing, photos: [] };
+        if (existing.photos && typeof existing.photos === 'object' && !Array.isArray(existing.photos)) {
+          const shape = normalizedPhotos.length === 0 ? 'array vacío (id set sin metadata)' : 'array con metadata';
+          console.warn(`[inventory] ${inventoryId}: photos era Record/Object — normalizado a ${shape}. Self-heal save.`);
+          existing = { ...existing, photos: normalizedPhotos };
           void inventoryDB.saveInventory(existing);
         } else if (normalizedPhotos !== existing.photos) {
           existing = { ...existing, photos: normalizedPhotos };
