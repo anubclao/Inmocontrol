@@ -32,7 +32,9 @@ export interface TenantsViewProps {
   tenants: Tenant[];
   properties: any[];
   onAddTenant: (tenant: any) => void;
-  onUpdateTenant: (id: string, updates: any) => void;
+  /** Devuelve `true` si el PATCH OK, `false` si falló. El modal de edición
+   *  usa el return para mostrar el toast correcto. */
+  onUpdateTenant: (id: string, updates: any) => Promise<boolean>;
   onDeleteTenant: (id: string) => Promise<void>;
   onUpdateProperty: (id: string, updates: any) => void;
   role: Role | null;
@@ -793,6 +795,16 @@ export function TenantsView({
               value={editingTenant.rent}
               onChange={(e) => setEditingTenant({ ...editingTenant, rent: e.target.value })}
             />
+            <Input
+              label="Cuota Administración (COP)"
+              placeholder="$ 0"
+              // FIX Karpathy (jul-2026): campo agregado al modal de edición.
+              // Antes el adminFee solo se podía setear al CREAR el tenant.
+              // Ahora aparece siempre (algunas propiedades tienen admin, otras
+              // no) y se pre-rellena con el valor actual. Opcional.
+              value={editingTenant.adminFee != null ? String(editingTenant.adminFee) : ''}
+              onChange={(e) => setEditingTenant({ ...editingTenant, adminFee: e.target.value })}
+            />
             <div className="space-y-1">
               <label className="text-xs font-bold text-slate-500 uppercase">Estado</label>
               <select
@@ -806,16 +818,31 @@ export function TenantsView({
             </div>
             <div className="pt-4 flex justify-end gap-3">
               <Button variant="outline" onClick={() => setEditingTenant(null)}>Cancelar</Button>
-              <Button onClick={() => {
-                onUpdateTenant(editingTenant.id, {
+              <Button onClick={async () => {
+                // FIX Karpathy (jul-2026): antes era fire-and-forget con toast
+                // mentiroso. Ahora esperamos el resultado real del store y
+                // mostramos el toast correcto según éxito/error.
+                // Limpiamos adminFee igual que el modal de Crear: solo números,
+                // default 0 si está vacío.
+                const adminFeeClean = parseFloat(
+                  String(editingTenant.adminFee ?? '').replace(/[^0-9]/g, '')
+                ) || 0;
+                const ok = await onUpdateTenant(editingTenant.id, {
                   name: editingTenant.name,
                   idNumber: editingTenant.idNumber,
                   email: editingTenant.email,
                   phone: editingTenant.phone,
                   rent: editingTenant.rent,
+                  adminFee: adminFeeClean,
                   status: editingTenant.status,
                 });
-                setEditingTenant(null);
+                if (ok) {
+                  showToast(`✓ Cambios guardados: ${editingTenant.name}`, 'success');
+                  setEditingTenant(null);
+                } else {
+                  // Modal NO se cierra — el agente puede reintentar.
+                  showToast('Error al guardar cambios. Reintentá en unos segundos.', 'error');
+                }
               }}>Guardar Cambios</Button>
             </div>
           </div>

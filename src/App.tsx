@@ -293,9 +293,20 @@ export default function App() {
     updateProperty(id, updates);
     showToast('Propiedad actualizada');
   };
-  const handleUpdateTenant = (id: string, updates: any) => {
-    updateTenant(id, updates);
-    showToast('Inquilino actualizado');
+  const handleUpdateTenant = async (id: string, updates: any): Promise<boolean> => {
+    // FIX Karpathy (jul-2026): antes era fire-and-forget con toast mentiroso
+    // ("Inquilino actualizado" aparecía aunque el server hubiera devuelto 500).
+    // Ahora esperamos el resultado real del store y mostramos el toast correcto.
+    // Retornamos el `ok` para que el modal de edición (que llama a esta función
+    // directamente) pueda mostrar su propio toast detallado (con el nombre del
+    // tenant) en vez del genérico "Inquilino actualizado".
+    const ok = await updateTenant(id, updates);
+    if (ok) {
+      showToast('Inquilino actualizado');
+    } else {
+      showToast('Error al actualizar el inquilino. Reintentá en unos segundos.', 'error');
+    }
+    return ok;
   };
   const handleAddTenant = (newTenant: any) => {
     const tenantWithId = {

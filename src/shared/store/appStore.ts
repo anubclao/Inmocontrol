@@ -30,7 +30,11 @@ interface AppState {
 
   // Tenants
   addTenant: (t: Partial<Tenant> & { id?: string }) => Promise<Tenant | null>;
-  updateTenant: (id: string, patch: Partial<Tenant>) => Promise<void>;
+  /** Devuelve `true` si el PATCH al server respondió OK, `false` si falló.
+   *  Antes era `Promise<void>` con catch silencioso — eso producía un "toast
+   *  mentiroso" en el modal de edición de tenants (toast de éxito aunque el
+   *  server hubiera devuelto 500). Ahora el caller puede mostrar feedback real. */
+  updateTenant: (id: string, patch: Partial<Tenant>) => Promise<boolean>;
   removeTenant: (id: string) => Promise<void>;
 
   // Financial
@@ -366,8 +370,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set((s) => ({
         tenants: s.tenants.map((t) => (t.id === id ? { ...t, ...patch } : t)),
       }));
+      return true;
     } catch (err: any) {
       console.error('[store] updateTenant failed:', err);
+      return false;
     }
   },
 
