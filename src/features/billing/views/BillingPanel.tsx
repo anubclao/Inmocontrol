@@ -17,10 +17,11 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ArrowLeft, Save, RefreshCw, Loader2, FileSignature,
-  Plus, Tag, TrendingUp, Receipt,
+  Plus, Tag, TrendingUp, Receipt, AlertTriangle,
 } from 'lucide-react';
 import { Button, Card, cn } from '../../../shared/ui';
 import { BillingPolicyForm } from '../components/BillingPolicyForm';
+import { BillingSetupWizard } from '../components/BillingSetupWizard';
 import { AmortizationTable } from '../components/AmortizationTable';
 import { PaymentModal } from '../components/PaymentModal';
 import { NovedadFormModal } from '../components/NovedadFormModal';
@@ -77,6 +78,12 @@ export function BillingPanel({
   const [rows, setRows] = useState<AmortizationRow[]>([]);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [payingRow, setPayingRow] = useState<AmortizationRow | null>(null);
+  // FIX Karpathy (jul-2026): track si la policy está persistida en MySQL o
+  // solo es el default temporal. Si NO está persistida, mostramos banner para
+  // que el agente sepa que tiene que configurar antes de facturar.
+  const [hasPersistedPolicy, setHasPersistedPolicy] = useState(false);
+  // Wizard de setup (se abre desde el banner).
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
 
   const [charges, setCharges] = useState<PropertyCharge[]>([]);
   const [increases, setIncreases] = useState<RentIncrease[]>([]);
@@ -132,6 +139,7 @@ export function BillingPanel({
         const effectivePolicy = existingPolicy ?? defaultPolicyFor(property);
         setPolicy(effectivePolicy);
         setPolicyDraft(effectivePolicy);
+        setHasPersistedPolicy(!!existingPolicy);
         setCharges(cList);
         setIncreases(iList);
 
@@ -415,6 +423,54 @@ export function BillingPanel({
         </Card>
       ) : (
         <>
+          {/* FIX Karpathy (jul-2026): banner si NO hay policy persistida.
+              Aparece solo después del load (loading=false). Al click, abre
+              el wizard que también se dispara desde el Inventario de Colocación. */}
+          {!hasPersistedPolicy && selectedContract && (
+            <BillingSetupWizard
+              isOpen={showSetupWizard}
+              onClose={() => setShowSetupWizard(false)}
+              showToast={showToast}
+              contract={selectedContract}
+              onSuccess={async () => {
+                setShowSetupWizard(false);
+                // Recargar la policy desde el server
+                const fresh = await getBillingPolicy(property.id);
+                if (fresh) {
+                  setPolicy(fresh);
+                  setPolicyDraft(fresh);
+                  setHasPersistedPolicy(true);
+                }
+                // Recargar amortización también
+                if (selectedContract) {
+                  const newRows = await getOrGenerateAmortization(selectedContract, fresh ?? policyDraft!);
+                  setRows(newRows);
+                }
+              }}
+            />
+          )}
+          {!hasPersistedPolicy && selectedContract && (
+            <button
+              type="button"
+              onClick={() => setShowSetupWizard(true)}
+              className="w-full flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-left hover:bg-amber-100 transition-colors group"
+              data-testid="billing-no-policy-banner"
+            >
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-amber-900">
+                  Esta propiedad no tiene política de facturación
+                </p>
+                <p className="text-[10px] text-amber-700 mt-0.5">
+                  Sin policy no se puede generar la tabla de amortización ni operar el billing.
+                  {' '}
+                  <span className="font-bold underline">Click acá para configurarla</span>.
+                </p>
+              </div>
+              <FileSignature className="w-4 h-4 text-amber-600 group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+            </button>
+          )}
+
           {/* Política */}
           <BillingPolicyForm value={policyDraft} onChange={setPolicyDraft} disabled={saving} />
 

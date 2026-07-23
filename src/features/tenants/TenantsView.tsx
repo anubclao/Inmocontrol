@@ -11,6 +11,8 @@ import { Role } from '../auth/permissions';
 import { ActaEntregaModal } from './ActaEntregaModal';
 import { createContractServer } from '../contracts/contractApi';
 import { useContractStore } from '../contracts/contractStore';
+import { BillingSetupWizard } from '../billing/components/BillingSetupWizard';
+import type { Contract } from '../contracts/contractTypes';
 
 export interface Tenant {
   id: string;
@@ -165,6 +167,10 @@ export function TenantsView({
   const [placementBaseInventory, setPlacementBaseInventory] = useState<any>(null);
   const [actaModalOpen, setActaModalOpen] = useState(false);
   const [actaStatus, setActaStatus] = useState<{ fileId?: string; webViewLink?: string } | null>(null);
+  /** FIX Karpathy (jul-2026): al firmar el Inventario de Colocación, abrimos
+   *  el wizard de billing para que el agente configure la BillingPolicy +
+   *  genere la amortización sin tener que ir manualmente al BillingPanel. */
+  const [billingWizardContract, setBillingWizardContract] = useState<Contract | null>(null);
   /** Folder al que el agente acaba de subir un PDF exitosamente. Cuando se
    *  setea, abrimos el modal "¿Querés subir otro documento?" para que pueda
    *  encadenar varias hojas (ej: 2 PDFs de cédula). */
@@ -1367,6 +1373,12 @@ export function TenantsView({
 
                     // 2) Flip de status: propiedad formalmente arrendada.
                     onUpdateProperty(placementProperty.id, { status: 'Arrendado' });
+
+                    // 3) FIX Karpathy (jul-2026): abrir el wizard de billing para
+                    // configurar la BillingPolicy + generar la amortización. El
+                    // wizard chequea si ya hay policy (AC-4) y se cierra solo si
+                    // sí. Si no hay, deja al agente configurar 1 paso consolidado.
+                    setBillingWizardContract(newContract);
                     showToast(
                       'Inventario de colocación firmado — contrato creado, propiedad ahora Arrendada',
                       'success',
@@ -1389,6 +1401,22 @@ export function TenantsView({
             />
           </div>
         </div>
+      )}
+
+      {/* ── Wizard de Billing (FIX Karpathy jul-2026) ──────── */}
+      {billingWizardContract && (
+        <BillingSetupWizard
+          isOpen={!!billingWizardContract}
+          onClose={() => setBillingWizardContract(null)}
+          showToast={showToast}
+          contract={billingWizardContract}
+          onSuccess={() => {
+            // Refrescar la lista de propiedades para que la card del
+            // BillingPanel muestre el botón "Ir al billing" sin policy.
+            // El BillingPanel mismo hace su propio fetch al mount, así que
+            // no necesitamos hacer nada extra acá.
+          }}
+        />
       )}
 
       {/* ── Modal del Acta de Entrega ─────────────────────────── */}
