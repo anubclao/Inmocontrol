@@ -18,10 +18,20 @@ interface Props {
  */
 export function DriveStatusBanner({ onGoToIntegrations }: Props) {
   const connected = useGoogleDriveStore((s) => s.connected);
+  const disconnectReason = useGoogleDriveStore((s) => s.disconnectReason);
   const checkStatus = useGoogleDriveStore((s) => s.checkStatus);
   const [checking, setChecking] = useState(false);
 
   if (connected) return null;
+
+  // FIX Karpathy (jul-2026): el título y el copy varían según la razón.
+  const titleByReason: Record<string, string> = {
+    expired: 'Tu sesión de Google Drive expiró',
+    no_token: 'Google Drive no está conectado',
+    no_expiry: 'Google Drive en estado inconsistente',
+    network: 'No se pudo verificar Google Drive',
+  };
+  const title = titleByReason[disconnectReason ?? ''] ?? 'Google Drive no está conectado';
 
   const handleRecheck = async () => {
     setChecking(true);
@@ -41,12 +51,14 @@ export function DriveStatusBanner({ onGoToIntegrations }: Props) {
       >
         <CloudOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
         <div className="flex-1 text-sm">
-          <p className="font-semibold">Google Drive no está conectado</p>
+          <p className="font-semibold">{title}</p>
           <p className="mt-0.5 text-xs text-amber-800">
             Los PDFs que subas (documentos del propietario, contratos de mandato,
             inventarios) <strong>solo se guardarán en este navegador</strong> y se
             perderán si cambias de equipo. Para guardarlos en tu Drive personal,
-            conectá tu cuenta desde Configuración → Integraciones.
+            {disconnectReason === 'expired'
+              ? ' reconectá tu cuenta (tu sesión anterior venció).'
+              : ' conectá tu cuenta desde Configuración → Integraciones.'}
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             {onGoToIntegrations && (
@@ -78,9 +90,27 @@ export function DriveStatusBanner({ onGoToIntegrations }: Props) {
  * Helper de validación: lo invocan los handlers de upload ANTES de llamar a
  * `uploadFileToDrive`. Devuelve `null` si todo OK, o un string con el motivo
  * del bloqueo si Drive está desconectado.
+ *
+ * FIX Karpathy (jul-2026): el mensaje ahora varía según `disconnectReason`:
+ *   - 'expired'   → sesión expirada (reconectar Drive)
+ *   - 'no_token'  → nunca se conectó Drive
+ *   - 'no_expiry' → estado raro, falta expiry_date
+ *   - 'network'   → no se pudo consultar el server
+ *   - null        → no hay info, mensaje genérico
  */
 export function getDriveGuardError(): string | null {
-  const { connected } = useGoogleDriveStore.getState();
+  const { connected, disconnectReason } = useGoogleDriveStore.getState();
   if (connected) return null;
-  return 'Google Drive no está conectado. Conectá tu cuenta desde Configuración → Integraciones para subir a la nube. (Si solo querés guardar local, hacé clic de nuevo en 5 segundos).';
+  switch (disconnectReason) {
+    case 'expired':
+      return 'Tu sesión de Google Drive expiró. Reconectá tu cuenta desde Configuración → Integraciones para seguir subiendo a la nube. (Si solo querés guardar local, hacé clic de nuevo en 5 segundos).';
+    case 'no_token':
+      return 'Google Drive no está conectado. Conectá tu cuenta desde Configuración → Integraciones para subir a la nube. (Si solo querés guardar local, hacé clic de nuevo en 5 segundos).';
+    case 'no_expiry':
+      return 'Estado de Google Drive inconsistente (sin fecha de expiración). Reconectá tu cuenta desde Configuración → Integraciones.';
+    case 'network':
+      return 'No se pudo verificar el estado de Google Drive. Reintentá en unos segundos.';
+    default:
+      return 'Google Drive no está conectado. Conectá tu cuenta desde Configuración → Integraciones para subir a la nube. (Si solo querés guardar local, hacé clic de nuevo en 5 segundos).';
+  }
 }

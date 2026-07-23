@@ -193,14 +193,48 @@ router.post('/upload/google-drive', async (req, res) => {
 router.get('/status/google-drive', async (req, res) => {
   const userId = 'default_user';
   const [rows] = await pool.query<any[]>(
-    'SELECT drive_folder_id, updated_at FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+    `SELECT drive_folder_id, access_token, refresh_token, expiry_date
+     FROM user_oauth_tokens
+     WHERE user_id = ? AND provider = ?`,
     [userId, 'google_drive'],
   );
-  if (rows.length > 0 && rows[0].drive_folder_id) {
-    res.json({ connected: true, folderId: rows[0].drive_folder_id });
-  } else {
-    res.json({ connected: false });
+
+  // FIX Karpathy (jul-2026): el endpoint debe reflejar la verdad sobre si el
+  // client puede operar contra Drive AHORA, no solo si hay tokens guardados.
+  // El bug histórico: decía `connected: true` si había drive_folder_id,
+  // pero el access_token podía estar expirado o el refresh_token revocado
+  // → getFreshDriveClient truena en el server con "No hay conexión" mientras
+  // el cliente pensaba que todo estaba OK (toast mentiroso).
+  if (rows.length === 0 || !rows[0].drive_folder_id) {
+    return res.json({ connected: false, reason: 'no_token' });
   }
+  if (!rows[0].access_token) {
+    return res.json({
+      connected: false,
+      folderId: rows[0].drive_folder_id,
+      reason: 'no_token',
+    });
+  }
+  const exp = rows[0].expiry_date as number | null | undefined;
+  if (!exp) {
+    return res.json({
+      connected: false,
+      folderId: rows[0].drive_folder_id,
+      reason: 'no_expiry',
+    });
+  }
+  // Consideramos "expirado" si faltan menos de 5 min (igual que el helper
+  // isTokenExpiringSoon del server). El refresh puede fallar después.
+  const FIVE_MIN_MS = 5 * 60 * 1000;
+  if (exp - Date.now() < FIVE_MIN_MS) {
+    return res.json({
+      connected: false,
+      folderId: rows[0].drive_folder_id,
+      reason: 'expired',
+    });
+  }
+
+  res.json({ connected: true, folderId: rows[0].drive_folder_id });
 });
 
 /** Desconectar Google Drive (borra tokens). */

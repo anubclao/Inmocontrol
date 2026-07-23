@@ -967,8 +967,13 @@ export function TenantsView({
             <div className="border-t border-slate-100 pt-5">
               <div className="flex items-center justify-between mb-4">
                 <h4 className="font-bold text-sm text-slate-900">Documentos en Google Drive</h4>
+                {/* FIX Karpathy (jul-2026): antes decía "Sin carpeta en Drive"
+                    en ámbar, lo cual se leía como "Drive desconectado". En
+                    realidad solo significa que la carpeta ESPECÍFICA de este
+                    tenant no se ha creado todavía (se crea al subir el primer
+                    doc). Nuevo copy: aclara que la carpeta se crea automáticamente. */}
                 {!viewingTenant.tenantDriveFolderId && (
-                  <span className="text-xs text-amber-500">Sin carpeta en Drive</span>
+                  <span className="text-xs text-slate-400">Carpeta se crea al subir el primer doc</span>
                 )}
               </div>
               <div className="space-y-3">

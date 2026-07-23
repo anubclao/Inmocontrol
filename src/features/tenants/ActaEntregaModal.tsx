@@ -158,7 +158,11 @@ export function ActaEntregaModal({
         showToast(data.error || 'Error al guardar en Drive', 'error');
         return;
       }
-      showToast('Acta guardada en Google Drive', 'success');
+      // FIX Karpathy (jul-2026): el toast ahora muestra la ruta del archivo
+      // en Drive, igual que handleDocUpload ("Documento subido a Cédula/").
+      // Esto le da al agente confirmación visual de que el PDF realmente
+      // llegó a la nube y dónde encontrarlo después.
+      showToast(`✓ Acta de Entrega guardada en Drive → ${tenant.name}/Acta/`, 'success');
       onUploaded?.(data.fileId, data.webViewLink);
       onClose();
     } catch (err) {
