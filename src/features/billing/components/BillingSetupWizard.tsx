@@ -112,12 +112,49 @@ export function BillingSetupWizard({
     }
     setSaving(true);
     try {
-      // 1) Persistir BillingPolicy
-      await saveBillingPolicy(form);
-      // 2) Generar (o refrescar) la amortización
-      const rows = await getOrGenerateAmortization(contract, form);
+      // FIX Karpathy (jul-2026): bug histórico. `saveBillingPolicy` usa
+      // `tryBackendOrFallback` que silenciosamente cae al cache local si
+      // el server falla (ej: el INSERT tenía una columna inexistente
+      // que tiraba 500). El cliente mostraba "✓ Billing configurado"
+      // aunque el server NUNCA hubiera persistido la policy — toast
+      // mentiroso clásico. Ahora: pegamos directamente al server
+      // (bypaseando el fallback) para que el éxito sea REAL.
+      // Si el server falla, el modal NO se cierra y el agente puede
+      // reintentar. El fallback local solo se usa para modo offline
+      // intencional (futuro, fuera de scope).
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      let serverOk = false;
+      try {
+        const res = await fetch(`/api/billing/policies/${encodeURIComponent(form.propertyId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData?.error ?? `HTTP ${res.status}`);
+        }
+        serverOk = true;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      if (!serverOk) {
+        throw new Error('El servidor no confirmó el guardado.');
+      }
+      // 2) Generar (o refrescar) la amortización (best-effort: si falla,
+      // el BillingPanel la puede regenerar con "Regenerar amortización").
+      let rows: Awaited<ReturnType<typeof getOrGenerateAmortization>> = [];
+      try {
+        rows = await getOrGenerateAmortization(contract, form);
+      } catch (e: any) {
+        console.warn('[BillingSetupWizard] amortization failed (no fatal):', e);
+        // No bloqueamos: la policy SÍ está guardada. El toast menciona esto.
+      }
       showToast(
-        `✓ Billing configurado. ${rows.length} mes${rows.length === 1 ? '' : 'es'} de amortización generados.`,
+        `✓ Billing configurado. ${rows.length > 0 ? `${rows.length} mes${rows.length === 1 ? '' : 'es'} de amortización generados.` : 'Generá la amortización desde el panel.'}`,
         'success',
       );
       onSuccess?.(form);
@@ -125,8 +162,11 @@ export function BillingSetupWizard({
     } catch (e: any) {
       // FIX Karpathy: toast honesto. NO cerramos el modal — el agente puede reintentar.
       console.error('[BillingSetupWizard] save failed:', e);
+      const isAbort = e?.name === 'AbortError';
       showToast(
-        `Error al guardar: ${e?.message ?? 'desconocido'}. Reintentá en unos segundos.`,
+        isAbort
+          ? 'El servidor tardó demasiado. Reintentá en unos segundos.'
+          : `Error al guardar: ${e?.message ?? 'desconocido'}. Reintentá en unos segundos.`,
         'error',
       );
     } finally {

@@ -322,6 +322,15 @@ router.post('/', async (req, res) => {
         ],
       );
     } else {
+      // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
+      // (consistente con el fix 4c6a6e9 que rechazó blob/data en
+      // property_documents.file_url).
+      if (mandatePdfUrl && (typeof mandatePdfUrl === 'string') &&
+          (mandatePdfUrl.startsWith('blob:') || mandatePdfUrl.startsWith('data:'))) {
+        return res.status(400).json({
+          error: 'mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá con Drive conectado.',
+        });
+      }
       await pool.query(
         `INSERT INTO properties
           (id, organization_id, address, chip, folio, owner_name, owner_id_number, owner_phone, owner_email,
@@ -884,6 +893,22 @@ router.patch('/:id', async (req, res) => {
     res.json({ success: true, message: 'Nothing to update' });
     return;
   }
+  // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
+  // (consistente con el fix 4c6a6e9 que rechazó blob/data en
+  // property_documents.file_url). El mandato es la columna paralela
+  // a file_url y tenía el mismo bug: el cliente persistía blob URLs
+  // locales que morían al refrescar el browser.
+  for (let i = 0; i < updates.length; i++) {
+    if (updates[i].startsWith('mandato_pdf_url = ?')) {
+      const v = values[i];
+      if (typeof v === 'string' && (v.startsWith('blob:') || v.startsWith('data:'))) {
+        return res.status(400).json({
+          error: 'mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá desde el Detalle del Inmueble con Drive conectado.',
+        });
+      }
+    }
+  }
+
   values.push(id);
   try {
     const orgId = await ensureDefaultOrg();

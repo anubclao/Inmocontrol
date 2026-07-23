@@ -169,13 +169,23 @@ router.put('/policies/:propertyId', async (req, res) => {
   const propertyId = req.params.propertyId;
   const p: BillingPolicy = req.body;
   try {
+    // FIX Karpathy (jul-2026): bug histórico. La columna `policy_id` NO
+    // existe en el schema de `billing_policies` (ver
+    // db/mysql/schema-hostinger.sql líneas 370-385). Incluirla en el INSERT
+    // causaba `Error: Unknown column 'policy_id' in 'field list'`, lo
+    // cual hacía que el server devolviera 500 en TODA llamada a
+    // PUT /api/billing/policies/:id. Resultado: el cliente mostraba
+    // "✓ Billing configurado" porque `getOrGenerateAmortization` veía
+    // filas de una corrida anterior y el `tryBackendOrFallback` cacheaba
+    // localmente — toast mentiroso. La policy NUNCA se persistía en
+    // MySQL hasta que el server empezó a responder 200.
     await pool.query(
       `INSERT INTO billing_policies
          (property_id, organization_id, rent_amount, admin_fee,
           late_fee_mid_pct, late_fee_late_pct, grace_day,
           apply_annual_ipc, expected_ipc_pct, apply_ipc_to_admin,
-          allow_admin_changes, primary_bank_account_id, policy_id, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          allow_admin_changes, primary_bank_account_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          rent_amount           = VALUES(rent_amount),
          admin_fee             = VALUES(admin_fee),
@@ -186,8 +196,7 @@ router.put('/policies/:propertyId', async (req, res) => {
          expected_ipc_pct      = VALUES(expected_ipc_pct),
          apply_ipc_to_admin    = VALUES(apply_ipc_to_admin),
          allow_admin_changes   = VALUES(allow_admin_changes),
-         primary_bank_account_id = VALUES(primary_bank_account_id),
-         policy_id             = VALUES(policy_id)`,
+         primary_bank_account_id = VALUES(primary_bank_account_id)`,
       [
         propertyId,
         orgId,
@@ -201,7 +210,6 @@ router.put('/policies/:propertyId', async (req, res) => {
         p.applyIpcToAdmin ? 1 : 0,
         p.allowAdminChanges ? 1 : 0,
         p.primaryBankAccountId ?? null,
-        null, // policy_id se setea por endpoint separado
         p.createdBy ?? 'agent',
       ]
     );

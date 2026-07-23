@@ -124,40 +124,43 @@ export function BillingPanel({
     }
   }, [property.id]);
 
-  useEffect(() => {
+  /**
+   * FIX Karpathy (jul-2026): extraído a función para poder llamarla
+   * tanto desde el useEffect del mount como desde el onSuccess del
+   * BillingSetupWizard. Antes el wizard cerraba y el panel seguía con
+   * el state stale — la policy se guardaba en el server pero el form
+   * no se actualizaba hasta un refresh manual.
+   */
+  const refreshBillingData = useCallback(async () => {
     if (!selectedContract) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const [existingPolicy, cList, iList] = await Promise.all([
-          getBillingPolicy(property.id),
-          listPropertyCharges(property.id),
-          listRentIncreases(property.id),
-        ]);
-        if (cancelled) return;
-        const effectivePolicy = existingPolicy ?? defaultPolicyFor(property);
-        setPolicy(effectivePolicy);
-        setPolicyDraft(effectivePolicy);
-        setHasPersistedPolicy(!!existingPolicy);
-        setCharges(cList);
-        setIncreases(iList);
+    setLoading(true);
+    try {
+      const [existingPolicy, cList, iList] = await Promise.all([
+        getBillingPolicy(property.id),
+        listPropertyCharges(property.id),
+        listRentIncreases(property.id),
+      ]);
+      const effectivePolicy = existingPolicy ?? defaultPolicyFor(property);
+      setPolicy(effectivePolicy);
+      setPolicyDraft(effectivePolicy);
+      setHasPersistedPolicy(!!existingPolicy);
+      setCharges(cList);
+      setIncreases(iList);
 
-        const amort = await getOrGenerateAmortization(selectedContract, effectivePolicy);
-        if (!cancelled) setRows(amort);
+      const amort = await getOrGenerateAmortization(selectedContract, effectivePolicy);
+      setRows(amort);
 
-        // Cargar invoices para armar el invoiceLookup
-        if (!cancelled) {
-          await refreshInvoiceLookup();
-        }
-      } catch (err: any) {
-        showToast(`Error cargando billing: ${err?.message ?? err}`, 'error');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [selectedContract?.id, refreshInvoiceLookup]); // eslint-disable-line react-hooks/exhaustive-deps
+      await refreshInvoiceLookup();
+    } catch (err: any) {
+      showToast(`Error cargando billing: ${err?.message ?? err}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [property, selectedContract, refreshInvoiceLookup, showToast]);
+
+  useEffect(() => {
+    refreshBillingData();
+  }, [selectedContract?.id, refreshBillingData]);
 
   // ─── Acciones ───────────────────────────────────────────────────────
   const handleSavePolicy = useCallback(async () => {
@@ -434,18 +437,13 @@ export function BillingPanel({
               contract={selectedContract}
               onSuccess={async () => {
                 setShowSetupWizard(false);
-                // Recargar la policy desde el server
-                const fresh = await getBillingPolicy(property.id);
-                if (fresh) {
-                  setPolicy(fresh);
-                  setPolicyDraft(fresh);
-                  setHasPersistedPolicy(true);
-                }
-                // Recargar amortización también
-                if (selectedContract) {
-                  const newRows = await getOrGenerateAmortization(selectedContract, fresh ?? policyDraft!);
-                  setRows(newRows);
-                }
+                // FIX Karpathy (jul-2026): el wizard ya guardó la policy en
+                // el server y mostró su toast. Recargamos TODO el panel
+                // desde el server para que el form muestre los nuevos
+                // valores inmediatamente y el banner ámbar desaparezca.
+                // Antes el refresh era parcial y el form seguía mostrando
+                // 0 en canon/admin.
+                await refreshBillingData();
               }}
             />
           )}
