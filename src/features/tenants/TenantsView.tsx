@@ -897,6 +897,34 @@ export function TenantsView({
               </div>
             </div>
 
+            {/* Banner del Acta de Entrega — recordatorio amigable, NO bloqueante.
+                Aparece SOLO si el tenant está Activo (ya firmó Inventario de
+                Colocación) y NO se generó el acta todavía. actaStatus=null
+                después de que refreshActaStatus termine significa "no hay acta".
+                El acta NO es prerequisito para billing — es solo documentación
+                legal que se entrega al inquilino con las llaves. */}
+            {viewingTenant.status === 'Activo' && actaStatus === null && (
+              <button
+                type="button"
+                onClick={() => setActaModalOpen(true)}
+                className="w-full flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-left hover:bg-amber-100 transition-colors group"
+                data-testid="acta-reminder-banner"
+              >
+                <span className="text-xl flex-shrink-0">📌</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-amber-900">
+                    No generaste el Acta de Entrega y Recibo de Llaves
+                  </p>
+                  <p className="text-[10px] text-amber-700 mt-0.5">
+                    Documento legal que se entrega al inquilino con las llaves. No bloquea facturación.
+                    {' '}
+                    <span className="font-bold underline">Click acá para generarla</span>.
+                  </p>
+                </div>
+                <FileSignature className="w-4 h-4 text-amber-600 group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+              </button>
+            )}
+
             {/* Inventario de Colocación */}
             <div className="border-t border-slate-100 pt-5">
               <div className="flex items-center justify-between mb-4">
