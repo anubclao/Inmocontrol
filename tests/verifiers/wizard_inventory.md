@@ -484,3 +484,239 @@ SELECT inventory_captacion_pdf_url FROM properties WHERE id = 'X';
 | Fecha | Commit deployado | Pass / Total | Notas |
 |-------|------------------|--------------|-------|
 | 2026-07-23 | baseline | 0/30 | primera ejecución — esperamos ver varios FAILs |
+
+---
+
+## Karpathy Amendment — photoGallery data shape (jul-2026)
+
+> Checks para los nuevos AC-21/22/23/24 del spec.
+
+### AC-21.A: openPhotoGallery no crashea con photos como Record
+
+**Setup (manual, en DevTools Console):**
+```js
+// 1. Hard refresh
+// 2. Abrir Detalle del Inmueble → Inventarios → click "Inicial"
+// 3. Si IndexedDB tiene data legacy, simular inyectando un Record:
+//    (esto es para validar el path de normalización)
+```
+
+**Pasos:**
+1. Hard refresh (Ctrl+Shift+R).
+2. Abrir DevTools (F12) → Application → IndexedDB → `inmocontrol-db` →
+   `inventories` → buscar el row de la propiedad KR 12 142 74 AP 303.
+3. Editar la fila manualmente: cambiar `photos: [...]` a
+   `photos: {"legacy-id-1": {"id": "legacy-id-1", "dataUrl": "data:image/png;base64,iVBOR...", "areaId": "single-0", "fileName": "test.png", "takenAt": "2026-07-23T10:00:00Z"}}`
+   (un Record/Object en vez de Array).
+4. Guardar. Refrescar la página.
+5. Detalle del Inmueble → Inventarios → click "Inicial".
+6. **Verificar**: la galería abre sin error. Muestra 0 fotos (porque el
+   Record no tiene metadata completa) + el mensaje de "No hay fotos".
+7. **Verificar en consola**: `[gallery] inventory.photos era Record/Object
+   — normalizado a array vacío. Self-heal save.`
+8. **Verificar en IndexedDB**: la fila fue re-guardada con `photos: []`.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-21.B: openPhotoGallery funciona con photos como Array normal
+
+**Pasos:**
+1. Hard refresh.
+2. Detalle del Inmueble → Inventarios → click "Inicial".
+3. **Verificar**: la galería abre y muestra las fotos que se subieron
+   previamente (si hay). Sin error en consola.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-22.A: StepInventory normaliza al cargar (IndexedDB legacy)
+
+**Pasos:**
+1. Mismo setup que AC-21.A: inyectar `photos` como Record en IndexedDB.
+2. Detalle del Inmueble → click "Inicial" para ABRIR el wizard.
+3. **Verificar en consola**: `[inventory] ${inventoryId}: photos era
+   Record/Object — normalizado a array vacío. Self-heal save.`
+4. **Verificar**: el wizard abre, no se traba en la carga.
+5. **Verificar**: si había fotos válidas, se ven en el wizard.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-22.B: StepInventory normaliza al cargar (MySQL legacy)
+
+**Pasos:**
+1. En phpMyAdmin, ejecutar el inspect:
+```sql
+SELECT id, JSON_TYPE(photos) AS photos_type FROM inventories
+WHERE property_id = (SELECT id FROM properties WHERE address LIKE '%KR 12 142 74 AP 303%')
+ORDER BY created_at DESC;
+```
+2. Si alguna fila tiene `photos_type = 'OBJECT'`, dejarla así.
+3. Detalle del Inmueble → click "Inicial" para abrir el wizard
+   (que debería trigger el fallback MySQL porque IndexedDB no tiene
+   la data o la borramos para esta prueba).
+4. **Verificar en consola**: el inventario se carga desde MySQL,
+   `photos` se normaliza, no hay error de `.map`.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-23.A: MySQL STEP 1 — Inspect cuenta correctamente
+
+**Pasos:**
+1. En phpMyAdmin → SQL tab, correr el STEP 1 del script
+   `scripts/fix-inventory-photos-object-to-array.sql`:
+```sql
+SELECT
+  COUNT(*) AS total_inventories,
+  SUM(CASE WHEN JSON_TYPE(photos) = 'ARRAY'  THEN 1 ELSE 0 END) AS as_array,
+  SUM(CASE WHEN JSON_TYPE(photos) = 'OBJECT' THEN 1 ELSE 0 END) AS as_object,
+  SUM(CASE WHEN JSON_TYPE(photos) IS NULL    THEN 1 ELSE 0 END) AS as_null
+FROM inventories;
+```
+2. **Verificar**: el output muestra `total_inventories`, `as_array`,
+   `as_object`, `as_null`.
+3. **Anotar**: el valor de `as_object` antes de la migración.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-23.B: MySQL STEP 2 — Migrate convierte OBJECT → ARRAY
+
+**Pasos:**
+1. Si `as_object > 0` en AC-23.A, descomentar el UPDATE del STEP 2.
+2. Correr el UPDATE.
+3. **Verificar**: no hay errores SQL. `affected rows` > 0 si había filas
+   con OBJECT.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-23.C: MySQL STEP 3 — Verify post-migración
+
+**Pasos:**
+1. Re-correr el SELECT de AC-23.A.
+2. **Verificar**: `as_object = 0`. `as_array` ahora incluye las filas
+   migradas (debería ser `as_array + as_object` del step 1).
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-23.D: MySQL data migra es idempotente
+
+**Pasos:**
+1. Re-correr el UPDATE de AC-23.B (debería ser no-op).
+2. **Verificar**: `affected rows = 0`. Sin errores.
+
+**Status:** ⏳ Pending
+
+---
+
+### AC-24.A: helper `normalizePhotosArray` maneja todos los casos
+
+**Pasos:**
+1. En DevTools Console, importar el helper y testear:
+```js
+const { normalizePhotosArray } = await import('/src/features/properties/inventoryDB.ts');
+const tests = [
+  { input: [], expected: [] },
+  { input: [1, 2, 3], expected: [1, 2, 3] },
+  { input: null, expected: [] },
+  { input: undefined, expected: [] },
+  { input: 'foo', expected: [] },
+  { input: 42, expected: [] },
+  { input: { a: { x: 1 }, b: { y: 2 } }, expected: [{x:1}, {y:2}] },
+  { input: { a: true, b: false }, expected: [] },
+  { input: { a: null, b: null }, expected: [] },
+];
+for (const t of tests) {
+  const out = normalizePhotosArray(t.input);
+  const ok = JSON.stringify(out) === JSON.stringify(t.expected);
+  console.log(ok ? '✅' : '❌', JSON.stringify(t.input), '→', JSON.stringify(out));
+}
+```
+2. **Verificar**: todos los tests pasan (✅).
+
+**Status:** ⏳ Pending
+
+---
+
+### EC-11: IndexedDB con `{id: {id, dataUrl, ...}}` (Record con metadata)
+
+**Pasos:**
+1. Mismo setup que AC-21.A pero el Record tiene metadata completa.
+2. Detalle del Inmueble → Inventarios → click "Inicial".
+3. **Verificar**: la galería muestra las fotos correctamente.
+4. **Verificar**: el `areaLabel` se asigna via lookup en `inventory.areas`.
+
+**Status:** ⏳ Pending
+
+---
+
+### EC-12: IndexedDB con `{id1: true, id2: true}` (id set)
+
+**Pasos:**
+1. Setup: inyectar `photos: {"id1": true, "id2": true}` en IndexedDB.
+2. Detalle del Inmueble → Inventarios → click "Inicial".
+3. **Verificar**: galería abre sin error. Muestra 0 fotos + el mensaje
+   "No hay fotos guardadas para este inventario".
+4. **Verificar en consola**: `[gallery] inventory.photos era Record/Object
+   — normalizado a array vacío. Self-heal save.`
+
+**Status:** ⏳ Pending
+
+---
+
+### EC-13: MySQL `photos: 'null'` (string null)
+
+**Pasos:**
+1. En phpMyAdmin, UPDATE manual:
+```sql
+UPDATE inventories SET photos = 'null' WHERE id = '...';
+```
+2. Detalle del Inmueble → Inventarios → click "Inicial".
+3. **Verificar**: galería abre, 0 fotos, sin error.
+
+**Status:** ⏳ Pending
+
+---
+
+### EC-14: MySQL `photos: NULL` (DB null)
+
+**Pasos:**
+1. En phpMyAdmin, UPDATE manual:
+```sql
+UPDATE inventories SET photos = NULL WHERE id = '...';
+```
+2. Detalle del Inmueble → Inventarios → click "Inicial".
+3. **Verificar**: galería abre, 0 fotos, sin error.
+
+**Status:** ⏳ Pending
+
+---
+
+## Resumen de ejecución (amendment jul-2026)
+
+| Check | Status | Notas |
+|-------|--------|-------|
+| AC-21.A | ⏳ | photoGallery no crashea con Record |
+| AC-21.B | ⏳ | photoGallery funciona con Array normal |
+| AC-22.A | ⏳ | StepInventory normaliza (IndexedDB) |
+| AC-22.B | ⏳ | StepInventory normaliza (MySQL) |
+| AC-23.A | ⏳ | SQL inspect |
+| AC-23.B | ⏳ | SQL migrate |
+| AC-23.C | ⏳ | SQL verify post |
+| AC-23.D | ⏳ | SQL idempotente |
+| AC-24.A | ⏳ | helper unit tests |
+| EC-11 | ⏳ | Record con metadata |
+| EC-12 | ⏳ | Record id set |
+| EC-13 | ⏳ | MySQL string null |
+| EC-14 | ⏳ | MySQL DB null |

@@ -16,7 +16,7 @@ import { Role } from '../auth/permissions';
 import { useContractStore } from '../contracts/contractStore';
 import { STORAGE_KEYS } from '../../shared/hooks/storageKeys';
 import { PROPERTY_TYPES, type PropertyType } from './inventoryConfig';
-import { inventoryDB } from './inventoryDB';
+import { inventoryDB, normalizePhotosArray } from './inventoryDB';
 import type { Inventory } from './inventoryTypes';
 import { InventoryDiffView } from './InventoryDiffView';
 import { driveProxyUrl, driveDownloadUrl } from '../../lib/drive/driveProxy';
@@ -1585,7 +1585,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 propertyType: remote.property_type,
                 counters: remote.counters ?? {},
                 areas: remote.areas ?? [],
-                photos: remote.photos ?? [],
+                // FIX (jul-2026): `remote.photos` puede llegar como Record/Object
+                // desde MySQL si la data se guardó mal. Normalizamos al array.
+                photos: normalizePhotosArray(remote.photos),
                 signatures: remote.signatures ?? [],
                 customAreas: remote.custom_areas ?? [],
                 signedAt: remote.signed_at,
@@ -1617,7 +1619,18 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         setPhotoGalleryLoading(false);
         return;
       }
-      const allPhotoIds = (inventory.photos ?? []).map((p: any) => p.id);
+      // FIX (jul-2026): `inventory.photos` puede llegar como Record/Object
+      // desde IndexedDB o MySQL (data legacy). `?? []` no protege contra
+      // objetos, solo contra null/undefined. `normalizePhotosArray()`
+      // convierte cualquier forma (array | record | null) a array.
+      // Si detectamos forma objeto, re-save en IndexedDB para self-heal.
+      const rawPhotos = inventory.photos;
+      const photoList = normalizePhotosArray(rawPhotos);
+      if (photoList.length === 0 && rawPhotos && typeof rawPhotos === 'object' && !Array.isArray(rawPhotos)) {
+        console.warn('[gallery] inventory.photos era Record/Object — normalizado a array vacío. Self-heal save.');
+        void inventoryDB.saveInventory({ ...inventory, photos: [] });
+      }
+      const allPhotoIds = photoList.map((p: any) => p.id);
       const photos: Array<{
         id: string;
         areaId: string;
@@ -1625,7 +1638,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         dataUrl: string;
         phase: 'inicial' | 'final';
       }> = [];
-      for (const photoMeta of (inventory.photos ?? [])) {
+      for (const photoMeta of photoList) {
         // FIX: el store `photos` de IndexedDB puede estar vacío (el wizard
         // histórico solo guardaba el array inline en inventory.photos[]).
         // Si `getPhoto` falla, caemos al dataUrl embebido en el inventory.
@@ -2951,9 +2964,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     Almacenamiento local del navegador
                   </p>
                 </div>
-                {/* Agrupar fotos por área */}
+                {/* Agrupar fotos por área. `photoGallery.photos` siempre es array
+                    (normalizado en `openPhotoGallery` via `normalizePhotosArray`),
+                    pero usamos `?? []` por defensa contra cualquier race futuro. */}
                 {Object.entries(
-                  (photoGallery.photos as any[]).reduce<Record<string, any[]>>((acc, p) => {
+                  (photoGallery.photos ?? []).reduce<Record<string, any[]>>((acc, p) => {
                     (acc[p.areaLabel] ??= []).push(p);
                     return acc;
                   }, {} as Record<string, any[]>),

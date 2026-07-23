@@ -324,3 +324,92 @@ interface Inventory {
 **Status:** ⏳ Pending Review
 **Aprobado por:** [nombre del user]
 **Fecha de aprobación:** [YYYY-MM-DD]
+
+---
+
+## 12. Karpathy Amendment — photoGallery data shape fix (jul-2026)
+
+### Contexto del bug
+En producción (jul-2026) reportamos que abrir "Inicial" o "Final" desde
+"Detalle del Inmueble → Inventarios" tira `TypeError: (st.photos ?? []).map
+is not a function` y muestra el toast "Error cargando fotos del inventario".
+
+### Causa raíz
+Algunos inventarios guardados en IndexedDB o devueltos por MySQL tienen
+`photos` como un **Record/Object** (`{id1: {...}, id2: {...}}`) en lugar
+de un **Array** (`[{id, dataUrl, ...}, ...]`). El código asumía array y
+usaba `.map()` / `for...of`. El operador `?? []` solo protege contra
+null/undefined, no contra objetos.
+
+La causa histórica más probable: una versión anterior del wizard guardaba
+fotos como diccionario indexado por id. MySQL heredó esa forma via
+`JSON.stringify(...)` y mysql2 la devolvió como objeto cuando auto-parseó
+la columna JSON.
+
+### AC-21: photoGallery no crashea con data legacy
+- Al abrir "Inicial" o "Final" desde Detalle del Inmueble, la galería
+  carga fotos sin error aunque `inventory.photos` llegue como Record/Object.
+- Si la data es del tipo Record, se muestra un mensaje honesto en consola
+  (`[gallery] inventory.photos era Record/Object — normalizado a array
+  vacío. Self-heal save.`) y se re-guarda en IndexedDB con la forma
+  correcta (array vacío si la data estaba corrupta irreparablemente).
+- Si la data es array, no hay cambios visibles (no se hace console.warn).
+
+### AC-22: StepInventory self-heals on load
+- Cuando `StepInventory` carga un `existing` desde IndexedDB o MySQL,
+  normaliza `photos` a array via `normalizePhotosArray(input)`.
+- Si la forma era Record/Object, re-save en IndexedDB con la forma
+  correcta (array vacío si no se puede reconstruir).
+- La forma canónica se mantiene en memoria (`setInventory(existing)`)
+  hasta el próximo `persist()`.
+
+### AC-23: MySQL migration corre limpio
+- Existe `scripts/fix-inventory-photos-object-to-array.sql` con:
+  1. STEP 1 — Inspect: cuenta cuántas filas tienen `JSON_TYPE(photos) = 'OBJECT'`.
+  2. STEP 2 — Migrate: UPDATE que convierte Object → Array via
+     `JSON_TABLE(JSON_KEYS(...))` + `JSON_ARRAYAGG(JSON_EXTRACT(...))`.
+     Solo afecta filas con `JSON_TYPE = 'OBJECT'`.
+  3. STEP 3 — Verify: re-corre el count, espera `as_object = 0`.
+- La migración es idempotente (segura de correr múltiples veces).
+- Se aplica via phpMyAdmin o terminal Hostinger con
+  `node scripts/apply-010-inventory-photos-array.mjs` (a crear si no existe).
+
+### AC-24: helper `normalizePhotosArray` exportado
+- Vive en `src/features/properties/inventoryDB.ts`.
+- Acepta `unknown` (defensivo).
+- Devuelve `any[]` SIEMPRE.
+- Maneja:
+  - `Array` → `filter(Boolean)` (descarta nulls).
+  - `Object` (no array) → `Object.values()`. Si los valores son todos
+    boolean/null (forma `{id1: true, id2: true}`), devuelve `[]`.
+  - `null | undefined` → `[]`.
+  - Otros tipos (string, number) → `[]`.
+- Es IDÉMPOTENTE: aplicar 2 veces seguidas da el mismo resultado.
+
+### Edge cases
+
+#### EC-11: legacy IndexedDB data con `{id: {id, dataUrl, ...}}`
+- El helper extrae los values correctamente → `[{id, dataUrl, ...}]`.
+- Las fotos se muestran en la galería.
+
+#### EC-12: legacy IndexedDB data con `{id1: true, id2: true}` (id set)
+- El helper detecta que no es metadata y devuelve `[]`.
+- La galería muestra "No hay fotos guardadas para este inventario".
+- Toast: "No hay fotos guardadas para este inventario. Las fotos se
+  guardan en el navegador (IndexedDB). Si limpiaste la caché del navegador,
+  podés volver a tomarlas desde el botón Inicial/Final."
+
+#### EC-13: MySQL data con `photos: 'null'` (string null)
+- mysql2 auto-parsea a `null`. El helper devuelve `[]`. Sin error.
+
+#### EC-14: MySQL data con `photos: NULL` (DB null)
+- El helper devuelve `[]`. La galería muestra estado vacío.
+
+### Out of Scope (este amendment)
+- **Re-construir fotos desde Drive** si IndexedDB/MySQL están corruptos
+  y no se puede inferir la metadata. (Posible feature: escanear la
+  carpeta `Inventario captacion/` del Drive y re-llenar).
+- **Validación de tipos de las fotos** (dataUrl base64, etc.).
+- **Re-nombrar las fotos en Drive** si el fileName no sigue la
+  convención.
+

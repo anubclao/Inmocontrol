@@ -91,3 +91,51 @@ export const inventoryDB = {
 
 /** Helper para construir ids consistentes. */
 export const photoId = (inventoryId: string, photoId: string) => `${inventoryId}:${photoId}`;
+
+/**
+ * Normaliza el campo `photos` de un Inventory a SIEMPRE un array.
+ *
+ * Por qué existe: detectamos en prod (jul-2026) que algunos inventarios
+ * guardados en IndexedDB o devueltos por MySQL tienen `photos` como un
+ * Record/Object ({ id1: {...}, id2: {...} }) en vez de un Array
+ * ([{id, dataUrl, ...}, ...]). El código asumía array y llamaba
+ * `.map()` / `for...of`, lo que tiraba `TypeError: .map is not a function`.
+ *
+ * La causa histórica más probable es una versión vieja del wizard que
+ * guardaba fotos como diccionario indexado por id. MySQL heredó esa forma
+ * via `JSON.stringify(...)` y la devolvió como objeto cuando mysql2
+ * auto-parseó la columna JSON.
+ *
+ * Formas aceptadas de input y su normalización:
+ * - `Array` → se devuelve tal cual (con `.filter(Boolean)` por si hay nulls).
+ * - `Object` (Record) → se devuelve `Object.values(...)`. Si los valores
+ *   ya tienen la forma `{id, dataUrl, areaId, ...}` se usan directo.
+ *   Si el Record tiene la forma `{id1: true, id2: true}` (set de ids)
+ *   se descartan y se devuelve `[]` (no se puede reconstruir sin
+ *   metadata — el agente debe re-tomar las fotos).
+ * - `null | undefined` → `[]`.
+ * - Cualquier otra cosa (string, number) → `[]`.
+ *
+ * El helper es IDÉMPOTENTE y SEGURO de llamar múltiples veces. Úselo
+ * en TODA lectura de `inventory.photos` antes de iterar:
+ *
+ * ```ts
+ * const photos = normalizePhotosArray(inventory.photos);
+ * for (const p of photos) { ... }
+ * ```
+ */
+export function normalizePhotosArray(input: unknown): any[] {
+  if (Array.isArray(input)) {
+    return input.filter(Boolean);
+  }
+  if (input && typeof input === 'object') {
+    const values = Object.values(input as Record<string, unknown>);
+    // Si el Record es un set de ids booleanos (forma `{id1: true}`), descartar.
+    const looksLikeIdSet = values.every(
+      (v) => v === true || v === false || v == null,
+    );
+    if (looksLikeIdSet) return [];
+    return values.filter(Boolean) as any[];
+  }
+  return [];
+}

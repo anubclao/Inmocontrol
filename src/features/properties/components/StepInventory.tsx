@@ -3,7 +3,7 @@ import { Button, Card, Modal } from '../../../shared/ui';
 import { AreaConfigPanel } from './AreaConfigPanel';
 import { AreaEditor } from './AreaEditor';
 import { SignatureStep } from './SignatureStep';
-import { inventoryDB } from '../inventoryDB';
+import { inventoryDB, normalizePhotosArray } from '../inventoryDB';
 import { getPropertyTypeConfig, resolveAreas, type PropertyType } from '../inventoryConfig';
 import type { Inventory, InventoryArea, InventoryItem, InventoryPhoto, ItemMedia, Signature } from '../inventoryTypes';
 import { generateInventoryPDF } from '../inventoryPdf';
@@ -105,7 +105,9 @@ export function StepInventory({
                 propertyType: remote.property_type,
                 counters: remote.counters ?? {},
                 areas: remote.areas ?? [],
-                photos: remote.photos ?? [],
+                // FIX (jul-2026): `remote.photos` puede llegar como Record/Object
+                // desde MySQL si la data legacy se guardó mal. Normalizamos.
+                photos: normalizePhotosArray(remote.photos),
                 signatures: remote.signatures ?? [],
                 customAreas: remote.custom_areas ?? [],
                 signedAt: remote.signed_at,
@@ -136,6 +138,17 @@ export function StepInventory({
       if (cancelled) return;
 
       if (existing) {
+        // FIX (jul-2026): normalizar `photos` por si IndexedDB tiene data
+        // legacy con forma Record/Object en vez de Array. Si la forma era
+        // objeto, re-save con la forma correcta (self-heal).
+        const normalizedPhotos = normalizePhotosArray(existing.photos);
+        if (normalizedPhotos.length === 0 && existing.photos && typeof existing.photos === 'object' && !Array.isArray(existing.photos)) {
+          console.warn(`[inventory] ${inventoryId}: photos era Record/Object — normalizado a array vacío. Self-heal save.`);
+          existing = { ...existing, photos: [] };
+          void inventoryDB.saveInventory(existing);
+        } else if (normalizedPhotos !== existing.photos) {
+          existing = { ...existing, photos: normalizedPhotos };
+        }
         setInventory(existing);
         setCustomAreas(existing.customAreas ?? []);
         // En modo captación (hideSignatures) no hay firmas — se salta el paso de firmas
