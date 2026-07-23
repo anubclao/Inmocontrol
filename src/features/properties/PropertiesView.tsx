@@ -629,21 +629,36 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           setViewingProperty((prev: any) => prev ? { ...prev, documents: updatedDocs } : prev);
           if (driveFolderId) showToast(`Documento subido a Drive`, 'success');
 
-          try {
-            const res = await fetch('/api/properties', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                localId: propId,
-                documents: { [slotKey]: docUrl },
-              }),
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({}));
-              throw new Error(err.error ?? `HTTP ${res.status}`);
+          // FIX AC-15 (jul-2026): solo persistir al server si la URL es válida
+          // (Drive). Si es `blob:` (Drive desconectado), NO guardamos en MySQL
+          // — la card mostrará badge honesto y el agente tendrá que re-subir
+          // cuando Drive esté OK. Persistir blob URLs crea filas zombie que
+          // muestran "Ver" verde pero el PDF viewer dice "moved, edited, or
+          // deleted" porque el blob URL murió al refrescar.
+          const isPersistibleUrl =
+            docUrl.startsWith('https://') && !docUrl.startsWith('blob:') && !docUrl.startsWith('data:');
+          if (isPersistibleUrl) {
+            try {
+              const res = await fetch('/api/properties', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  localId: propId,
+                  documents: { [slotKey]: docUrl },
+                }),
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error ?? `HTTP ${res.status}`);
+              }
+            } catch (err: any) {
+              console.error('[doc upload] backend persist:', err);
             }
-          } catch (err: any) {
-            console.error('[doc upload] backend persist:', err);
+          } else {
+            console.warn(`[doc upload] docUrl local (${docUrl.slice(0, 30)}...) NO persistido. Reconectá Drive y re-subí desde el Detalle.`);
+            if (!driveFolderId) {
+              showToast(`Documento guardado solo localmente (Drive no conectado). Reconectá Drive y reintentá la subida.`, 'error');
+            }
           }
         }
       } catch (err) {
@@ -1053,20 +1068,26 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     const uploadedLocalOnly: string[] = [];
     const failedUploads: string[] = [];
 
-    for (const [wizardSlotKey, files] of Object.entries(wizardFiles)) {
-      if (!Array.isArray(files) || files.length === 0) continue;
+    // FIX AC-15 (jul-2026): la fuente de verdad pasa a ser `uploadedDocs` (que
+    // SÍ persiste en localStorage) en vez de `wizardFiles` (que NO se puede
+    // serializar y se pierde al refrescar el browser). Si un slot tiene URL de
+    // Drive, la reusamos. Si tiene blob URL y el `File` aún está en `wizardFiles`
+    // (sesión actual), re-subimos. Si tiene blob URL pero NO hay File (refresh
+    // previo), lo logueamos y seguimos — el user re-sube desde el Detalle.
+    for (const [wizardSlotKey, driveUrls] of Object.entries(uploadedDocs)) {
+      if (!Array.isArray(driveUrls) || driveUrls.length === 0) continue;
       const realKey = realSlotKey(wizardSlotKey);
       // Nombre "bautizado" en Drive: si hay varios archivos, les ponemos sufijo _1, _2, etc.
       const baseFileName = slotKeyToFilename(realKey, validOwners, wizardUnits);
       const stripExt = baseFileName.replace(/\.pdf$/i, '');
       const uploadedUrls: string[] = [];
-      // URLs de Drive ya conocidas (las que Option B subió en tiempo real).
-      const existingDriveUrls = uploadedDocs[wizardSlotKey] ?? [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const fileName = files.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
-        // ── ¿Ya está en Drive? (Option B) ──
-        const existingUrl = existingDriveUrls[i] ?? '';
+      // Files en memoria (pueden no existir si hubo refresh). Se usan solo para
+      // re-subir archivos que quedaron como blob: local.
+      const filesInMemory = wizardFiles[wizardSlotKey] ?? [];
+      for (let i = 0; i < driveUrls.length; i++) {
+        const existingUrl = driveUrls[i] ?? '';
+        const fileName = driveUrls.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
+        // ── ¿Es URL de Drive válida? (Option B ya subió en tiempo real) ──
         if (existingUrl && /^https:\/\/(drive|docs)\.google\.com\//.test(existingUrl)) {
           // Ya en Drive → reusamos la URL sin re-subir
           uploadedUrls.push(existingUrl);
@@ -1078,6 +1099,15 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           uploadedToDrive.push(realKey);
           continue;
         }
+        // ── Es blob: o vacío. Necesitamos el File para re-subir. ──
+        const file = filesInMemory[i];
+        if (!file) {
+          // No tenemos el File en memoria (refresh del browser entre el upload
+          // y el finalize). NO podemos re-subir. FIX AC-15: tampoco persistimos
+          // el blob URL — la fila de property_documents queda sin crear.
+          console.warn(`[finalize] ${realKey}[${i}]: URL local sin File en memoria — se saltea. El agente debe re-subir desde el Detalle del Inmueble.`);
+          continue;
+        }
         // ── No está en Drive → subir ahora ──
         if (driveConnected && driveFolderId) {
           try {
@@ -1087,17 +1117,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               uploadedUrls.push(result.webViewLink);
               uploadedToDrive.push(realKey);
             } else {
-              uploadedUrls.push(URL.createObjectURL(file));
+              // FIX AC-15: NO persistir blob URL. La dejamos en uploadedLocalOnly
+              // para el modal de resumen, pero NO la mandamos a finalDocuments.
               uploadedLocalOnly.push(realKey);
-              console.warn(`[finalize] ${realKey}[${i}]: Drive upload failed (${result.error}) → local blob fallback`);
+              console.warn(`[finalize] ${realKey}[${i}]: Drive upload failed (${result.error}) → local blob, NO persistido`);
             }
           } catch (err: any) {
-            uploadedUrls.push(URL.createObjectURL(file));
             uploadedLocalOnly.push(realKey);
             failedUploads.push(`${realKey}[${i}]: ${err.message}`);
+            console.warn(`[finalize] ${realKey}[${i}]: upload error ${err.message} — NO persistido`);
           }
         } else {
-          uploadedUrls.push(URL.createObjectURL(file));
           uploadedLocalOnly.push(realKey);
         }
       }
@@ -2395,29 +2425,47 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       {[
                         { slotKey: `cedula:${o.id}`, label: 'Cédula', url: o.documents?.cedula },
                         { slotKey: `rut:${o.id}`, label: 'RUT', url: o.documents?.rut },
-                      ].map(({ slotKey, label, url }) => (
-                        url ? (
-                          <button
-                            key={slotKey}
-                            onClick={() => setViewingDoc({ label: `${label} de ${o.name}`, url })}
-                            className="flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
-                          >
-                            <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                            <span className="text-[10px] font-medium text-slate-800 truncate flex-1">{label}</span>
-                            <span className="text-[9px] font-bold text-emerald-700">Ver</span>
-                          </button>
-                        ) : (
+                      ].map(({ slotKey, label, url }) => {
+                        // FIX AC-15 (jul-2026): si la URL es blob: o data: (fila
+                        // zombie de un upload previo sin Drive), NO mostramos
+                        // "Ver" verde — el visor no podría abrir el archivo.
+                        // En su lugar, mostramos "Re-subir" para que el agente
+                        // reemplace la fila con un PDF válido.
+                        const isBlob = !!url && (url.startsWith('blob:') || url.startsWith('data:'));
+                        if (url && !isBlob) {
+                          return (
+                            <button
+                              key={slotKey}
+                              onClick={() => setViewingDoc({ label: `${label} de ${o.name}`, url })}
+                              className="flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
+                            >
+                              <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">{label}</span>
+                              <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                            </button>
+                          );
+                        }
+                        return (
                           <button
                             key={slotKey}
                             onClick={() => triggerDetailDocUpload(viewingProperty.id, slotKey)}
-                            className="flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
+                            className={`flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
+                              isBlob
+                                ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
+                                : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                            }`}
+                            title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
                           >
-                            <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                            <span className="text-[10px] font-medium text-slate-500 truncate flex-1">{label}</span>
-                            <span className="text-[9px] font-bold text-blue-600">Subir</span>
+                            <Upload className={`w-3 h-3 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
+                            <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
+                              {isBlob ? `${label} (re-subir)` : label}
+                            </span>
+                            <span className={`text-[9px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
+                              {isBlob ? 'Re-subir' : 'Subir'}
+                            </span>
                           </button>
-                        )
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -2444,25 +2492,42 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       {u.folioMatricula && (
                         <p className="text-[9px] text-slate-500 mb-1.5">Matrícula: {u.folioMatricula}</p>
                       )}
-                      {certUrl ? (
-                        <button
-                          onClick={() => setViewingDoc({ label: `Certificado de ${u.label}`, url: certUrl })}
-                          className="w-full flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
-                        >
-                          <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                          <span className="text-[10px] font-medium text-slate-800 truncate flex-1">Certificado de Tradición</span>
-                          <span className="text-[9px] font-bold text-emerald-700">Ver</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => triggerUnitDocUpload(viewingProperty.id, u.id)}
-                          className="w-full flex items-center gap-1.5 p-2 bg-white rounded border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 text-left"
-                        >
-                          <Upload className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                          <span className="text-[10px] font-medium text-slate-500 truncate flex-1">Certificado de Tradición</span>
-                          <span className="text-[9px] font-bold text-blue-600">Subir</span>
-                        </button>
-                      )}
+                      {(() => {
+                        // FIX AC-15: si certUrl es blob:, no es un archivo real —
+                        // mostramos "Re-subir" para que el agente reemplace la fila.
+                        const isBlob = !!certUrl && (certUrl.startsWith('blob:') || certUrl.startsWith('data:'));
+                        if (certUrl && !isBlob) {
+                          return (
+                            <button
+                              onClick={() => setViewingDoc({ label: `Certificado de ${u.label}`, url: certUrl })}
+                              className="w-full flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
+                            >
+                              <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">Certificado de Tradición</span>
+                              <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            onClick={() => triggerUnitDocUpload(viewingProperty.id, u.id)}
+                            className={`w-full flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
+                              isBlob
+                                ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
+                                : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                            }`}
+                            title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
+                          >
+                            <Upload className={`w-3 h-3 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
+                            <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
+                              {isBlob ? 'Certificado (re-subir)' : 'Certificado de Tradición'}
+                            </span>
+                            <span className={`text-[9px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
+                              {isBlob ? 'Re-subir' : 'Subir'}
+                            </span>
+                          </button>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -2482,7 +2547,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   { slotKey: 'certificado_tradicion:main', label: 'Certificado de Tradición', url: viewingProperty?.documents_property?.certificado_tradicion ?? viewingProperty?.documents?.['Certificado de Tradición'] },
                 ];
                 return items.map((item) => {
-                  if (item.url) {
+                  // FIX AC-15: si la URL es blob:, no es un archivo real —
+                  // mostramos "Re-subir" para que el agente reemplace la fila.
+                  const isBlob = !!item.url && (item.url.startsWith('blob:') || item.url.startsWith('data:'));
+                  if (item.url && !isBlob) {
                     return (
                       <button
                         key={item.slotKey}
@@ -2500,11 +2568,20 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     <button
                       key={item.slotKey}
                       onClick={() => triggerPropertyDocUpload(viewingProperty.id, item.slotKey as 'predial' | 'certificado_tradicion:main')}
-                      className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-dashed border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-colors text-left"
+                      className={`flex items-center gap-2 p-2.5 rounded-lg border border-dashed transition-colors text-left ${
+                        isBlob
+                          ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
+                          : 'bg-slate-50 border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                      }`}
+                      title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
                     >
-                      <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                      <span className="text-[11px] font-medium text-slate-500 truncate flex-1">{item.label}</span>
-                      <span className="text-[10px] font-bold text-blue-600">Subir</span>
+                      <Upload className={`w-4 h-4 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
+                      <span className={`text-[11px] font-medium truncate flex-1 ${isBlob ? 'text-slate-700' : 'text-slate-500'}`}>
+                        {isBlob ? `${item.label} (re-subir)` : item.label}
+                      </span>
+                      <span className={`text-[10px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
+                        {isBlob ? 'Re-subir' : 'Subir'}
+                      </span>
                     </button>
                   );
                 });
@@ -2522,15 +2599,35 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 <div className="flex-1 text-left min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-bold text-slate-900">Contrato de Mandato</p>
-                    {viewingProperty?.mandatePdfUrl ? (
-                      <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                        <ClipboardCheck className="w-3 h-3" /> Firmado
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                        Pendiente
-                      </span>
-                    )}
+                    {(() => {
+                      // FIX AC-15: si mandatePdfUrl es blob:, NO mostrar "Firmado"
+                      // (sería mentira). Mostrar "⚠ Archivo perdido" en color
+                      // rojo para que el agente sepa que tiene que re-subir.
+                      const mandateUrl = viewingProperty?.mandatePdfUrl;
+                      const isBlobMandate = !!mandateUrl && (mandateUrl.startsWith('blob:') || mandateUrl.startsWith('data:'));
+                      if (isBlobMandate) {
+                        return (
+                          <span
+                            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-red-100 text-red-700"
+                            title="El PDF del mandato se perdió (URL local expirada). Re-subilo para activar la propiedad."
+                          >
+                            <AlertTriangle className="w-3 h-3" /> Archivo perdido
+                          </span>
+                        );
+                      }
+                      if (mandateUrl) {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                            <ClipboardCheck className="w-3 h-3" /> Firmado
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                          Pendiente
+                        </span>
+                      );
+                    })()}
                   </div>
                   <p className="text-[10px] text-slate-500 mt-0.5">
                     {viewingProperty?.mandateSignedAt
@@ -2539,43 +2636,65 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   </p>
                 </div>
                 <div className="flex flex-col gap-1">
-                  {viewingProperty?.mandatePdfUrl ? (
-                    // PDF firmado subido: Ver + Descargar + Reemplazar (si quedó mal)
-                    <>
-                      <button
-                        onClick={() => setViewingDoc({ label: 'Contrato de Mandato', url: viewingProperty.mandatePdfUrl! })}
-                        className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
-                        title="Ver PDF firmado"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-slate-600" />
-                      </button>
-                      <button
-                        onClick={() => handleDownloadMandato(viewingProperty)}
-                        className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
-                        title="Descargar PDF"
-                      >
-                        <Download className="w-3.5 h-3.5 text-blue-600" />
-                      </button>
-                      <button
-                        onClick={() => triggerMandatoUpload(viewingProperty.id)}
-                        className="p-1.5 bg-white border border-amber-200 rounded-md hover:bg-amber-50"
-                        title="Reemplazar PDF (si quedó mal)"
-                        data-testid="replace-mandato"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
-                      </button>
-                    </>
-                  ) : (
-                    // FIX WORKFLOW: NO ofrecer subir mandato desde el detalle.
-                    // El contrato de mandato se sube SOLO durante la creación
-                    // de la propiedad (wizard). Si llegamos acá sin mandatoPdfUrl
-                    // significa que el wizard no terminó o se omitió — la propiedad
-                    // no está completa y NO se puede arreglar desde el detalle.
-                    // Mostrar solo mensaje informativo, sin acción.
-                    <div className="text-[10px] text-slate-400 italic text-right max-w-[140px] leading-tight">
-                      Subir solo durante la creación
-                    </div>
-                  )}
+                  {(() => {
+                    const mandateUrl = viewingProperty?.mandatePdfUrl;
+                    const isBlobMandate = !!mandateUrl && (mandateUrl.startsWith('blob:') || mandateUrl.startsWith('data:'));
+                    if (mandateUrl && !isBlobMandate) {
+                      // PDF firmado válido en Drive: Ver + Descargar + Reemplazar
+                      return (
+                        <>
+                          <button
+                            onClick={() => setViewingDoc({ label: 'Contrato de Mandato', url: mandateUrl })}
+                            className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
+                            title="Ver PDF firmado"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-slate-600" />
+                          </button>
+                          <button
+                            onClick={() => handleDownloadMandato(viewingProperty)}
+                            className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
+                            title="Descargar PDF"
+                          >
+                            <Download className="w-3.5 h-3.5 text-blue-600" />
+                          </button>
+                          <button
+                            onClick={() => triggerMandatoUpload(viewingProperty.id)}
+                            className="p-1.5 bg-white border border-amber-200 rounded-md hover:bg-amber-50"
+                            title="Reemplazar PDF (si quedó mal)"
+                            data-testid="replace-mandato"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                          </button>
+                        </>
+                      );
+                    }
+                    if (isBlobMandate) {
+                      // FIX AC-15: blob URL detectada. Sin botón "Ver" (no abriría
+                      // nada). Mostrar "Re-subir" prominentemente para arreglar.
+                      return (
+                        <>
+                          <button
+                            onClick={() => triggerMandatoUpload(viewingProperty.id)}
+                            className="px-2 py-1.5 bg-amber-50 border border-amber-300 rounded-md hover:bg-amber-100 text-[10px] font-bold text-amber-700 flex items-center gap-1"
+                            title="El PDF se perdió (URL local expirada) — re-subilo desde tu equipo"
+                            data-testid="replace-mandato"
+                          >
+                            <RefreshCw className="w-3 h-3" /> Re-subir
+                          </button>
+                          <span className="text-[9px] text-red-600 text-right max-w-[120px] leading-tight">
+                            PDF previo perdido
+                          </span>
+                        </>
+                      );
+                    }
+                    // Sin mandato (caso normal): no ofrecer subir desde el detalle
+                    // (FIX WORKFLOW previo). El mandato se sube solo en el wizard.
+                    return (
+                      <div className="text-[10px] text-slate-400 italic text-right max-w-[140px] leading-tight">
+                        Subir solo durante la creación
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>

@@ -473,6 +473,14 @@ router.post('/', async (req, res) => {
   if (documents && typeof documents === 'object') {
     for (const [key, url] of Object.entries(documents)) {
       if (typeof url !== 'string' || !url) continue;
+      // FIX AC-15 (jul-2026): nunca persistir `blob:` ni `data:` URLs.
+      // Son locales al browser y expiran al cerrar la pestaña/refresh.
+      // Si el cliente las manda, las rechazamos silenciosamente (con log)
+      // para que el bug histórico no se repita en filas zombie.
+      if (url.startsWith('blob:') || url.startsWith('data:')) {
+        console.warn(`[docs] rechazando "${key}" — URL local (${url.slice(0, 40)}...) no se persiste en MySQL. El cliente debe re-subir cuando Drive esté conectado.`);
+        continue;
+      }
       const parsed = parseDocumentKey(key, firstOwnerId);
       if (!parsed) continue; // key no reconocida → la salteamos
       // Si parsed.ownerId es del wizard (wizard-X), no lo podemos persistir

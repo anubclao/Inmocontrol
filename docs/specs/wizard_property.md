@@ -103,6 +103,70 @@
 - Si wizardPropertyDbId está presente, no se crea una nueva propiedad —
   se reconecta a la existente (AC-1 es idempotente).
 
+### AC-15: NUNCA se persisten blob URLs a MySQL (drive URL o nada)
+- Cuando el user sube un doc y Drive está desconectado, el archivo NO
+  se guarda en `property_documents.file_url` con un `blob:` URL.
+- En su lugar, el card queda en estado "no subido" (sin entrada en DB)
+  y el badge muestra 🟠 "Pendiente → Drive" con texto "Conectá tu Drive
+  para subirlo".
+- **Razón**: blob URLs expiran al refrescar el browser. Si se persisten,
+  el archivo "se pierde" — el card muestra "Ver" pero el PDF viewer dice
+  "Es posible que se haya movido, editado o eliminado". Eso fue el bug
+  reportado el 23-jul-2026 (3 docs perdidos).
+- Aplica tanto al **wizard** (step 2) como al **Detalle del Inmueble**
+  (post-creación) y a **Carga de Mandato** desde el detalle.
+
+**Implementación (jul-2026) — defensa en 3 capas**:
+1. **Cliente** (`PropertiesView.tsx` Caso B línea ~640): antes del POST a
+   `/api/properties`, validar que `docUrl` NO empiece con `blob:` o `data:`.
+   Si empieza, log warning y NO persistir. Mostrar toast claro.
+2. **Cliente** (`handleFinalize` línea ~1071): cambiar la fuente de verdad
+   de `wizardFiles` a `uploadedDocs` (que SÍ persiste en localStorage).
+   Si un slot tiene URL de Drive, reusarla. Si tiene blob URL sin File
+   en memoria (refresh), loguear y seguir — el agente re-sube desde el Detalle.
+3. **Server** (`server/routes/properties.ts` línea ~478): validación final
+   que rechaza `url.startsWith('blob:')` o `url.startsWith('data:')` con
+   log warning. Es la red de seguridad por si el cliente se equivoca.
+
+**UI honesta del Detalle del Inmueble**: si una fila en `property_documents`
+tiene `file_url` con `blob:` (cualquier zombie previo a este fix), el
+Detalle NO muestra "Ver" verde. En su lugar, muestra un botón ámbar
+"Re-subir" + tooltip "Archivo previo perdido (URL local expirada) — re-subí
+para acceder". El Contrato de Mandato específicamente muestra un badge
+rojo "⚠ Archivo perdido" porque su pérdida es más grave (afecta status
+Activo de la propiedad).
+
+**Sanear filas existentes**: ver `scripts/clean-blob-property-documents.sql`.
+Lista filas zombie agrupadas por propiedad, tiene el DELETE comentado para
+ejecutar cuando el user esté listo, y un SELECT de verificación post-limpieza.
+
+### AC-16: Las URLs de Drive persistidas siempre son válidas
+- Si un doc se subió a Drive y se persistió su `webViewLink`, hacer
+  click en "Ver" SIEMPRE debe abrir el PDF en el visor.
+- Si Drive devuelve el archivo pero la URL no se puede abrir (file
+  not found, 404, etc.), el card debe mostrar badge 🔴 "Archivo no
+  disponible en Drive" en vez de pretender que está todo bien.
+- **Razón**: bug del 23-jul-2026 — 2 docs (Certificado Garaje 19 +
+  Contrato de Mandato) se subieron y persistieron como "Ver" pero el
+  visor decía "Es posible que se haya movido, editado o eliminado".
+  La URL en la DB no correspondía a un archivo accesible. Fix:
+  verificar al renderizar (HEAD request o patrón en la URL) y mostrar
+  estado real.
+- **Acción inmediata**: cuando un doc se sube, guardar también
+  `drive_file_id` (no solo `webViewLink`). Al renderizar, si la URL
+  falla, intentar regenerar el link con `drive.files.get({fileId, fields: 'webViewLink'})`.
+
+### AC-17: Discard de borrador también limpia archivos huérfanos en Drive
+- Si el user clickea "Descartar borrador" después de haber subido docs
+  a Drive (sin finalizar), los archivos subidos al Drive de la
+  propiedad deben borrarse o moverse a "papelera".
+- **Razón**: bug del 23-jul-2026 — cuando el discard borró la propiedad
+  de MySQL + la carpeta de Drive, los archivos que ya se habían
+  subido también se borraron. Pero el user no sabía que se borraron
+  y no los tenía respaldados localmente. Fix: pedir confirmación
+  explícita al discard si hay docs en Drive ("Vas a perder N archivos
+  ya subidos. ¿Continuar?").
+
 ## 3. Edge Cases
 
 ### Error States
@@ -315,6 +379,6 @@ interface FinalizeSummary {
 
 ## 10. Approval
 
-**Status:** ⏳ Pending Review
-**Aprobado por:** [nombre del user]
-**Fecha de aprobación:** [YYYY-MM-DD]
+**Status:** ✅ Aprobado
+**Aprobado por:** user (Karpathy cycle, jul-2026)
+**Fecha de aprobación:** 2026-07-23 (AC-15 ampliado con 3 capas de defensa tras bug de blob URLs en property_documents)
