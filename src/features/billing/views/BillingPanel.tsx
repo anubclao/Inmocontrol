@@ -140,6 +140,19 @@ export function BillingPanel({
         listPropertyCharges(property.id),
         listRentIncreases(property.id),
       ]);
+      // FIX Karpathy (jul-2026): log explícito cuando el GET devuelve null.
+      // El banner ámbar depende de `hasPersistedPolicy`; si el GET falló por
+      // 500/network y el fallback devolvió null, el banner queda pegado y el
+      // form muestra 0/0. El log ayuda a debug en prod + el botón "Reintentar"
+      // del banner permite al usuario forzarlo manualmente.
+      if (!existingPolicy) {
+        console.warn(
+          `[BillingPanel] No se encontró policy persistida para property=${property.id}. ` +
+          `Esto puede ser legítimo (primera vez) o un error transitorio del GET. ` +
+          `Si el wizard "Configurar facturación" se cerró con éxito pero el banner sigue, ` +
+          `click "Reintentar" en el banner.`,
+        );
+      }
       const effectivePolicy = existingPolicy ?? defaultPolicyFor(property);
       setPolicy(effectivePolicy);
       setPolicyDraft(effectivePolicy);
@@ -152,6 +165,7 @@ export function BillingPanel({
 
       await refreshInvoiceLookup();
     } catch (err: any) {
+      console.error('[BillingPanel] refreshBillingData failed:', err);
       showToast(`Error cargando billing: ${err?.message ?? err}`, 'error');
     } finally {
       setLoading(false);
@@ -448,14 +462,16 @@ export function BillingPanel({
             />
           )}
           {!hasPersistedPolicy && selectedContract && (
-            <button
-              type="button"
-              onClick={() => setShowSetupWizard(true)}
-              className="w-full flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-left hover:bg-amber-100 transition-colors group"
+            <div
+              className="w-full flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg group"
               data-testid="billing-no-policy-banner"
             >
               <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
-              <div className="flex-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => setShowSetupWizard(true)}
+                className="flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+              >
                 <p className="text-xs font-bold text-amber-900">
                   Esta propiedad no tiene política de facturación
                 </p>
@@ -464,9 +480,23 @@ export function BillingPanel({
                   {' '}
                   <span className="font-bold underline">Click acá para configurarla</span>.
                 </p>
-              </div>
+              </button>
+              {/* FIX Karpathy (jul-2026): botón "Reintentar" — si el wizard
+                  guardó la policy pero el GET inmediato falló, el banner
+                  queda pegado. Este botón re-fetcha sin abrir el wizard. */}
+              <button
+                type="button"
+                onClick={() => void refreshBillingData()}
+                disabled={loading}
+                className="px-2.5 py-1.5 text-[10px] font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+                title="Volver a consultar la policy al servidor (sin abrir el wizard)"
+                data-testid="billing-retry-policy"
+              >
+                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                Reintentar
+              </button>
               <FileSignature className="w-4 h-4 text-amber-600 group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
-            </button>
+            </div>
           )}
 
           {/* Política */}
