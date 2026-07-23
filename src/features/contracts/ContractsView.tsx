@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Plus, FileText, Calendar, AlertTriangle, CheckCircle, Eye, ClipboardCheck, Clock, X, Edit, Download } from 'lucide-react';
 import { Button, Card, Input, Modal } from '../../shared/ui';
@@ -362,6 +362,48 @@ function ContractForm({
     }));
   };
 
+  /**
+   * FIX Karpathy (jul-2026): al elegir una PROPIEDAD en el select, autollenar
+   * el tenant activo + canon + adminFee. Antes solo se autollenaba al cambiar
+   * el tenant (onTenantChange), pero la realidad operativa es: el agente
+   * primero elige la propiedad y los valores deberían venir solos.
+   *
+   * Mismo patrón de "no pisar" que onTenantChange: si el form ya tiene un
+   * rentAmount o adminFee válido (>0), respetamos la edición del usuario.
+   */
+  const onPropertyChange = (propertyId: string) => {
+    const t = tenants.find((x: any) => x.propertyId === propertyId && x.status === 'Activo');
+    setForm((f) => ({
+      ...f,
+      propertyId,
+      tenantId: t?.id ?? f.tenantId,
+      rentAmount: f.rentAmount > 0 ? f.rentAmount : Number(t?.rent ?? 0) || 0,
+      adminFee: f.adminFee > 0 ? f.adminFee : Number(t?.adminFee ?? 0) || 0,
+    }));
+  };
+
+  /**
+   * FIX Karpathy (jul-2026): auto-fill al mount del modal. Si el form se
+   * inicializa con una propiedad que tiene tenant activo (caso normal del
+   * constructor en línea 326-344), queremos que los campos lleguen
+   * pre-llenados, NO en cero. NO se dispara cuando es edición de un
+   * contract existente (ya viene con sus valores).
+   */
+  useEffect(() => {
+    if (contract) return; // edición: no tocar
+    if (!form.propertyId) return; // sin propiedad seleccionada
+    if (form.rentAmount > 0 || form.adminFee > 0) return; // ya tiene valores
+    const t = tenants.find((x: any) => x.propertyId === form.propertyId && x.status === 'Activo');
+    if (!t) return;
+    setForm((f) => ({
+      ...f,
+      tenantId: t.id,
+      rentAmount: Number(t.rent ?? 0) || 0,
+      adminFee: Number(t.adminFee ?? 0) || 0,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // solo al mount
+
   const handleSave = () => {
     if (!form.propertyId) { alert('Selecciona una propiedad'); return; }
     if (!form.tenantId) { alert('Selecciona un inquilino'); return; }
@@ -375,7 +417,7 @@ function ContractForm({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-bold text-slate-500 uppercase">Propiedad</label>
-            <select className="w-full mt-1 h-10 px-3 bg-slate-100 border-transparent rounded-lg text-sm" value={form.propertyId} onChange={(e) => setForm({ ...form, propertyId: e.target.value })}>
+            <select className="w-full mt-1 h-10 px-3 bg-slate-100 border-transparent rounded-lg text-sm" value={form.propertyId} onChange={(e) => onPropertyChange(e.target.value)}>
               <option value="">Seleccionar…</option>
               {properties.map((p: any) => <option key={p.id} value={p.id}>{p.address}</option>)}
             </select>
