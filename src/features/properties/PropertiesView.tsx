@@ -1,44 +1,101 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { generateMandatoPdf } from './mandatoPdf';
-import { useSettingsStore } from '../../shared/store/settingsStore';
-import { motion } from 'motion/react';
-import { FileText, Image, Eye, ClipboardCheck, GitCompare, Download, FileSignature, Upload, Building2, Hash, CreditCard, Power, Trash2, Lock, ListChecks, Camera, X, ChevronLeft, ChevronRight, RefreshCw, Users, Car, Package, Box, User as UserIcon, Mail, Phone, IdCard, Percent, CheckCircle2, CloudOff, AlertTriangle, ExternalLink } from 'lucide-react';
-import { Button, Card, Modal } from '../../shared/ui';
-import { ProcessOrderBanner } from '../../shared/ui/ProcessOrderBanner';
-import { formatAddress, isValidCHIP } from '../../utils/validators';
-import { createPropertyFolders, uploadFileToDrive, fileToBase64 } from '../../lib/drive/driveService';
-import { useGoogleDriveStore } from '../../shared/store/googleDriveStore';
-import { useAppStore } from '../../shared/store/appStore';
-import { StepBasic, type WizardOwner, type WizardUnit } from './components/StepBasic';
-import { StepDocs, type UploadedDocsMap } from './components/StepDocs';
-import { StepInventory } from './components/StepInventory';
-import { Role } from '../auth/permissions';
-import { useContractStore } from '../contracts/contractStore';
-import { STORAGE_KEYS } from '../../shared/hooks/storageKeys';
-import { PROPERTY_TYPES, type PropertyType } from './inventoryConfig';
-import { inventoryDB, normalizePhotosArray } from './inventoryDB';
-import type { Inventory } from './inventoryTypes';
-import { InventoryDiffView } from './InventoryDiffView';
-import { driveProxyUrl, driveDownloadUrl } from '../../lib/drive/driveProxy';
-import type { PropertyOwner, PropertyUnit, PropertyUnitType } from '../../types';
+import React, { useState, useRef, useEffect } from "react";
+import { generateMandatoPdf } from "./mandatoPdf";
+import { useSettingsStore } from "../../shared/store/settingsStore";
+import { motion } from "motion/react";
+import {
+  FileText,
+  Image,
+  Eye,
+  ClipboardCheck,
+  GitCompare,
+  Download,
+  FileSignature,
+  Upload,
+  Building2,
+  Hash,
+  CreditCard,
+  Power,
+  Trash2,
+  Lock,
+  ListChecks,
+  Camera,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
+  Users,
+  Car,
+  Package,
+  Box,
+  User as UserIcon,
+  Mail,
+  Phone,
+  IdCard,
+  Percent,
+  CheckCircle2,
+  CloudOff,
+  AlertTriangle,
+  ExternalLink,
+} from "lucide-react";
+import { Button, Card, Modal } from "../../shared/ui";
+import { ProcessOrderBanner } from "../../shared/ui/ProcessOrderBanner";
+import { formatAddress, isValidCHIP } from "../../utils/validators";
+import {
+  createPropertyFolders,
+  uploadFileToDrive,
+  fileToBase64,
+} from "../../lib/drive/driveService";
+import { useGoogleDriveStore } from "../../shared/store/googleDriveStore";
+import { useAppStore } from "../../shared/store/appStore";
+import {
+  StepBasic,
+  type WizardOwner,
+  type WizardUnit,
+} from "./components/StepBasic";
+import { StepDocs, type UploadedDocsMap } from "./components/StepDocs";
+import { StepInventory } from "./components/StepInventory";
+import { revokeIfBlob, createBlobUrl } from "../../shared/lib/blob";
+import { Role } from "../auth/permissions";
+import { useContractStore } from "../contracts/contractStore";
+import { STORAGE_KEYS } from "../../shared/hooks/storageKeys";
+import { PROPERTY_TYPES, type PropertyType } from "./inventoryConfig";
+import { inventoryDB, normalizePhotosArray } from "./inventoryDB";
+import type { Inventory } from "./inventoryTypes";
+import { InventoryDiffView } from "./InventoryDiffView";
+import { driveProxyUrl, driveDownloadUrl } from "../../lib/drive/driveProxy";
+import type {
+  PropertyOwner,
+  PropertyUnit,
+  PropertyUnitType,
+} from "../../types";
 
 export interface PropertiesViewProps {
-  showToast: (msg: string, type?: 'success' | 'error') => void;
+  showToast: (msg: string, type?: "success" | "error") => void;
   properties: any[];
   onAddProperty: (prop: any) => void;
   onUpdateProperty: (id: string, updates: any) => void;
   /** Elimina una propiedad (solo permitida si no tiene inventario). Devuelve {ok} o {error, hasInventories}. */
-  onDeleteProperty: (id: string) => Promise<{ ok: true; driveCleanupStatus: string } | { ok: false; error: string; hasInventories?: boolean }>;
+  onDeleteProperty: (
+    id: string,
+  ) => Promise<
+    | { ok: true; driveCleanupStatus: string }
+    | { ok: false; error: string; hasInventories?: boolean }
+  >;
   role: Role | null;
 }
 
-const REQUIRED_AREAS = ['Cocina', 'Baño Principal', 'Habitación 1', 'Zona Social'];
+const REQUIRED_AREAS = [
+  "Cocina",
+  "Baño Principal",
+  "Habitación 1",
+  "Zona Social",
+];
 /** slotKey del Contrato de Mandato (1 PDF multi-firmado por todos los propietarios). */
-const MANDATO_KEY = 'mandato';
+const MANDATO_KEY = "mandato";
 /** slotKey del Certificado de Tradición de la unidad principal. */
-const CERT_MAIN_KEY = 'certificado_tradicion:main';
+const CERT_MAIN_KEY = "certificado_tradicion:main";
 /** slotKey del Predial (1 por propiedad). */
-const PREDIAL_KEY = 'predial';
+const PREDIAL_KEY = "predial";
 
 /** Verifica si la propiedad tiene todos los documentos obligatorios + mandato firmado.
  *  Migración 010+: itera por cada owner y por cada unit, además de los docs a nivel
@@ -47,12 +104,13 @@ function allDocsComplete(p: any): boolean {
   if (!p) return false;
   // Mandato y Predial: a nivel de propiedad
   if (!p.mandatePdfUrl) return false;
-  if (!p.documents_property?.predial && !p.documents?.['Impuesto Predial']) {
+  if (!p.documents_property?.predial && !p.documents?.["Impuesto Predial"]) {
     // Sin predial — opcional, no bloquea
   }
   // Certificado principal
-  const hasMainCert = !!p.documents_property?.certificado_tradicion
-    || !!p.documents?.['Certificado de Tradición'];
+  const hasMainCert =
+    !!p.documents_property?.certificado_tradicion ||
+    !!p.documents?.["Certificado de Tradición"];
   if (!hasMainCert) return false;
   // CC por cada owner con nombre
   const owners = p.owners ?? [];
@@ -77,23 +135,24 @@ function slotKeyToLabel(
   owners?: WizardOwner[] | PropertyOwner[],
   units?: WizardUnit[] | PropertyUnit[],
 ): string {
-  if (slotKey === 'predial') return 'Impuesto Predial';
-  if (slotKey === 'mandato') return 'Contrato de Mandato';
-  if (slotKey === 'certificado_tradicion:main') return 'Certificado de Tradición';
-  if (slotKey.startsWith('cedula:')) {
-    const id = slotKey.slice('cedula:'.length);
+  if (slotKey === "predial") return "Impuesto Predial";
+  if (slotKey === "mandato") return "Contrato de Mandato";
+  if (slotKey === "certificado_tradicion:main")
+    return "Certificado de Tradición";
+  if (slotKey.startsWith("cedula:")) {
+    const id = slotKey.slice("cedula:".length);
     const o = owners?.find?.((x) => x.id === id);
-    return o ? `Cédula de ${o.name}` : 'Cédula';
+    return o ? `Cédula de ${o.name}` : "Cédula";
   }
-  if (slotKey.startsWith('rut:')) {
-    const id = slotKey.slice('rut:'.length);
+  if (slotKey.startsWith("rut:")) {
+    const id = slotKey.slice("rut:".length);
     const o = owners?.find?.((x) => x.id === id);
-    return o ? `RUT de ${o.name}` : 'RUT';
+    return o ? `RUT de ${o.name}` : "RUT";
   }
-  if (slotKey.startsWith('certificado_tradicion:')) {
-    const id = slotKey.slice('certificado_tradicion:'.length);
+  if (slotKey.startsWith("certificado_tradicion:")) {
+    const id = slotKey.slice("certificado_tradicion:".length);
     const u = units?.find?.((x) => x.id === id);
-    return u ? `Certificado de ${u.label}` : 'Certificado de Tradición';
+    return u ? `Certificado de ${u.label}` : "Certificado de Tradición";
   }
   return slotKey;
 }
@@ -106,11 +165,12 @@ function slotKeyToLabel(
  *  Ej: "Cédula de Tatiana Prieto" → "Cedula_de_Tatiana_Prieto" */
 function normalizeFilename(input: string): string {
   return input
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // quitar diacríticos
-    .replace(/ñ/gi, 'n')                                  // ñ/Ñ → n
-    .replace(/[^a-zA-Z0-9]+/g, '_')                       // no-alfanumérico → _
-    .replace(/_+/g, '_')                                  // colapsar __
-    .replace(/^_|_$/g, '');                               // trim _
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar diacríticos
+    .replace(/ñ/gi, "n") // ñ/Ñ → n
+    .replace(/[^a-zA-Z0-9]+/g, "_") // no-alfanumérico → _
+    .replace(/_+/g, "_") // colapsar __
+    .replace(/^_|_$/g, ""); // trim _
 }
 
 /** Genera el nombre del archivo PDF para un slotKey, incluyendo el nombre
@@ -123,42 +183,58 @@ function slotKeyToFilename(
   units?: WizardUnit[] | PropertyUnit[],
 ): string {
   // Casos directos: a nivel de propiedad (sin owner/unit).
-  if (slotKey === 'predial') return 'Predial.pdf';
-  if (slotKey === 'mandato') return 'Contrato_Mandato.pdf';
-  if (slotKey === 'certificado_tradicion:main') return 'Certificado_Unidad_Principal.pdf';
+  if (slotKey === "predial") return "Predial.pdf";
+  if (slotKey === "mandato") return "Contrato_Mandato.pdf";
+  if (slotKey === "certificado_tradicion:main")
+    return "Certificado_Unidad_Principal.pdf";
 
-  if (slotKey.startsWith('cedula:')) {
-    const id = slotKey.slice('cedula:'.length);
+  if (slotKey.startsWith("cedula:")) {
+    const id = slotKey.slice("cedula:".length);
     const o = owners?.find?.((x) => x.id === id);
-    return o ? `Cedula_${normalizeFilename(o.name)}.pdf` : 'Cedula.pdf';
+    return o ? `Cedula_${normalizeFilename(o.name)}.pdf` : "Cedula.pdf";
   }
-  if (slotKey.startsWith('rut:')) {
-    const id = slotKey.slice('rut:'.length);
+  if (slotKey.startsWith("rut:")) {
+    const id = slotKey.slice("rut:".length);
     const o = owners?.find?.((x) => x.id === id);
-    return o ? `RUT_${normalizeFilename(o.name)}.pdf` : 'RUT.pdf';
+    return o ? `RUT_${normalizeFilename(o.name)}.pdf` : "RUT.pdf";
   }
-  if (slotKey.startsWith('certificado_tradicion:')) {
-    const id = slotKey.slice('certificado_tradicion:'.length);
+  if (slotKey.startsWith("certificado_tradicion:")) {
+    const id = slotKey.slice("certificado_tradicion:".length);
     const u = units?.find?.((x) => x.id === id);
-    return u ? `Certificado_${normalizeFilename(u.label)}.pdf` : 'Certificado_Tradicion.pdf';
+    return u
+      ? `Certificado_${normalizeFilename(u.label)}.pdf`
+      : "Certificado_Tradicion.pdf";
   }
   return `${normalizeFilename(slotKey)}.pdf`;
 }
 
-export function PropertiesView({ showToast, properties, onAddProperty, onUpdateProperty, onDeleteProperty }: PropertiesViewProps) {
-  const [address, setAddress] = useState('');
-  const [chip, setChip] = useState('');
-  const [folio, setFolio] = useState('');
-  const [propertyType, setPropertyType] = useState<PropertyType>('apartamento');
+export function PropertiesView({
+  showToast,
+  properties,
+  onAddProperty,
+  onUpdateProperty,
+  onDeleteProperty,
+}: PropertiesViewProps) {
+  const [address, setAddress] = useState("");
+  const [chip, setChip] = useState("");
+  const [folio, setFolio] = useState("");
+  const [propertyType, setPropertyType] = useState<PropertyType>("apartamento");
   /** N propietarios del wizard. Migración 010+. */
   const [wizardOwners, setWizardOwners] = useState<WizardOwner[]>([
-    { id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' },
+    {
+      id: `wizard-owner-${Date.now()}-1`,
+      name: "",
+      idNumber: "",
+      phone: "",
+      email: "",
+      ownershipPct: "",
+    },
   ]);
   /** N unidades adicionales del wizard (garaje, depósito, etc.). */
   const [wizardUnits, setWizardUnits] = useState<WizardUnit[]>([]);
   /** Cédula del primer propietario (reflejada en el campo legacy de `ownerIdNumber`).
    *  Mantenemos por compat con el modal de cédula que se abre al clickear CC. */
-  const [ownerIdNumber, setOwnerIdNumber] = useState('');
+  const [ownerIdNumber, setOwnerIdNumber] = useState("");
   /** Si false → se muestra la lista de inmuebles. Si true → se muestra el wizard de captación. */
   const [showWizard, setShowWizard] = useState(false);
   const [step, setStep] = useState(1);
@@ -176,36 +252,57 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
    *  el wizard (porque la propiedad aún no existe y el FK explota). En su lugar,
    *  se persiste en IndexedDB con id `wizard-X:inicial` y se re-keyea + postea a
    *  MySQL dentro de handleFinalize, una vez que propertyDbId ya está disponible. */
-  const [wizardInventory, setWizardInventory] = useState<Inventory | null>(null);
+  const [wizardInventory, setWizardInventory] = useState<Inventory | null>(
+    null,
+  );
   // ID temporal del wizard de captación. Lo guardamos en state para reusar el
   // mismo id al reabrir el wizard (así la autosave del inventario en IndexedDB
   // se reconecta). Se renombra a un UUID real en handleFinalize.
-  const [wizardPropertyId, setWizardPropertyId] = useState<string>(`wizard-${Date.now()}`);
+  const [wizardPropertyId, setWizardPropertyId] = useState<string>(
+    `wizard-${Date.now()}`,
+  );
   // Migración a Option B: al pasar del step 1 al step 2 (o al click en "Guardar
   // avance"), pre-creamos la propiedad en MySQL para que las uploads a Drive en
   // step 2 sean en tiempo real. Estos IDs se llenan cuando se hace el POST.
   // - wizardPropertyDbId: UUID real retornado por el server
   // - wizardDriveFolderId/Path: idem para la carpeta en Drive
   // Si son null, todavía no se persistió (estado inicial del wizard).
-  const [wizardPropertyDbId, setWizardPropertyDbId] = useState<string | null>(null);
-  const [wizardDriveFolderId, setWizardDriveFolderId] = useState<string | null>(null);
-  const [wizardDriveFolderPath, setWizardDriveFolderPath] = useState<string | null>(null);
-  const [viewingDoc, setViewingDoc] = useState<{ label: string; url: string } | null>(null);
+  const [wizardPropertyDbId, setWizardPropertyDbId] = useState<string | null>(
+    null,
+  );
+  const [wizardDriveFolderId, setWizardDriveFolderId] = useState<string | null>(
+    null,
+  );
+  const [wizardDriveFolderPath, setWizardDriveFolderPath] = useState<
+    string | null
+  >(null);
+  const [viewingDoc, setViewingDoc] = useState<{
+    label: string;
+    url: string;
+  } | null>(null);
   const [viewingProperty, setViewingProperty] = useState<any>(null);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
   const [currentDocLabel, setCurrentDocLabel] = useState<string | null>(null);
-  const [inventoryModalProperty, setInventoryModalProperty] = useState<any | null>(null);
-  const [inventoryPhase, setInventoryPhase] = useState<'inicial' | 'final' | null>(null);
+  const [inventoryModalProperty, setInventoryModalProperty] = useState<
+    any | null
+  >(null);
+  const [inventoryPhase, setInventoryPhase] = useState<
+    "inicial" | "final" | null
+  >(null);
   const [baseInventory, setBaseInventory] = useState<Inventory | null>(null);
   const [comparingProperty, setComparingProperty] = useState<any | null>(null);
   /** Modal: confirmar descarte del draft del wizard. TRUE = mostrar el modal. */
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Pista: qué propiedad del detalle estamos actualizando con el mandato firmado. */
-  const [uploadingMandatoPropertyId, setUploadingMandatoPropertyId] = useState<string | null>(null);
+  const [uploadingMandatoPropertyId, setUploadingMandatoPropertyId] = useState<
+    string | null
+  >(null);
   const mandatoFileInputRef = useRef<HTMLInputElement>(null);
   /** Pista: qué propiedad del detalle estamos actualizando con un doc legal. */
-  const [uploadingDocPropertyId, setUploadingDocPropertyId] = useState<string | null>(null);
+  const [uploadingDocPropertyId, setUploadingDocPropertyId] = useState<
+    string | null
+  >(null);
   /** Propiedad pendiente de confirmación para eliminar (solo si NO tiene inventario). */
   const [pendingDelete, setPendingDelete] = useState<any | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -243,7 +340,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       areaId: string;
       areaLabel: string;
       dataUrl: string;
-      phase: 'inicial' | 'final';
+      phase: "inicial" | "final";
     }>;
   }>(null);
   const [photoGalleryLoading, setPhotoGalleryLoading] = useState(false);
@@ -257,17 +354,19 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       const result = await onDeleteProperty(pendingDelete.id);
       if (result.ok === true) {
         const driveNote =
-          result.driveCleanupStatus === 'deleted'
-            ? ' (carpeta Drive vaciada)'
-            : result.driveCleanupStatus === 'skipped'
-              ? ' (la carpeta Drive tenía archivos, queda como histórico)'
-              : '';
+          result.driveCleanupStatus === "deleted"
+            ? " (carpeta Drive vaciada)"
+            : result.driveCleanupStatus === "skipped"
+              ? " (la carpeta Drive tenía archivos, queda como histórico)"
+              : "";
         showToast(`"${pendingDelete.address}" eliminado${driveNote}`);
         // Si el detail modal está abierto sobre esta misma propiedad, cerrarlo
-        setViewingProperty((curr: any) => (curr?.id === pendingDelete.id ? null : curr));
+        setViewingProperty((curr: any) =>
+          curr?.id === pendingDelete.id ? null : curr,
+        );
       } else {
         // TS narrow: result.ok === false
-        showToast(result.error ?? 'Error eliminando', 'error');
+        showToast(result.error ?? "Error eliminando", "error");
       }
     } finally {
       setDeleting(false);
@@ -344,7 +443,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         // serializamos solo los campos serializables (sin Files ni blob URLs)
         const draft = {
           wizardPropertyId, // CRÍTICO: reusar el mismo id al reabrir para que
-                            // StepInventory re-hidrate el inventario desde IndexedDB
+          // StepInventory re-hidrate el inventario desde IndexedDB
           // Option B: si la propiedad ya está persistida en MySQL, guardamos
           // el UUID real para que al re-abrir el wizard sepamos que NO hay
           // que volver a crearla. También guardamos el driveFolderPath para
@@ -352,7 +451,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           wizardPropertyDbId,
           wizardDriveFolderId,
           wizardDriveFolderPath,
-          address, chip, folio, propertyType, step,
+          address,
+          chip,
+          folio,
+          propertyType,
+          step,
           wizardOwners,
           wizardUnits,
           // uploadedDocs: solo guardamos las keys que tienen al menos 1 archivo
@@ -367,18 +470,32 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           ownerIdNumber,
           savedAt: Date.now(),
         };
-        localStorage.setItem(STORAGE_KEYS.wizardPropertyDraft, JSON.stringify(draft));
+        localStorage.setItem(
+          STORAGE_KEYS.wizardPropertyDraft,
+          JSON.stringify(draft),
+        );
       } catch (err) {
-        console.warn('[wizard-draft] no se pudo guardar:', err);
+        console.warn("[wizard-draft] no se pudo guardar:", err);
       }
     }, 600);
     // Cleanup: si el effect se vuelve a ejecutar antes de los 600ms
     // (otro cambio de state), cancelamos el write anterior.
     return () => clearTimeout(timeoutId);
   }, [
-    showWizard, wizardPropertyId, wizardPropertyDbId, wizardDriveFolderId, wizardDriveFolderPath,
-    address, chip, folio, propertyType, step,
-    wizardOwners, wizardUnits, uploadedDocs, ownerIdNumber,
+    showWizard,
+    wizardPropertyId,
+    wizardPropertyDbId,
+    wizardDriveFolderId,
+    wizardDriveFolderPath,
+    address,
+    chip,
+    folio,
+    propertyType,
+    step,
+    wizardOwners,
+    wizardUnits,
+    uploadedDocs,
+    ownerIdNumber,
   ]);
 
   // Hidratar el draft SOLO cuando el user abre explícitamente el wizard.
@@ -399,9 +516,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         wizardPropertyDbId?: string | null;
         wizardDriveFolderId?: string | null;
         wizardDriveFolderPath?: string | null;
-        address?: string; chip?: string; folio?: string;
-        propertyType?: PropertyType; step?: number;
-        wizardOwners?: WizardOwner[]; wizardUnits?: WizardUnit[];
+        address?: string;
+        chip?: string;
+        folio?: string;
+        propertyType?: PropertyType;
+        step?: number;
+        wizardOwners?: WizardOwner[];
+        wizardUnits?: WizardUnit[];
         ownerIdNumber?: string;
         uploadedDocsKeys?: Record<string, string | null>; // valor = `${n}-files` o null
         savedAt?: number;
@@ -413,14 +534,22 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         const ageMs = Date.now() - draft.savedAt;
         const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 días
         if (ageMs > MAX_AGE_MS) {
-          console.log(`[wizard-draft] descartado por TTL: ${Math.round(ageMs / (24*60*60*1000))} días de antigüedad`);
-          try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
+          console.log(
+            `[wizard-draft] descartado por TTL: ${Math.round(ageMs / (24 * 60 * 60 * 1000))} días de antigüedad`,
+          );
+          try {
+            localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft);
+          } catch {
+            /* silent */
+          }
           return;
         }
       }
       // Solo restauramos si hay algo significativo (al menos dirección o un owner)
-      const hasContent = (draft.address && draft.address.length > 0)
-        || (draft.wizardOwners && draft.wizardOwners.some((o) => o.name.trim().length > 0));
+      const hasContent =
+        (draft.address && draft.address.length > 0) ||
+        (draft.wizardOwners &&
+          draft.wizardOwners.some((o) => o.name.trim().length > 0));
       if (!hasContent) return;
       // CRÍTICO: reusar el mismo wizardPropertyId para que la autosave del
       // inventario en IndexedDB (key = `${wizardPropertyId}:inicial`) se
@@ -431,16 +560,21 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // ya estaba persistida. Si el server no reconoce este id (caso edge
       // donde se borró manualmente), el siguiente ensurePropertyPersisted
       // creará una propiedad nueva sin drama.
-      if (draft.wizardPropertyDbId) setWizardPropertyDbId(draft.wizardPropertyDbId);
-      if (draft.wizardDriveFolderId) setWizardDriveFolderId(draft.wizardDriveFolderId);
-      if (draft.wizardDriveFolderPath) setWizardDriveFolderPath(draft.wizardDriveFolderPath);
+      if (draft.wizardPropertyDbId)
+        setWizardPropertyDbId(draft.wizardPropertyDbId);
+      if (draft.wizardDriveFolderId)
+        setWizardDriveFolderId(draft.wizardDriveFolderId);
+      if (draft.wizardDriveFolderPath)
+        setWizardDriveFolderPath(draft.wizardDriveFolderPath);
       if (draft.address) setAddress(draft.address);
       if (draft.chip) setChip(draft.chip);
       if (draft.folio) setFolio(draft.folio);
       if (draft.propertyType) setPropertyType(draft.propertyType);
       if (draft.ownerIdNumber) setOwnerIdNumber(draft.ownerIdNumber);
-      if (draft.wizardOwners && draft.wizardOwners.length > 0) setWizardOwners(draft.wizardOwners);
-      if (draft.wizardUnits && draft.wizardUnits.length > 0) setWizardUnits(draft.wizardUnits);
+      if (draft.wizardOwners && draft.wizardOwners.length > 0)
+        setWizardOwners(draft.wizardOwners);
+      if (draft.wizardUnits && draft.wizardUnits.length > 0)
+        setWizardUnits(draft.wizardUnits);
       // Step 1 siempre (los steps 2 y 3 tienen state que no podemos restaurar
       // — los archivos subidos tienen blob URLs que expiran; el inventario
       // está en IndexedDB y se carga solo al re-abrir)
@@ -455,9 +589,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         }
         setUploadedDocs(next);
       }
-      showToast('Tenías un draft sin terminar — restaurado al paso 1. Los archivos se re-suben desde el paso 2.', 'success');
+      showToast(
+        "Tenías un draft sin terminar — restaurado al paso 1. Los archivos se re-suben desde el paso 2.",
+        "success",
+      );
     } catch (err) {
-      console.warn('[wizard-draft] no se pudo restaurar:', err);
+      console.warn("[wizard-draft] no se pudo restaurar:", err);
     }
   }, [showWizard, restoreDraftOnOpen]);
 
@@ -482,33 +619,47 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           documents: fresh.documents ?? {},
           status: fresh.status ?? p.status,
           inventoryPdfUrl: fresh.inventory_pdf_url ?? null,
-          inventoryCaptacionPdfUrl: fresh.inventario_captacion_pdf_url ?? fresh.inventory_captacion_pdf_url ?? null,
-          inventoryColocacionPdfUrl: fresh.inventario_colocacion_pdf_url ?? fresh.inventory_colocacion_pdf_url ?? null,
+          inventoryCaptacionPdfUrl:
+            fresh.inventario_captacion_pdf_url ??
+            fresh.inventory_captacion_pdf_url ??
+            null,
+          inventoryColocacionPdfUrl:
+            fresh.inventario_colocacion_pdf_url ??
+            fresh.inventory_colocacion_pdf_url ??
+            null,
           inventoryCount: fresh.inventory_count ?? 0,
         };
-        setViewingProperty((prev: any) => prev?.id === p.id ? { ...prev, ...mapped } : prev);
+        setViewingProperty((prev: any) =>
+          prev?.id === p.id ? { ...prev, ...mapped } : prev,
+        );
         // También sincronizar Zustand para que el thumbnail de la card se actualice
         useAppStore.setState((s: any) => ({
-          properties: s.properties.map((x: any) => x.id === p.id ? { ...x, ...mapped } : x),
+          properties: s.properties.map((x: any) =>
+            x.id === p.id ? { ...x, ...mapped } : x,
+          ),
         }));
       }
     } catch (err) {
-      console.warn('[openDetailFresh]', err);
+      console.warn("[openDetailFresh]", err);
     }
   };
 
   useEffect(() => {
     let cancelled = false;
-    if (inventoryModalProperty && inventoryPhase === 'final') {
+    if (inventoryModalProperty && inventoryPhase === "final") {
       (async () => {
-        const inv = await inventoryDB.getInventory(`${inventoryModalProperty.id}:inicial`);
+        const inv = await inventoryDB.getInventory(
+          `${inventoryModalProperty.id}:inicial`,
+        );
         if (cancelled) return;
         setBaseInventory(inv);
       })();
     } else {
       setBaseInventory(null);
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [inventoryModalProperty, inventoryPhase]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -516,14 +667,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     if (!file || !currentDocLabel) return;
 
     // --- Validación común ---
-    if (file.type !== 'application/pdf') {
-      showToast('Solo se permiten archivos PDF', 'error');
+    if (file.type !== "application/pdf") {
+      showToast("Solo se permiten archivos PDF", "error");
       return;
     }
     const MAX = 5 * 1024 * 1024;
     if (file.size > MAX) {
-      showToast('El archivo es demasiado grande. El límite es de 5MB.', 'error');
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      showToast(
+        "El archivo es demasiado grande. El límite es de 5MB.",
+        "error",
+      );
+      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
@@ -539,26 +693,38 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
         if (driveFolderId) {
           const base64 = await fileToBase64(file);
-          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', `Contrato_de_Mandato.pdf`, base64);
+          const result = await uploadFileToDrive(
+            propId,
+            driveFolderId,
+            "Propietario",
+            `Contrato_de_Mandato.pdf`,
+            base64,
+          );
           if (!result.webViewLink) {
-            showToast(`Error al subir: ${result.error}`, 'error');
-            setUploadingDoc(null); setCurrentDocLabel(null); setUploadingMandatoPropertyId(null);
-            if (fileInputRef.current) fileInputRef.current.value = '';
+            showToast(`Error al subir: ${result.error}`, "error");
+            setUploadingDoc(null);
+            setCurrentDocLabel(null);
+            setUploadingMandatoPropertyId(null);
+            if (fileInputRef.current) fileInputRef.current.value = "";
             return;
           }
           mandateUrl = result.webViewLink;
         } else {
-          // Sin Drive: el archivo queda solo en este navegador (blob URL).
-          mandateUrl = URL.createObjectURL(file);
+          // BUG-021: sin Drive, el archivo queda como blob URL local. Si ya
+          // había un mandato previo, revocar el blob viejo antes de crear
+          // el nuevo — si no, el viejo queda en RAM hasta cerrar la pestaña.
+          revokeIfBlob(prop?.mandatePdfUrl);
+          mandateUrl = createBlobUrl(file);
         }
 
         const now = new Date().toISOString();
-        const nextStatus = prop?.status === 'Pendiente' ? 'Activo' : prop?.status;
+        const nextStatus =
+          prop?.status === "Pendiente" ? "Activo" : prop?.status;
 
         try {
-          const res = await fetch('/api/properties', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+          const res = await fetch("/api/properties", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               localId: propId,
               mandatePdfUrl: mandateUrl,
@@ -571,24 +737,36 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             throw new Error(err.error ?? `HTTP ${res.status}`);
           }
         } catch (err: any) {
-          console.error('[mandato upload] backend persist:', err);
-          showToast(`Mandato subido, pero no se pudo guardar en servidor: ${err.message}`, 'error');
+          console.error("[mandato upload] backend persist:", err);
+          showToast(
+            `Mandato subido, pero no se pudo guardar en servidor: ${err.message}`,
+            "error",
+          );
         }
 
-        const updates: any = { mandatePdfUrl: mandateUrl, mandateSignedAt: now };
+        const updates: any = {
+          mandatePdfUrl: mandateUrl,
+          mandateSignedAt: now,
+        };
         if (nextStatus !== prop?.status) updates.status = nextStatus;
         onUpdateProperty(propId, updates);
-        setViewingProperty((prev: any) => prev ? { ...prev, ...updates } : prev);
-        if (nextStatus === 'Activo') showToast(`Contrato de Mandato firmado. ¡Propiedad activada!`, 'success');
-        else showToast(`Contrato de Mandato subido correctamente`, 'success');
+        setViewingProperty((prev: any) =>
+          prev ? { ...prev, ...updates } : prev,
+        );
+        if (nextStatus === "Activo")
+          showToast(
+            `Contrato de Mandato firmado. ¡Propiedad activada!`,
+            "success",
+          );
+        else showToast(`Contrato de Mandato subido correctamente`, "success");
       } catch (err) {
-        console.error('[mandato upload]', err);
-        showToast('Error al procesar el archivo', 'error');
+        console.error("[mandato upload]", err);
+        showToast("Error al procesar el archivo", "error");
       }
       setUploadingDoc(null);
       setCurrentDocLabel(null);
       setUploadingMandatoPropertyId(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
@@ -612,22 +790,39 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             viewingProperty?.owners,
             viewingProperty?.units,
           );
-          const result = await uploadFileToDrive(propId, driveFolderId, 'Propietario', fileName, base64);
+          const result = await uploadFileToDrive(
+            propId,
+            driveFolderId,
+            "Propietario",
+            fileName,
+            base64,
+          );
           if (result.webViewLink) {
             docUrl = result.webViewLink;
           } else {
-            showToast(`Error al subir: ${result.error}`, 'error');
+            showToast(`Error al subir: ${result.error}`, "error");
           }
         } else {
-          docUrl = URL.createObjectURL(file);
-          showToast(`Documento guardado localmente (Drive desconectado)`, 'success');
+          // BUG-021: revocar el blob viejo del mismo slot antes de crear
+          // el nuevo. Sin esto, si el agente re-sube el mismo documento,
+          // el blob anterior queda en RAM (puede acumular 10+ MB si son
+          // PDFs de 5MB c/u, y solo se libera al cerrar la pestaña).
+          const oldUrl = prop?.documents?.[slotKey];
+          revokeIfBlob(oldUrl);
+          docUrl = createBlobUrl(file);
+          showToast(
+            `Documento guardado localmente (Drive desconectado)`,
+            "success",
+          );
         }
 
         if (docUrl) {
           const updatedDocs = { ...(prop?.documents ?? {}), [slotKey]: docUrl };
           onUpdateProperty(propId, { documents: updatedDocs });
-          setViewingProperty((prev: any) => prev ? { ...prev, documents: updatedDocs } : prev);
-          if (driveFolderId) showToast(`Documento subido a Drive`, 'success');
+          setViewingProperty((prev: any) =>
+            prev ? { ...prev, documents: updatedDocs } : prev,
+          );
+          if (driveFolderId) showToast(`Documento subido a Drive`, "success");
 
           // FIX AC-15 (jul-2026): solo persistir al server si la URL es válida
           // (Drive). Si es `blob:` (Drive desconectado), NO guardamos en MySQL
@@ -636,12 +831,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           // muestran "Ver" verde pero el PDF viewer dice "moved, edited, or
           // deleted" porque el blob URL murió al refrescar.
           const isPersistibleUrl =
-            docUrl.startsWith('https://') && !docUrl.startsWith('blob:') && !docUrl.startsWith('data:');
+            docUrl.startsWith("https://") &&
+            !docUrl.startsWith("blob:") &&
+            !docUrl.startsWith("data:");
           if (isPersistibleUrl) {
             try {
-              const res = await fetch('/api/properties', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+              const res = await fetch("/api/properties", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   localId: propId,
                   documents: { [slotKey]: docUrl },
@@ -652,23 +849,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 throw new Error(err.error ?? `HTTP ${res.status}`);
               }
             } catch (err: any) {
-              console.error('[doc upload] backend persist:', err);
+              console.error("[doc upload] backend persist:", err);
             }
           } else {
-            console.warn(`[doc upload] docUrl local (${docUrl.slice(0, 30)}...) NO persistido. Reconectá Drive y re-subí desde el Detalle.`);
+            console.warn(
+              `[doc upload] docUrl local (${docUrl.slice(0, 30)}...) NO persistido. Reconectá Drive y re-subí desde el Detalle.`,
+            );
             if (!driveFolderId) {
-              showToast(`Documento guardado solo localmente (Drive no conectado). Reconectá Drive y reintentá la subida.`, 'error');
+              showToast(
+                `Documento guardado solo localmente (Drive no conectado). Reconectá Drive y reintentá la subida.`,
+                "error",
+              );
             }
           }
         }
       } catch (err) {
-        console.error('[Doc upload] Error:', err);
-        showToast('Error al procesar el archivo', 'error');
+        console.error("[Doc upload] Error:", err);
+        showToast("Error al procesar el archivo", "error");
       }
       setUploadingDoc(null);
       setCurrentDocLabel(null);
       setUploadingDocPropertyId(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
@@ -686,23 +888,19 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     if (!persisted) {
       setUploadingDoc(null);
       setCurrentDocLabel(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     // ── Si Drive está conectado → subir AHORA (real-time) ──
     if (persisted.driveFolderId) {
       try {
-        const fileName = slotKeyToFilename(
-          slotKey,
-          wizardOwners,
-          wizardUnits,
-        );
+        const fileName = slotKeyToFilename(slotKey, wizardOwners, wizardUnits);
         const base64 = await fileToBase64(file);
         const result = await uploadFileToDrive(
           persisted.propertyDbId,
           persisted.driveFolderId,
-          'Propietario',
+          "Propietario",
           fileName,
           base64,
         );
@@ -711,37 +909,67 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           // Reemplazamos la URL del archivo en uploadedDocs por la de Drive.
           // Guardamos también en wizardFiles por compat con handleFinalize
           // (que lee wizardFiles para re-keyear al UUID real del server).
-          setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
-          setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, result.webViewLink] });
-          showToast(`✓ ${fileName} subido a Drive`, 'success');
+          setWizardFiles({
+            ...wizardFiles,
+            [slotKey]: [...(wizardFiles[slotKey] ?? []), file],
+          });
+          setUploadedDocs({
+            ...uploadedDocs,
+            [slotKey]: [...prevArr, result.webViewLink],
+          });
+          showToast(`✓ ${fileName} subido a Drive`, "success");
         } else {
           // Falla de Drive → fallback a blob URL + wizardFiles
-          const blobUrl = URL.createObjectURL(file);
-          setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
-          setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, blobUrl] });
-          showToast(`Error al subir a Drive (${result.error}); guardado localmente. Reintentá al finalizar.`, 'error');
+          // BUG-021: createBlobUrl (alias) + revoke en cleanup del wizard.
+          const blobUrl = createBlobUrl(file);
+          setWizardFiles({
+            ...wizardFiles,
+            [slotKey]: [...(wizardFiles[slotKey] ?? []), file],
+          });
+          setUploadedDocs({
+            ...uploadedDocs,
+            [slotKey]: [...prevArr, blobUrl],
+          });
+          showToast(
+            `Error al subir a Drive (${result.error}); guardado localmente. Reintentá al finalizar.`,
+            "error",
+          );
         }
       } catch (err: any) {
-        console.error('[wizard doc upload] error:', err);
-        const blobUrl = URL.createObjectURL(file);
-        setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
-        setUploadedDocs({ ...uploadedDocs, [slotKey]: [...(blobUrl ? [blobUrl] : [])] });
-        showToast('Error al subir a Drive; guardado localmente', 'error');
+        console.error("[wizard doc upload] error:", err);
+        // BUG-021: idem, blob revocado en cleanup del wizard.
+        const blobUrl = createBlobUrl(file);
+        setWizardFiles({
+          ...wizardFiles,
+          [slotKey]: [...(wizardFiles[slotKey] ?? []), file],
+        });
+        setUploadedDocs({
+          ...uploadedDocs,
+          [slotKey]: [...(blobUrl ? [blobUrl] : [])],
+        });
+        showToast("Error al subir a Drive; guardado localmente", "error");
       }
     } else {
       // Drive no conectado → fallback a blob URL + wizardFiles
-      const blobUrl = URL.createObjectURL(file);
+      // BUG-021: idem, blob revocado en cleanup del wizard.
+      const blobUrl = createBlobUrl(file);
       const prevArr = uploadedDocs[slotKey] ?? [];
-      setWizardFiles({ ...wizardFiles, [slotKey]: [...(wizardFiles[slotKey] ?? []), file] });
+      setWizardFiles({
+        ...wizardFiles,
+        [slotKey]: [...(wizardFiles[slotKey] ?? []), file],
+      });
       setUploadedDocs({ ...uploadedDocs, [slotKey]: [...prevArr, blobUrl] });
-      showToast(`Documento guardado localmente (Drive no conectado). Se subirá cuando conectes tu Drive.`, 'error');
+      showToast(
+        `Documento guardado localmente (Drive no conectado). Se subirá cuando conectes tu Drive.`,
+        "error",
+      );
     }
 
     setUploadingDoc(null);
     setCurrentDocLabel(null);
     // Disparar el modal "¿Querés subir otro?" en StepDocs.
     setLastUploadedSlot(slotKey);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const triggerFileInput = (label: string) => {
@@ -757,9 +985,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     const driveConnected = useGoogleDriveStore.getState().connected;
     if (prop?.driveFolderId && !driveConnected) {
       showToast(
-        'Google Drive desconectado — el PDF del mandato se guardará solo en este navegador. ' +
-        'Reconectá tu cuenta desde Configuración → Integraciones para guardarlo en la nube.',
-        'error',
+        "Google Drive desconectado — el PDF del mandato se guardará solo en este navegador. " +
+          "Reconectá tu cuenta desde Configuración → Integraciones para guardarlo en la nube.",
+        "error",
       );
     }
     setCurrentDocLabel(MANDATO_KEY);
@@ -780,8 +1008,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     if (prop?.driveFolderId && !driveConnected) {
       showToast(
         `Google Drive desconectado — no se puede subir el documento a la nube. ` +
-        `Reconectá tu cuenta desde Configuración → Integraciones y reintentá.`,
-        'error',
+          `Reconectá tu cuenta desde Configuración → Integraciones y reintentá.`,
+        "error",
       );
       return;
     }
@@ -791,7 +1019,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   };
 
   /** Helper semántico: subir CC o RUT de un propietario específico. */
-  const triggerOwnerDocUpload = (propertyId: string, ownerId: string, docType: 'cedula' | 'rut') => {
+  const triggerOwnerDocUpload = (
+    propertyId: string,
+    ownerId: string,
+    docType: "cedula" | "rut",
+  ) => {
     const slotKey = `${docType}:${ownerId}`;
     triggerDetailDocUpload(propertyId, slotKey);
   };
@@ -801,7 +1033,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   };
   /** Helper semántico: subir Predial o Certificado de la unidad principal
    *  (documentos a nivel de propiedad, sin owner/unit específico). */
-  const triggerPropertyDocUpload = (propertyId: string, slotKey: 'predial' | 'certificado_tradicion:main') => {
+  const triggerPropertyDocUpload = (
+    propertyId: string,
+    slotKey: "predial" | "certificado_tradicion:main",
+  ) => {
     triggerDetailDocUpload(propertyId, slotKey);
   };
 
@@ -833,12 +1068,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     }
     // Validación de campos básicos (mismas reglas que handleFinalize)
     if (!address || !chip || !folio) {
-      showToast('Por favor complete dirección, CHIP y folio', 'error');
+      showToast("Por favor complete dirección, CHIP y folio", "error");
       return null;
     }
     const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
     if (validOwners.length === 0) {
-      showToast('Agregá al menos un propietario con nombre', 'error');
+      showToast("Agregá al menos un propietario con nombre", "error");
       return null;
     }
     // Validar suma de % de participación (si hay)
@@ -848,7 +1083,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     if (definedPcts.length > 0) {
       const sum = definedPcts.reduce((a, b) => a + b, 0);
       if (Math.abs(sum - 100) > 0.01) {
-        showToast(`Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`, 'error');
+        showToast(
+          `Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`,
+          "error",
+        );
         return null;
       }
     }
@@ -856,12 +1094,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // POST al backend
     const firstOwner = validOwners[0];
     try {
-      const res = await fetch('/api/properties', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/properties", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           localId: wizardPropertyId,
-          address, chip, folio,
+          address,
+          chip,
+          folio,
           ownerName: firstOwner.name,
           ownerIdNumber: firstOwner.idNumber,
           // FIX 2026-07-22: enviar también ownerPhone/ownerEmail al top level
@@ -874,7 +1114,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           ownerPhone: firstOwner.phone || null,
           ownerEmail: firstOwner.email || null,
           propertyType,
-          status: 'Pendiente', // antes de tener mandato, queda Pendiente
+          status: "Pendiente", // antes de tener mandato, queda Pendiente
           owners: validOwners.map((o, i) => ({
             id: o.id,
             name: o.name,
@@ -884,50 +1124,69 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
             position: i + 1,
           })),
-          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
-            id: u.id,
-            type: u.type,
-            label: u.label,
-            folioMatricula: u.folioMatricula || null,
-            areaM2: u.areaM2 ? Number(u.areaM2) : null,
-            position: i + 1,
-          })),
+          units: wizardUnits
+            .filter((u) => u.label.trim())
+            .map((u, i) => ({
+              id: u.id,
+              type: u.type,
+              label: u.label,
+              folioMatricula: u.folioMatricula || null,
+              areaM2: u.areaM2 ? Number(u.areaM2) : null,
+              position: i + 1,
+            })),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        showToast('Error guardando en servidor: ' + (data.error ?? 'unknown'), 'error');
+        showToast(
+          "Error guardando en servidor: " + (data.error ?? "unknown"),
+          "error",
+        );
         return null;
       }
       const newId = data.propertyId as string;
       setWizardPropertyDbId(newId);
       setWizardDriveFolderId(data.driveFolderId ?? null);
       setWizardDriveFolderPath(data.driveFolderPath ?? null);
-      console.log('[ensurePropertyPersisted] OK — propertyId:', newId, 'drive:', data.driveFolderPath);
+      console.log(
+        "[ensurePropertyPersisted] OK — propertyId:",
+        newId,
+        "drive:",
+        data.driveFolderPath,
+      );
       return {
         propertyDbId: newId,
         driveFolderId: data.driveFolderId ?? null,
         driveFolderPath: data.driveFolderPath ?? null,
       };
     } catch (err: any) {
-      console.error('[ensurePropertyPersisted] error:', err);
-      showToast('Error de conexión al guardar propiedad', 'error');
+      console.error("[ensurePropertyPersisted] error:", err);
+      showToast("Error de conexión al guardar propiedad", "error");
       return null;
     }
   };
 
   const handleFinalize = async (capturedInventory?: Inventory) => {
-    console.log('[finalize] ▶ START — address:', address, 'chip:', chip, 'folio:', folio,
-      'owners:', wizardOwners.filter((o) => o.name.trim()).length,
-      'units:', wizardUnits.filter((u) => u.label.trim()).length);
+    console.log(
+      "[finalize] ▶ START — address:",
+      address,
+      "chip:",
+      chip,
+      "folio:",
+      folio,
+      "owners:",
+      wizardOwners.filter((o) => o.name.trim()).length,
+      "units:",
+      wizardUnits.filter((u) => u.label.trim()).length,
+    );
     // ── Validación de campos básicos ──
     if (!address || !chip || !folio) {
-      showToast('Por favor complete dirección, CHIP y folio', 'error');
+      showToast("Por favor complete dirección, CHIP y folio", "error");
       return;
     }
     const validOwners = wizardOwners.filter((o) => o.name.trim().length > 0);
     if (validOwners.length === 0) {
-      showToast('Agregá al menos un propietario con nombre', 'error');
+      showToast("Agregá al menos un propietario con nombre", "error");
       return;
     }
     // Validar suma de % de participación
@@ -937,7 +1196,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     if (definedPcts.length > 0) {
       const sum = definedPcts.reduce((a, b) => a + b, 0);
       if (Math.abs(sum - 100) > 0.01) {
-        showToast(`Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`, 'error');
+        showToast(
+          `Los % de participación suman ${sum.toFixed(2)}% — deberían sumar 100%`,
+          "error",
+        );
         return;
       }
     }
@@ -945,7 +1207,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // ── Validar docs requeridos (migración 010+, soporta N archivos por slot) ──
     // Docs son opcionales: no bloqueamos el finalize si faltan, solo los listamos
     // en `missingDocs` para que el modal de confirmación los muestre.
-    const hasFile = (slot: string | undefined) => Array.isArray(slot) && slot.length > 0;
+    const hasFile = (slot: string | undefined) =>
+      Array.isArray(slot) && slot.length > 0;
     const missingDocs: string[] = [];
     // También trackeamos los slotKeys faltantes para el summary modal post-finalize.
     const missingSlotKeys: string[] = [];
@@ -955,9 +1218,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         missingSlotKeys.push(`cedula:${o.id}`);
       }
     }
-    if (!hasFile(uploadedDocs['certificado_tradicion:main'])) {
-      missingDocs.push('Certificado de Tradición (unidad principal)');
-      missingSlotKeys.push('certificado_tradicion:main');
+    if (!hasFile(uploadedDocs["certificado_tradicion:main"])) {
+      missingDocs.push("Certificado de Tradición (unidad principal)");
+      missingSlotKeys.push("certificado_tradicion:main");
     }
     for (const u of wizardUnits) {
       if (!u.label.trim()) continue;
@@ -967,472 +1230,582 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       }
     }
     if (!hasFile(uploadedDocs[MANDATO_KEY])) {
-      missingDocs.push('Contrato de Mandato');
+      missingDocs.push("Contrato de Mandato");
       missingSlotKeys.push(MANDATO_KEY);
     }
     // No bloqueamos el finalize si faltan docs: el agente los puede subir
     // después desde el Detalle del Inmueble. La propiedad quedará "Pendiente"
     // hasta que suba el Mandato. Solo loggeamos para visibilidad.
     if (missingDocs.length > 0) {
-      console.log('[finalize] Continúa con documentos pendientes:', missingDocs);
+      console.log(
+        "[finalize] Continúa con documentos pendientes:",
+        missingDocs,
+      );
     }
 
     // Refactor: garantizar SIEMPRE que el wizard cierre al terminar, incluso si algo
     // tira excepción intermedia. try/finally así el usuario no queda atrapado en step 3.
     try {
-    // Si nos pasaron el inventario desde StepInventory, lo usamos. Si no, caemos al state.
-    // Esto evita el bug de closure stale donde wizardInventory era null al leerlo desde
-    // un handler pasado como prop (onComplete={handleFinalize}).
+      // Si nos pasaron el inventario desde StepInventory, lo usamos. Si no, caemos al state.
+      // Esto evita el bug de closure stale donde wizardInventory era null al leerlo desde
+      // un handler pasado como prop (onComplete={handleFinalize}).
 
-    // ── 1. Asegurar que la propiedad ya está persistida (Option B) ──
-    // En el flujo normal, ensurePropertyPersisted ya corrió en la transición
-    // step 1→2. Pero por si llegamos a finalize sin pasar por ahí (ej: el
-    // usuario cerró el browser, lo reabrió con draft, y fue directo a step 3),
-    // aseguramos el POST acá también.
-    let propertyDbId: string | null = wizardPropertyDbId;
-    let driveFolderId: string | null = wizardDriveFolderId;
-    let driveFolderPath: string | null = wizardDriveFolderPath;
-    if (!propertyDbId) {
-      console.warn('[finalize] wizardPropertyDbId no estaba seteado, llamando ensurePropertyPersisted...');
-      const ensured = await ensurePropertyPersisted();
-      if (!ensured) {
-        showToast('No se pudo persistir la propiedad', 'error');
-        return;
-      }
-      propertyDbId = ensured.propertyDbId;
-      driveFolderId = ensured.driveFolderId;
-      driveFolderPath = ensured.driveFolderPath;
-    }
-    const firstOwner = validOwners[0];
-
-    // ── Re-keyear owners/units: el server devolvió UUIDs reales (distintos
-    //    a los slotKeys del wizard). Hacemos GET para mapear wizard-XXX → UUID.
-    let realOwners: Array<{ id: string; name: string }> = [];
-    let realUnits: Array<{ id: string; label: string; type: string }> = [];
-    try {
-      const r = await fetch(`/api/properties/${propertyDbId}`);
-      if (r.ok) {
-        const fresh = await r.json();
-        realOwners = (fresh.owners ?? []).map((o: any) => ({ id: o.id, name: o.name }));
-        realUnits = (fresh.units ?? []).map((u: any) => ({ id: u.id, label: u.label, type: u.type }));
-      }
-    } catch (err) {
-      console.warn('[finalize] no se pudieron leer los UUIDs reales:', err);
-    }
-    const ownerIdMap = new Map<string, string>();
-    validOwners.forEach((wOwner, i) => {
-      const real = realOwners[i];
-      if (real) ownerIdMap.set(wOwner.id, real.id);
-    });
-    const unitIdMap = new Map<string, string>();
-    wizardUnits.filter((u) => u.label.trim()).forEach((wUnit, i) => {
-      const real = realUnits[i];
-      if (real) unitIdMap.set(wUnit.id, real.id);
-    });
-    /** Convierte un slotKey del wizard (con ids temp) al slotKey con UUIDs reales. */
-    const realSlotKey = (slotKey: string): string => {
-      if (slotKey.startsWith('cedula:')) {
-        const wid = slotKey.slice('cedula:'.length);
-        const rid = ownerIdMap.get(wid);
-        return rid ? `cedula:${rid}` : slotKey;
-      }
-      if (slotKey.startsWith('rut:')) {
-        const wid = slotKey.slice('rut:'.length);
-        const rid = ownerIdMap.get(wid);
-        return rid ? `rut:${rid}` : slotKey;
-      }
-      if (slotKey.startsWith('certificado_tradicion:')) {
-        const wid = slotKey.slice('certificado_tradicion:'.length);
-        if (wid === 'main') return slotKey;
-        const rid = unitIdMap.get(wid);
-        return rid ? `certificado_tradicion:${rid}` : slotKey;
-      }
-      return slotKey; // predial, mandato
-    };
-
-    // 2. Subir los PDFs a Drive (carpeta Propietario/).
-    //    Construimos `finalDocuments` con slotKeys ya en formato REAL (UUIDs).
-    //    AHORA cada slot puede tener N archivos: guardamos solo el primero
-    //    como "principal" (compat con la DB) y los demás en un array `extra`.
-    //    El backend acepta `documents` como JSON: string (1 archivo, legacy) o
-    //    { primary, extras[] } (N archivos, nuevo).
-    //
-    //    Migración a Option B: con el upload en tiempo real durante step 2,
-    //    la mayoría de los archivos YA están en Drive al llegar a finalize
-    //    (uploadedDocs[wizardSlotKey][i] empieza con https://). Solo subimos
-    //    los que quedaron locales (blob:) por error de Drive o por flujo
-    //    heredado (wizard abierto antes de este cambio).
-    const finalDocuments: Record<string, string | { primary: string; extras: string[] }> = {};
-    const driveConnected = !!driveFolderId;
-    const uploadedToDrive: string[] = [];
-    const uploadedLocalOnly: string[] = [];
-    const failedUploads: string[] = [];
-
-    // FIX AC-15 (jul-2026): la fuente de verdad pasa a ser `uploadedDocs` (que
-    // SÍ persiste en localStorage) en vez de `wizardFiles` (que NO se puede
-    // serializar y se pierde al refrescar el browser). Si un slot tiene URL de
-    // Drive, la reusamos. Si tiene blob URL y el `File` aún está en `wizardFiles`
-    // (sesión actual), re-subimos. Si tiene blob URL pero NO hay File (refresh
-    // previo), lo logueamos y seguimos — el user re-sube desde el Detalle.
-    for (const [wizardSlotKey, driveUrls] of Object.entries(uploadedDocs)) {
-      if (!Array.isArray(driveUrls) || driveUrls.length === 0) continue;
-      const realKey = realSlotKey(wizardSlotKey);
-      // Nombre "bautizado" en Drive: si hay varios archivos, les ponemos sufijo _1, _2, etc.
-      const baseFileName = slotKeyToFilename(realKey, validOwners, wizardUnits);
-      const stripExt = baseFileName.replace(/\.pdf$/i, '');
-      const uploadedUrls: string[] = [];
-      // Files en memoria (pueden no existir si hubo refresh). Se usan solo para
-      // re-subir archivos que quedaron como blob: local.
-      const filesInMemory = wizardFiles[wizardSlotKey] ?? [];
-      for (let i = 0; i < driveUrls.length; i++) {
-        const existingUrl = driveUrls[i] ?? '';
-        const fileName = driveUrls.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
-        // ── ¿Es URL de Drive válida? (Option B ya subió en tiempo real) ──
-        if (existingUrl && /^https:\/\/(drive|docs)\.google\.com\//.test(existingUrl)) {
-          // Ya en Drive → reusamos la URL sin re-subir
-          uploadedUrls.push(existingUrl);
-          uploadedToDrive.push(realKey);
-          continue;
+      // ── 1. Asegurar que la propiedad ya está persistida (Option B) ──
+      // En el flujo normal, ensurePropertyPersisted ya corrió en la transición
+      // step 1→2. Pero por si llegamos a finalize sin pasar por ahí (ej: el
+      // usuario cerró el browser, lo reabrió con draft, y fue directo a step 3),
+      // aseguramos el POST acá también.
+      let propertyDbId: string | null = wizardPropertyDbId;
+      let driveFolderId: string | null = wizardDriveFolderId;
+      let driveFolderPath: string | null = wizardDriveFolderPath;
+      if (!propertyDbId) {
+        console.warn(
+          "[finalize] wizardPropertyDbId no estaba seteado, llamando ensurePropertyPersisted...",
+        );
+        const ensured = await ensurePropertyPersisted();
+        if (!ensured) {
+          showToast("No se pudo persistir la propiedad", "error");
+          return;
         }
-        if (existingUrl && /^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(existingUrl)) {
-          uploadedUrls.push(existingUrl);
-          uploadedToDrive.push(realKey);
-          continue;
-        }
-        // ── Es blob: o vacío. Necesitamos el File para re-subir. ──
-        const file = filesInMemory[i];
-        if (!file) {
-          // No tenemos el File en memoria (refresh del browser entre el upload
-          // y el finalize). NO podemos re-subir. FIX AC-15: tampoco persistimos
-          // el blob URL — la fila de property_documents queda sin crear.
-          console.warn(`[finalize] ${realKey}[${i}]: URL local sin File en memoria — se saltea. El agente debe re-subir desde el Detalle del Inmueble.`);
-          continue;
-        }
-        // ── No está en Drive → subir ahora ──
-        if (driveConnected && driveFolderId) {
-          try {
-            const base64 = await fileToBase64(file);
-            const result = await uploadFileToDrive(propertyDbId, driveFolderId, 'Propietario', fileName, base64);
-            if (result.webViewLink) {
-              uploadedUrls.push(result.webViewLink);
-              uploadedToDrive.push(realKey);
-            } else {
-              // FIX AC-15: NO persistir blob URL. La dejamos en uploadedLocalOnly
-              // para el modal de resumen, pero NO la mandamos a finalDocuments.
-              uploadedLocalOnly.push(realKey);
-              console.warn(`[finalize] ${realKey}[${i}]: Drive upload failed (${result.error}) → local blob, NO persistido`);
-            }
-          } catch (err: any) {
-            uploadedLocalOnly.push(realKey);
-            failedUploads.push(`${realKey}[${i}]: ${err.message}`);
-            console.warn(`[finalize] ${realKey}[${i}]: upload error ${err.message} — NO persistido`);
-          }
-        } else {
-          uploadedLocalOnly.push(realKey);
-        }
+        propertyDbId = ensured.propertyDbId;
+        driveFolderId = ensured.driveFolderId;
+        driveFolderPath = ensured.driveFolderPath;
       }
-      // Compat: si hay 1 solo archivo, guardamos la URL plana (legacy). Si hay
-      // varios, guardamos el objeto { primary, extras }.
-      if (uploadedUrls.length === 1) {
-        finalDocuments[realKey] = uploadedUrls[0];
-      } else if (uploadedUrls.length > 1) {
-        finalDocuments[realKey] = { primary: uploadedUrls[0], extras: uploadedUrls.slice(1) };
-      }
-    }
+      const firstOwner = validOwners[0];
 
-    const mandateUrl = finalDocuments[MANDATO_KEY] ?? null;
-    const mandateSubido = !!mandateUrl;
-    const mandateSignedAt = mandateSubido ? new Date().toISOString() : null;
-    const status = mandateSubido ? 'Activo' : 'Pendiente';
-
-    // 3. Persistir URLs reales + mandate + owners/units en MySQL (segundo POST = UPSERT)
-    try {
-      const res = await fetch('/api/properties', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          localId: propertyDbId,
-          mandatePdfUrl: mandateUrl,
-          mandateSignedAt: mandateSignedAt,
-          documents: finalDocuments,
-          status,
-          // FIX 2026-07-22: enviar también ownerPhone/ownerEmail al top level
-          // (mismo motivo que en ensurePropertyPersisted — las legacy columns
-          // de la tabla `properties` se actualizan con COALESCE).
-          ownerName: firstOwner.name,
-          ownerIdNumber: firstOwner.idNumber || null,
-          ownerPhone: firstOwner.phone || null,
-          ownerEmail: firstOwner.email || null,
-          // Re-mandar owners/units con UUIDs reales (por si el server los
-          // re-keyeó distinto en el primer POST — debería ser estable, pero
-          // mandarlos de nuevo garantiza consistencia).
-          owners: validOwners.map((o, i) => ({
-            id: realOwners[i]?.id,
+      // ── Re-keyear owners/units: el server devolvió UUIDs reales (distintos
+      //    a los slotKeys del wizard). Hacemos GET para mapear wizard-XXX → UUID.
+      let realOwners: Array<{ id: string; name: string }> = [];
+      let realUnits: Array<{ id: string; label: string; type: string }> = [];
+      try {
+        const r = await fetch(`/api/properties/${propertyDbId}`);
+        if (r.ok) {
+          const fresh = await r.json();
+          realOwners = (fresh.owners ?? []).map((o: any) => ({
+            id: o.id,
             name: o.name,
-            idNumber: o.idNumber || null,
-            phone: o.phone || null,
-            email: o.email || null,
-            ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
-            position: i + 1,
-          })),
-          units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
-            id: realUnits[i]?.id,
+          }));
+          realUnits = (fresh.units ?? []).map((u: any) => ({
+            id: u.id,
+            label: u.label,
+            type: u.type,
+          }));
+        }
+      } catch (err) {
+        console.warn("[finalize] no se pudieron leer los UUIDs reales:", err);
+      }
+      const ownerIdMap = new Map<string, string>();
+      validOwners.forEach((wOwner, i) => {
+        const real = realOwners[i];
+        if (real) ownerIdMap.set(wOwner.id, real.id);
+      });
+      const unitIdMap = new Map<string, string>();
+      wizardUnits
+        .filter((u) => u.label.trim())
+        .forEach((wUnit, i) => {
+          const real = realUnits[i];
+          if (real) unitIdMap.set(wUnit.id, real.id);
+        });
+      /** Convierte un slotKey del wizard (con ids temp) al slotKey con UUIDs reales. */
+      const realSlotKey = (slotKey: string): string => {
+        if (slotKey.startsWith("cedula:")) {
+          const wid = slotKey.slice("cedula:".length);
+          const rid = ownerIdMap.get(wid);
+          return rid ? `cedula:${rid}` : slotKey;
+        }
+        if (slotKey.startsWith("rut:")) {
+          const wid = slotKey.slice("rut:".length);
+          const rid = ownerIdMap.get(wid);
+          return rid ? `rut:${rid}` : slotKey;
+        }
+        if (slotKey.startsWith("certificado_tradicion:")) {
+          const wid = slotKey.slice("certificado_tradicion:".length);
+          if (wid === "main") return slotKey;
+          const rid = unitIdMap.get(wid);
+          return rid ? `certificado_tradicion:${rid}` : slotKey;
+        }
+        return slotKey; // predial, mandato
+      };
+
+      // 2. Subir los PDFs a Drive (carpeta Propietario/).
+      //    Construimos `finalDocuments` con slotKeys ya en formato REAL (UUIDs).
+      //    AHORA cada slot puede tener N archivos: guardamos solo el primero
+      //    como "principal" (compat con la DB) y los demás en un array `extra`.
+      //    El backend acepta `documents` como JSON: string (1 archivo, legacy) o
+      //    { primary, extras[] } (N archivos, nuevo).
+      //
+      //    Migración a Option B: con el upload en tiempo real durante step 2,
+      //    la mayoría de los archivos YA están en Drive al llegar a finalize
+      //    (uploadedDocs[wizardSlotKey][i] empieza con https://). Solo subimos
+      //    los que quedaron locales (blob:) por error de Drive o por flujo
+      //    heredado (wizard abierto antes de este cambio).
+      const finalDocuments: Record<
+        string,
+        string | { primary: string; extras: string[] }
+      > = {};
+      const driveConnected = !!driveFolderId;
+      const uploadedToDrive: string[] = [];
+      const uploadedLocalOnly: string[] = [];
+      const failedUploads: string[] = [];
+
+      // FIX AC-15 (jul-2026): la fuente de verdad pasa a ser `uploadedDocs` (que
+      // SÍ persiste en localStorage) en vez de `wizardFiles` (que NO se puede
+      // serializar y se pierde al refrescar el browser). Si un slot tiene URL de
+      // Drive, la reusamos. Si tiene blob URL y el `File` aún está en `wizardFiles`
+      // (sesión actual), re-subimos. Si tiene blob URL pero NO hay File (refresh
+      // previo), lo logueamos y seguimos — el user re-sube desde el Detalle.
+      for (const [wizardSlotKey, driveUrls] of Object.entries(uploadedDocs)) {
+        if (!Array.isArray(driveUrls) || driveUrls.length === 0) continue;
+        const realKey = realSlotKey(wizardSlotKey);
+        // Nombre "bautizado" en Drive: si hay varios archivos, les ponemos sufijo _1, _2, etc.
+        const baseFileName = slotKeyToFilename(
+          realKey,
+          validOwners,
+          wizardUnits,
+        );
+        const stripExt = baseFileName.replace(/\.pdf$/i, "");
+        const uploadedUrls: string[] = [];
+        // Files en memoria (pueden no existir si hubo refresh). Se usan solo para
+        // re-subir archivos que quedaron como blob: local.
+        const filesInMemory = wizardFiles[wizardSlotKey] ?? [];
+        for (let i = 0; i < driveUrls.length; i++) {
+          const existingUrl = driveUrls[i] ?? "";
+          const fileName =
+            driveUrls.length === 1 ? baseFileName : `${stripExt}_${i + 1}.pdf`;
+          // ── ¿Es URL de Drive válida? (Option B ya subió en tiempo real) ──
+          if (
+            existingUrl &&
+            /^https:\/\/(drive|docs)\.google\.com\//.test(existingUrl)
+          ) {
+            // Ya en Drive → reusamos la URL sin re-subir
+            uploadedUrls.push(existingUrl);
+            uploadedToDrive.push(realKey);
+            continue;
+          }
+          if (
+            existingUrl &&
+            /^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(existingUrl)
+          ) {
+            uploadedUrls.push(existingUrl);
+            uploadedToDrive.push(realKey);
+            continue;
+          }
+          // ── Es blob: o vacío. Necesitamos el File para re-subir. ──
+          const file = filesInMemory[i];
+          if (!file) {
+            // No tenemos el File en memoria (refresh del browser entre el upload
+            // y el finalize). NO podemos re-subir. FIX AC-15: tampoco persistimos
+            // el blob URL — la fila de property_documents queda sin crear.
+            console.warn(
+              `[finalize] ${realKey}[${i}]: URL local sin File en memoria — se saltea. El agente debe re-subir desde el Detalle del Inmueble.`,
+            );
+            continue;
+          }
+          // ── No está en Drive → subir ahora ──
+          if (driveConnected && driveFolderId) {
+            try {
+              const base64 = await fileToBase64(file);
+              const result = await uploadFileToDrive(
+                propertyDbId,
+                driveFolderId,
+                "Propietario",
+                fileName,
+                base64,
+              );
+              if (result.webViewLink) {
+                uploadedUrls.push(result.webViewLink);
+                uploadedToDrive.push(realKey);
+              } else {
+                // FIX AC-15: NO persistir blob URL. La dejamos en uploadedLocalOnly
+                // para el modal de resumen, pero NO la mandamos a finalDocuments.
+                uploadedLocalOnly.push(realKey);
+                console.warn(
+                  `[finalize] ${realKey}[${i}]: Drive upload failed (${result.error}) → local blob, NO persistido`,
+                );
+              }
+            } catch (err: any) {
+              uploadedLocalOnly.push(realKey);
+              failedUploads.push(`${realKey}[${i}]: ${err.message}`);
+              console.warn(
+                `[finalize] ${realKey}[${i}]: upload error ${err.message} — NO persistido`,
+              );
+            }
+          } else {
+            uploadedLocalOnly.push(realKey);
+          }
+        }
+        // Compat: si hay 1 solo archivo, guardamos la URL plana (legacy). Si hay
+        // varios, guardamos el objeto { primary, extras }.
+        if (uploadedUrls.length === 1) {
+          finalDocuments[realKey] = uploadedUrls[0];
+        } else if (uploadedUrls.length > 1) {
+          finalDocuments[realKey] = {
+            primary: uploadedUrls[0],
+            extras: uploadedUrls.slice(1),
+          };
+        }
+      }
+
+      const mandateUrl = finalDocuments[MANDATO_KEY] ?? null;
+      const mandateSubido = !!mandateUrl;
+      const mandateSignedAt = mandateSubido ? new Date().toISOString() : null;
+      const status = mandateSubido ? "Activo" : "Pendiente";
+
+      // 3. Persistir URLs reales + mandate + owners/units en MySQL (segundo POST = UPSERT)
+      try {
+        const res = await fetch("/api/properties", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            localId: propertyDbId,
+            mandatePdfUrl: mandateUrl,
+            mandateSignedAt: mandateSignedAt,
+            documents: finalDocuments,
+            status,
+            // FIX 2026-07-22: enviar también ownerPhone/ownerEmail al top level
+            // (mismo motivo que en ensurePropertyPersisted — las legacy columns
+            // de la tabla `properties` se actualizan con COALESCE).
+            ownerName: firstOwner.name,
+            ownerIdNumber: firstOwner.idNumber || null,
+            ownerPhone: firstOwner.phone || null,
+            ownerEmail: firstOwner.email || null,
+            // Re-mandar owners/units con UUIDs reales (por si el server los
+            // re-keyeó distinto en el primer POST — debería ser estable, pero
+            // mandarlos de nuevo garantiza consistencia).
+            owners: validOwners.map((o, i) => ({
+              id: realOwners[i]?.id,
+              name: o.name,
+              idNumber: o.idNumber || null,
+              phone: o.phone || null,
+              email: o.email || null,
+              ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+              position: i + 1,
+            })),
+            units: wizardUnits
+              .filter((u) => u.label.trim())
+              .map((u, i) => ({
+                id: realUnits[i]?.id,
+                type: u.type,
+                label: u.label,
+                folioMatricula: u.folioMatricula || null,
+                areaM2: u.areaM2 ? Number(u.areaM2) : null,
+                position: i + 1,
+              })),
+          }),
+        });
+        console.log("[finalize] POST #2 (UPSERT) status:", res.status);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error ?? `HTTP ${res.status}`);
+        }
+        console.log(
+          "[finalize] POST #2 OK — mandate, documents, owners, units persistidos en MySQL",
+        );
+      } catch (err: any) {
+        console.error("[finalize] backend persist URLs:", err);
+        showToast(
+          `Propiedad guardada, pero falló al persistir URLs en servidor: ${err.message}`,
+          "error",
+        );
+      }
+
+      // 3.5. Re-keyear el inventario de IndexedDB y postearlo a MySQL con UUID real.
+      //      Antes esto se hacía en onInventoryFinalized con el wizard-X → FK fallaba.
+      //      Ahora diferimos hasta tener propertyDbId válido.
+      const inventoryToPersist = capturedInventory ?? wizardInventory;
+      let inventoryUploadedToDrive = false; // para el summary modal post-finalize
+      if (inventoryToPersist) {
+        try {
+          const oldId = inventoryToPersist.id; // `${wizardPropertyId}:inicial`
+          const newId = `${propertyDbId}:inicial`; // `${realUuid}:inicial`
+          const rekeyed: Inventory = {
+            ...inventoryToPersist,
+            id: newId,
+            propertyId: propertyDbId!,
+          };
+          await inventoryDB.saveInventory(rekeyed); // crea con nueva key
+          await inventoryDB.deleteInventory(oldId); // borra la vieja (incluye fotos)
+
+          // POST a MySQL (la FK ahora sí se cumple)
+          // IMPORTANTE: antes de serializar, eliminamos `videoDataUrl` de cada
+          // ItemMedia — el archivo de video completo puede pesar 10-50MB y
+          // rompería la columna JSON de MySQL. El video COMPLETO se queda en
+          // IndexedDB (key: <inventoryId>:<mediaId>) y se puede re-leer desde
+          // ahí cuando haga falta subirlo a Drive. Solo mandamos a MySQL el
+          // thumbnail + metadata, suficiente para renderizar el PDF.
+          const areasStripped = rekeyed.areas.map((a) => ({
+            ...a,
+            items: Object.fromEntries(
+              Object.entries(a.items).map(([k, v]) => [
+                k,
+                {
+                  ...v,
+                  media: (v.media ?? []).map((m) => {
+                    if (m.type === "video") {
+                      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                      const { videoDataUrl, ...rest } = m;
+                      return rest;
+                    }
+                    return m;
+                  }),
+                },
+              ]),
+            ),
+          }));
+          const r1 = await fetch("/api/inventories", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: rekeyed.id,
+              propertyId: rekeyed.propertyId,
+              phase: "inicial",
+              propertyType: rekeyed.propertyType,
+              counters: rekeyed.counters,
+              areas: areasStripped,
+              photos: rekeyed.photos,
+              signatures: rekeyed.signatures,
+              customAreas: rekeyed.customAreas,
+            }),
+          });
+          if (!r1.ok) {
+            const err = await r1.json().catch(() => ({}));
+            console.warn(
+              "[finalize] inventory MySQL persist:",
+              err.error ?? r1.status,
+            );
+          } else {
+            console.log(
+              "[finalize] inventario guardado en MySQL con UUID real",
+            );
+          }
+
+          // Subir PDF a Drive (Inventarios/) — best-effort, no bloquea.
+          if (driveConnected && driveFolderId) {
+            try {
+              const { generateInventoryPdfBlob } =
+                await import("./inventoryPdf");
+              const blob = await generateInventoryPdfBlob(
+                rekeyed,
+                wizardProperty,
+                async (id: string) => {
+                  const photo = await inventoryDB.getPhoto(id);
+                  return (photo as any)?.dataUrl ?? null;
+                },
+              );
+              const reader = new FileReader();
+              const base64 = await new Promise<string>((resolve) => {
+                reader.onload = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+              });
+              const r2 = await fetch("/api/inventories/upload-pdf", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  propertyId: propertyDbId,
+                  phase: "inicial",
+                  base64Data: base64,
+                  inventoryDate: new Date().toISOString().slice(0, 10),
+                }),
+              });
+              if (r2.ok) {
+                console.log("[finalize] PDF inventario → Drive");
+                inventoryUploadedToDrive = true;
+              } else
+                console.warn(
+                  "[finalize] PDF inventario → Drive falló:",
+                  r2.status,
+                );
+            } catch (e: any) {
+              console.warn("[finalize] PDF inventario error:", e.message);
+            }
+
+            // Subir fotos individuales a Drive (carpeta `Inventario captacion/`).
+            // ANTES: las fotos solo vivían en IndexedDB → si el usuario limpiaba caché
+            // o abría otro navegador, las perdía. AHORA: cada foto se sube a Drive
+            // con nombre `{areaSlug}_{NN}.jpg` y queda como fuente de verdad.
+            // best-effort: si falla alguna, no bloqueamos el wizard.
+            try {
+              const photoUploads: Array<{ name: string; base64Data: string }> =
+                [];
+              for (const photoMeta of rekeyed.photos ?? []) {
+                let dataUrl: string | null = null;
+                try {
+                  const stored = await inventoryDB.getPhoto(photoMeta.id);
+                  dataUrl = stored?.dataUrl ?? null;
+                } catch {
+                  /* ignore */
+                }
+                // FIX: fallback al dataUrl embebido si el store `photos` está vacío
+                // (wizard históricos que solo guardaron el array inline).
+                if (!dataUrl && (photoMeta as any).dataUrl) {
+                  dataUrl = (photoMeta as any).dataUrl;
+                }
+                if (!dataUrl) continue;
+                // Nombre = areaSlug_NN (la convención del AGENTS.md)
+                const areaSlug = String(photoMeta.areaId ?? "")
+                  .replace(/[^a-z0-9]+/gi, "_")
+                  .toLowerCase();
+                const name = `${areaSlug}_${String(photoMeta.id).split(":").pop() ?? "00"}.jpg`;
+                photoUploads.push({ name, base64Data: dataUrl });
+              }
+              if (photoUploads.length > 0) {
+                console.log(
+                  `[finalize] Subiendo ${photoUploads.length} fotos a Drive...`,
+                );
+                const rPhotos = await fetch("/api/inventories/upload-photos", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    propertyId: propertyDbId,
+                    phase: "inicial",
+                    photos: photoUploads,
+                  }),
+                });
+                if (rPhotos.ok) {
+                  const result = await rPhotos.json();
+                  console.log(
+                    `[finalize] ${result.uploaded?.length ?? 0} fotos → Drive/${result.folderName}/`,
+                  );
+                  if (result.failed?.length > 0) {
+                    console.warn(
+                      `[finalize] ${result.failed.length} fotos fallaron:`,
+                      result.failed,
+                    );
+                  }
+                } else {
+                  console.warn(
+                    "[finalize] upload-photos → HTTP",
+                    rPhotos.status,
+                  );
+                }
+              }
+            } catch (e: any) {
+              console.warn("[finalize] upload photos error:", e.message);
+            }
+          }
+        } catch (err: any) {
+          console.error("[finalize] inventory persist:", err);
+        }
+      }
+
+      // 4. Guardar en el store local (Zustand) para la UI inmediata
+      // IMPORTANTE: pasar `id: propertyDbId` para que addProperty NO haga otro POST
+      // (la fila ya existe en MySQL desde el paso 1). Sin esto, antes creaba un
+      // INSERT duplicado → otra carpeta en Drive con el mismo nombre.
+      console.log(
+        "[finalize] llamando onAddProperty con id:",
+        propertyDbId,
+        "address:",
+        address,
+      );
+      onAddProperty({
+        id: propertyDbId,
+        address,
+        chip,
+        folio,
+        owner: firstOwner.name,
+        ownerName: firstOwner.name,
+        ownerIdNumber: firstOwner.idNumber,
+        propertyType,
+        status,
+        documents: finalDocuments,
+        mandatePdfUrl: mandateUrl,
+        mandateSignedAt,
+        driveFolderId,
+        driveFolderPath,
+        // Migración 010+ — pasamos los owners/units con UUIDs reales al store
+        owners: validOwners.map((o, i) => ({
+          id: realOwners[i]?.id ?? o.id,
+          name: o.name,
+          idNumber: o.idNumber || null,
+          phone: o.phone || null,
+          email: o.email || null,
+          ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
+          position: i + 1,
+          documents: {
+            cedula: finalDocuments[realSlotKey(`cedula:${o.id}`)] ?? null,
+            rut: finalDocuments[realSlotKey(`rut:${o.id}`)] ?? null,
+          },
+        })),
+        units: wizardUnits
+          .filter((u) => u.label.trim())
+          .map((u, i) => ({
+            id: realUnits[i]?.id ?? u.id,
             type: u.type,
             label: u.label,
             folioMatricula: u.folioMatricula || null,
             areaM2: u.areaM2 ? Number(u.areaM2) : null,
             position: i + 1,
+            documents: {
+              certificado_tradicion:
+                finalDocuments[realSlotKey(`certificado_tradicion:${u.id}`)] ??
+                null,
+            },
           })),
-        }),
+        documents_property: {
+          predial: finalDocuments["predial"] ?? null,
+          certificado_tradicion:
+            finalDocuments["certificado_tradicion:main"] ?? null,
+        },
       });
-      console.log('[finalize] POST #2 (UPSERT) status:', res.status);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
-      console.log('[finalize] POST #2 OK — mandate, documents, owners, units persistidos en MySQL');
-    } catch (err: any) {
-      console.error('[finalize] backend persist URLs:', err);
-      showToast(`Propiedad guardada, pero falló al persistir URLs en servidor: ${err.message}`, 'error');
-    }
 
-    // 3.5. Re-keyear el inventario de IndexedDB y postearlo a MySQL con UUID real.
-    //      Antes esto se hacía en onInventoryFinalized con el wizard-X → FK fallaba.
-    //      Ahora diferimos hasta tener propertyDbId válido.
-    const inventoryToPersist = capturedInventory ?? wizardInventory;
-    let inventoryUploadedToDrive = false; // para el summary modal post-finalize
-    if (inventoryToPersist) {
-      try {
-        const oldId = inventoryToPersist.id;                                // `${wizardPropertyId}:inicial`
-        const newId = `${propertyDbId}:inicial`;                           // `${realUuid}:inicial`
-        const rekeyed: Inventory = {
-          ...inventoryToPersist,
-          id: newId,
-          propertyId: propertyDbId!,
-        };
-        await inventoryDB.saveInventory(rekeyed);                          // crea con nueva key
-        await inventoryDB.deleteInventory(oldId);                          // borra la vieja (incluye fotos)
+      // 5. Toast breve + modal de resumen. El toast avisa que hay resumen; el modal
+      //    queda visible hasta que el usuario lo cierra y lista explícitamente
+      //    qué quedó en Drive, qué quedó local, qué falta y si hubo errores.
+      const totalDocs = Object.keys(finalDocuments).length;
+      const realOwnersCount = validOwners.length;
+      const realUnitsCount = wizardUnits.filter((u) => u.label.trim()).length;
+      const allDriveOk =
+        uploadedToDrive.length === totalDocs && uploadedLocalOnly.length === 0;
+      const shortToast = allDriveOk
+        ? `✓ ¡Propiedad creada! Todo en Drive. Resumen abajo.`
+        : `⚠ Propiedad creada con ${uploadedLocalOnly.length + missingSlotKeys.length} pendiente(s). Resumen abajo.`;
+      showToast(shortToast, allDriveOk ? "success" : "error");
 
-        // POST a MySQL (la FK ahora sí se cumple)
-        // IMPORTANTE: antes de serializar, eliminamos `videoDataUrl` de cada
-        // ItemMedia — el archivo de video completo puede pesar 10-50MB y
-        // rompería la columna JSON de MySQL. El video COMPLETO se queda en
-        // IndexedDB (key: <inventoryId>:<mediaId>) y se puede re-leer desde
-        // ahí cuando haga falta subirlo a Drive. Solo mandamos a MySQL el
-        // thumbnail + metadata, suficiente para renderizar el PDF.
-        const areasStripped = rekeyed.areas.map((a) => ({
-          ...a,
-          items: Object.fromEntries(
-            Object.entries(a.items).map(([k, v]) => [
-              k,
-              {
-                ...v,
-                media: (v.media ?? []).map((m) => {
-                  if (m.type === 'video') {
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    const { videoDataUrl, ...rest } = m;
-                    return rest;
-                  }
-                  return m;
-                }),
-              },
-            ]),
-          ),
-        }));
-        const r1 = await fetch('/api/inventories', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: rekeyed.id,
-            propertyId: rekeyed.propertyId,
-            phase: 'inicial',
-            propertyType: rekeyed.propertyType,
-            counters: rekeyed.counters,
-            areas: areasStripped,
-            photos: rekeyed.photos,
-            signatures: rekeyed.signatures,
-            customAreas: rekeyed.customAreas,
-          }),
-        });
-        if (!r1.ok) {
-          const err = await r1.json().catch(() => ({}));
-          console.warn('[finalize] inventory MySQL persist:', err.error ?? r1.status);
-        } else {
-          console.log('[finalize] inventario guardado en MySQL con UUID real');
-        }
-
-        // Subir PDF a Drive (Inventarios/) — best-effort, no bloquea.
-        if (driveConnected && driveFolderId) {
-          try {
-            const { generateInventoryPdfBlob } = await import('./inventoryPdf');
-            const blob = await generateInventoryPdfBlob(rekeyed, wizardProperty, async (id: string) => {
-              const photo = await inventoryDB.getPhoto(id);
-              return (photo as any)?.dataUrl ?? null;
-            });
-            const reader = new FileReader();
-            const base64 = await new Promise<string>((resolve) => {
-              reader.onload = () => resolve(reader.result as string);
-              reader.readAsDataURL(blob);
-            });
-            const r2 = await fetch('/api/inventories/upload-pdf', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                propertyId: propertyDbId,
-                phase: 'inicial',
-                base64Data: base64,
-                inventoryDate: new Date().toISOString().slice(0, 10),
-              }),
-            });
-            if (r2.ok) { console.log('[finalize] PDF inventario → Drive'); inventoryUploadedToDrive = true; }
-            else console.warn('[finalize] PDF inventario → Drive falló:', r2.status);
-          } catch (e: any) {
-            console.warn('[finalize] PDF inventario error:', e.message);
-          }
-
-          // Subir fotos individuales a Drive (carpeta `Inventario captacion/`).
-          // ANTES: las fotos solo vivían en IndexedDB → si el usuario limpiaba caché
-          // o abría otro navegador, las perdía. AHORA: cada foto se sube a Drive
-          // con nombre `{areaSlug}_{NN}.jpg` y queda como fuente de verdad.
-          // best-effort: si falla alguna, no bloqueamos el wizard.
-          try {
-            const photoUploads: Array<{ name: string; base64Data: string }> = [];
-            for (const photoMeta of (rekeyed.photos ?? [])) {
-              let dataUrl: string | null = null;
-              try {
-                const stored = await inventoryDB.getPhoto(photoMeta.id);
-                dataUrl = stored?.dataUrl ?? null;
-              } catch { /* ignore */ }
-              // FIX: fallback al dataUrl embebido si el store `photos` está vacío
-              // (wizard históricos que solo guardaron el array inline).
-              if (!dataUrl && (photoMeta as any).dataUrl) {
-                dataUrl = (photoMeta as any).dataUrl;
-              }
-              if (!dataUrl) continue;
-              // Nombre = areaSlug_NN (la convención del AGENTS.md)
-              const areaSlug = String(photoMeta.areaId ?? '').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
-              const name = `${areaSlug}_${String(photoMeta.id).split(':').pop() ?? '00'}.jpg`;
-              photoUploads.push({ name, base64Data: dataUrl });
-            }
-            if (photoUploads.length > 0) {
-              console.log(`[finalize] Subiendo ${photoUploads.length} fotos a Drive...`);
-              const rPhotos = await fetch('/api/inventories/upload-photos', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  propertyId: propertyDbId,
-                  phase: 'inicial',
-                  photos: photoUploads,
-                }),
-              });
-              if (rPhotos.ok) {
-                const result = await rPhotos.json();
-                console.log(`[finalize] ${result.uploaded?.length ?? 0} fotos → Drive/${result.folderName}/`);
-                if (result.failed?.length > 0) {
-                  console.warn(`[finalize] ${result.failed.length} fotos fallaron:`, result.failed);
-                }
-              } else {
-                console.warn('[finalize] upload-photos → HTTP', rPhotos.status);
-              }
-            }
-          } catch (e: any) {
-            console.warn('[finalize] upload photos error:', e.message);
-          }
-        }
-      } catch (err: any) {
-        console.error('[finalize] inventory persist:', err);
-      }
-    }
-
-    // 4. Guardar en el store local (Zustand) para la UI inmediata
-    // IMPORTANTE: pasar `id: propertyDbId` para que addProperty NO haga otro POST
-    // (la fila ya existe en MySQL desde el paso 1). Sin esto, antes creaba un
-    // INSERT duplicado → otra carpeta en Drive con el mismo nombre.
-    console.log('[finalize] llamando onAddProperty con id:', propertyDbId, 'address:', address);
-    onAddProperty({
-      id: propertyDbId,
-      address, chip, folio,
-      owner: firstOwner.name,
-      ownerName: firstOwner.name,
-      ownerIdNumber: firstOwner.idNumber,
-      propertyType,
-      status,
-      documents: finalDocuments,
-      mandatePdfUrl: mandateUrl,
-      mandateSignedAt,
-      driveFolderId,
-      driveFolderPath,
-      // Migración 010+ — pasamos los owners/units con UUIDs reales al store
-      owners: validOwners.map((o, i) => ({
-        id: realOwners[i]?.id ?? o.id,
-        name: o.name,
-        idNumber: o.idNumber || null,
-        phone: o.phone || null,
-        email: o.email || null,
-        ownershipPct: o.ownershipPct ? Number(o.ownershipPct) : null,
-        position: i + 1,
-        documents: {
-          cedula: finalDocuments[realSlotKey(`cedula:${o.id}`)] ?? null,
-          rut: finalDocuments[realSlotKey(`rut:${o.id}`)] ?? null,
-        },
-      })),
-      units: wizardUnits.filter((u) => u.label.trim()).map((u, i) => ({
-        id: realUnits[i]?.id ?? u.id,
-        type: u.type,
-        label: u.label,
-        folioMatricula: u.folioMatricula || null,
-        areaM2: u.areaM2 ? Number(u.areaM2) : null,
-        position: i + 1,
-        documents: {
-          certificado_tradicion: finalDocuments[realSlotKey(`certificado_tradicion:${u.id}`)] ?? null,
-        },
-      })),
-      documents_property: {
-        predial: finalDocuments['predial'] ?? null,
-        certificado_tradicion: finalDocuments['certificado_tradicion:main'] ?? null,
-      },
-    });
-
-    // 5. Toast breve + modal de resumen. El toast avisa que hay resumen; el modal
-    //    queda visible hasta que el usuario lo cierra y lista explícitamente
-    //    qué quedó en Drive, qué quedó local, qué falta y si hubo errores.
-    const totalDocs = Object.keys(finalDocuments).length;
-    const realOwnersCount = validOwners.length;
-    const realUnitsCount = wizardUnits.filter((u) => u.label.trim()).length;
-    const allDriveOk = uploadedToDrive.length === totalDocs && uploadedLocalOnly.length === 0;
-    const shortToast = allDriveOk
-      ? `✓ ¡Propiedad creada! Todo en Drive. Resumen abajo.`
-      : `⚠ Propiedad creada con ${uploadedLocalOnly.length + missingSlotKeys.length} pendiente(s). Resumen abajo.`;
-    showToast(shortToast, allDriveOk ? 'success' : 'error');
-
-    // Guardamos el summary en el state — el modal se renderiza en el JSX abajo.
-    setFinalizeSummary({
-      address,
-      driveFolderId,
-      driveFolderPath,
-      driveConnected,
-      uploadedToDrive,
-      uploadedLocalOnly,
-      missingDocs: missingSlotKeys,
-      failedUploads,
-      inventoryUploaded: inventoryUploadedToDrive,
-      totalDocs,
-    });
+      // Guardamos el summary en el state — el modal se renderiza en el JSX abajo.
+      setFinalizeSummary({
+        address,
+        driveFolderId,
+        driveFolderPath,
+        driveConnected,
+        uploadedToDrive,
+        uploadedLocalOnly,
+        missingDocs: missingSlotKeys,
+        failedUploads,
+        inventoryUploaded: inventoryUploadedToDrive,
+        totalDocs,
+      });
     } finally {
       // Garantía: el wizard SIEMPRE cierra, incluso si una excepción escapó los
       // try/catch internos (ej. onAddProperty tirando, o un fallo de React en
       // el render siguiente). Sin esto el usuario queda atrapado en step 3.
       setStep(1);
       setShowWizard(false);
-      setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
-      setPropertyType('apartamento');
-      setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+      setAddress("");
+      setChip("");
+      setFolio("");
+      setOwnerIdNumber("");
+      setPropertyType("apartamento");
+      setWizardOwners([
+        {
+          id: `wizard-owner-${Date.now()}-1`,
+          name: "",
+          idNumber: "",
+          phone: "",
+          email: "",
+          ownershipPct: "",
+        },
+      ]);
       setWizardUnits([]);
       // Liberamos los blob URLs del wizard antes de vaciar el state (memory leak fix)
       // Liberar TODOS los blob URLs del wizard antes de vaciar el state (memory leak fix).
       // uploadedDocs es ahora Record<slotKey, string[]> — hay que iterar cada array.
       Object.values(uploadedDocs).forEach((arr) => {
-        if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+        if (Array.isArray(arr))
+          arr.forEach((u) => {
+            // BUG-021: helper central.
+            revokeIfBlob(u);
+          });
       });
       setUploadedDocs({});
       setWizardFiles({});
@@ -1444,7 +1817,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       setWizardDriveFolderId(null);
       setWizardDriveFolderPath(null);
       // Limpiar el draft del wizard en localStorage (el flujo terminó OK)
-      try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
+      try {
+        localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft);
+      } catch {
+        /* silent */
+      }
     }
   };
 
@@ -1463,30 +1840,53 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // Si hay propertyDbId, intentar borrarla del server (best-effort)
     if (wizardPropertyDbId) {
       try {
-        const res = await fetch(`/api/properties/${wizardPropertyDbId}`, { method: 'DELETE' });
+        const res = await fetch(`/api/properties/${wizardPropertyDbId}`, {
+          method: "DELETE",
+        });
         if (res.status === 409) {
           // Ya tiene inventarios (raro en discard de draft, pero posible) →
           // igual limpiamos el wizard local. El agente la verá en la lista de
           // propiedades y puede seguir editando.
-          console.warn('[discardDraft] server rechazó DELETE (409): ya tiene inventarios');
+          console.warn(
+            "[discardDraft] server rechazó DELETE (409): ya tiene inventarios",
+          );
         } else if (!res.ok) {
-          console.warn('[discardDraft] server DELETE no OK:', res.status);
+          console.warn("[discardDraft] server DELETE no OK:", res.status);
         } else {
-          console.log('[discardDraft] propiedad borrada del server:', wizardPropertyDbId);
+          console.log(
+            "[discardDraft] propiedad borrada del server:",
+            wizardPropertyDbId,
+          );
         }
       } catch (err) {
-        console.warn('[discardDraft] error llamando DELETE:', err);
+        console.warn("[discardDraft] error llamando DELETE:", err);
       }
     }
     setStep(1);
     setShowWizard(false);
-    setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
-    setPropertyType('apartamento');
-    setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+    setAddress("");
+    setChip("");
+    setFolio("");
+    setOwnerIdNumber("");
+    setPropertyType("apartamento");
+    setWizardOwners([
+      {
+        id: `wizard-owner-${Date.now()}-1`,
+        name: "",
+        idNumber: "",
+        phone: "",
+        email: "",
+        ownershipPct: "",
+      },
+    ]);
     setWizardUnits([]);
     // Liberar blob URLs antes de vaciar (memory leak fix)
     Object.values(uploadedDocs).forEach((arr) => {
-      if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+      if (Array.isArray(arr))
+        arr.forEach((u) => {
+          // BUG-021: helper central.
+          revokeIfBlob(u);
+        });
     });
     setUploadedDocs({});
     setWizardFiles({});
@@ -1498,8 +1898,12 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     setWizardDriveFolderId(null);
     setWizardDriveFolderPath(null);
     // Borrar de localStorage
-    try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
-    showToast('Borrador descartado. Empezás de cero.', 'success');
+    try {
+      localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft);
+    } catch {
+      /* silent */
+    }
+    showToast("Borrador descartado. Empezás de cero.", "success");
   };
 
   /** Re-fetches la propiedad desde el server para asegurar que el modal muestra
@@ -1517,7 +1921,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     try {
       const res = await fetch(`/api/properties/${propertyId}`);
       if (!res.ok) {
-        console.warn('[refresh detail] server returned', res.status);
+        console.warn("[refresh detail] server returned", res.status);
         return;
       }
       const fresh = await res.json();
@@ -1529,13 +1933,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         // para que `viewingProperty.documents['Cédula de Ciudadanía']` siga funcionando
         // en la UI del detalle sin tener que cambiar todas las referencias.
         documents: fresh.documents_legacy ?? fresh.documents ?? {},
-        status: fresh.status === 'available' ? 'Pendiente'
-              : fresh.status === 'rented' ? 'Arrendado'
-              : fresh.status === 'maintenance' ? 'Inactivo'
-              : fresh.status,
+        status:
+          fresh.status === "available"
+            ? "Pendiente"
+            : fresh.status === "rented"
+              ? "Arrendado"
+              : fresh.status === "maintenance"
+                ? "Inactivo"
+                : fresh.status,
         inventoryPdfUrl: fresh.inventory_pdf_url ?? null,
-        inventoryCaptacionPdfUrl: fresh.inventory_captacion_pdf_url ?? fresh.inventory_captacion_pdf_url ?? null,
-        inventoryColocacionPdfUrl: fresh.inventario_colocacion_pdf_url ?? fresh.inventory_colocacion_pdf_url ?? null,
+        inventoryCaptacionPdfUrl:
+          fresh.inventory_captacion_pdf_url ??
+          fresh.inventory_captacion_pdf_url ??
+          null,
+        inventoryColocacionPdfUrl:
+          fresh.inventario_colocacion_pdf_url ??
+          fresh.inventory_colocacion_pdf_url ??
+          null,
         inventoryCount: fresh.inventory_count ?? 0,
         // Migración 010+ — N propietarios y N unidades con sus docs anidados
         owners: fresh.owners ?? [],
@@ -1549,13 +1963,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       const state = useAppStore.getState?.() ?? null;
       if (state) {
         useAppStore.setState((s: any) => ({
-          properties: s.properties.map((p: any) => p.id === propertyId ? { ...p, ...patch } : p),
+          properties: s.properties.map((p: any) =>
+            p.id === propertyId ? { ...p, ...patch } : p,
+          ),
         }));
       }
       // Sincronizar el modal inmediatamente (no esperar al re-render del store)
-      setViewingProperty((prev: any) => prev?.id === propertyId ? { ...prev, ...patch } : prev);
+      setViewingProperty((prev: any) =>
+        prev?.id === propertyId ? { ...prev, ...patch } : prev,
+      );
     } catch (err) {
-      console.warn('[refresh detail]', err);
+      console.warn("[refresh detail]", err);
     } finally {
       setDetailRefreshing(false);
     }
@@ -1565,7 +1983,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
    *  IndexedDB primero; si no encuentra (por reset-data.js o cambio de browser),
    *  cae al inventario remoto en MySQL. Las fotos en MySQL están como JSON
    *  con `dataUrl` base64 en `inventories.photos[]`, así que no se pierden. */
-  const openPhotoGallery = async (property: any, phase: 'inicial' | 'final' = 'inicial') => {
+  const openPhotoGallery = async (
+    property: any,
+    phase: "inicial" | "final" = "inicial",
+  ) => {
     if (!property?.id) return;
     setPhotoGalleryLoading(true);
     try {
@@ -1575,19 +1996,27 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // vacío. Esto cubre el caso de IndexedDB stale (self-heal previo convirtió
       // un Record a `[]`, o limpieza de caché del navegador dejó huérfano el
       // `photos` store mientras MySQL sí tiene las 13 fotos con dataUrl).
-      const localPhotos = inventory ? normalizePhotosArray(inventory.photos) : [];
+      const localPhotos = inventory
+        ? normalizePhotosArray(inventory.photos)
+        : [];
       const shouldFetchFromMysql = !inventory || localPhotos.length === 0;
       if (shouldFetchFromMysql) {
         // Fallback: traer de MySQL
         try {
-          const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(property.id)}`);
+          const res = await fetch(
+            `/api/inventories?propertyId=${encodeURIComponent(property.id)}`,
+          );
           if (res.ok) {
             const data = await res.json();
-            const remote = (data.inventories ?? []).find((i: any) => i.phase === phase);
+            const remote = (data.inventories ?? []).find(
+              (i: any) => i.phase === phase,
+            );
             if (remote) {
               const remotePhotos = normalizePhotosArray(remote.photos);
               if (remotePhotos.length > 0) {
-                console.log(`[gallery] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`);
+                console.log(
+                  `[gallery] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`,
+                );
               }
               inventory = {
                 id: remote.id,
@@ -1607,7 +2036,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               };
               // Re-poblar IndexedDB: inventario + cada foto en su store
               await inventoryDB.saveInventory(inventory!);
-              for (const p of (inventory!.photos ?? [])) {
+              for (const p of inventory!.photos ?? []) {
                 if (p?.dataUrl) {
                   await inventoryDB.savePhoto({
                     id: p.id,
@@ -1622,11 +2051,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             }
           }
         } catch (err) {
-          console.warn('[gallery] fallback MySQL fetch failed:', err);
+          console.warn("[gallery] fallback MySQL fetch failed:", err);
         }
       }
       if (!inventory) {
-        showToast(`Aún no hay inventario de ${phase === 'inicial' ? 'captación' : 'colocación'} para esta propiedad`, 'error');
+        showToast(
+          `Aún no hay inventario de ${phase === "inicial" ? "captación" : "colocación"} para esta propiedad`,
+          "error",
+        );
         setPhotoGalleryLoading(false);
         return;
       }
@@ -1638,9 +2070,18 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       // así la próxima lectura ya no tiene que normalizar.
       const rawPhotos = inventory.photos;
       const photoList = normalizePhotosArray(rawPhotos);
-      if (rawPhotos && typeof rawPhotos === 'object' && !Array.isArray(rawPhotos)) {
-        const shape = photoList.length === 0 ? 'array vacío (id set sin metadata)' : 'array con metadata';
-        console.warn(`[gallery] inventory.photos era Record/Object — normalizado a ${shape}. Self-heal save.`);
+      if (
+        rawPhotos &&
+        typeof rawPhotos === "object" &&
+        !Array.isArray(rawPhotos)
+      ) {
+        const shape =
+          photoList.length === 0
+            ? "array vacío (id set sin metadata)"
+            : "array con metadata";
+        console.warn(
+          `[gallery] inventory.photos era Record/Object — normalizado a ${shape}. Self-heal save.`,
+        );
         void inventoryDB.saveInventory({ ...inventory, photos: photoList });
       }
       const allPhotoIds = photoList.map((p: any) => p.id);
@@ -1649,7 +2090,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         areaId: string;
         areaLabel: string;
         dataUrl: string;
-        phase: 'inicial' | 'final';
+        phase: "inicial" | "final";
       }> = [];
       for (const photoMeta of photoList) {
         // FIX: el store `photos` de IndexedDB puede estar vacío (el wizard
@@ -1659,16 +2100,20 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         try {
           const stored = await inventoryDB.getPhoto(photoMeta.id);
           dataUrl = stored?.dataUrl ?? null;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
         if (!dataUrl && (photoMeta as any).dataUrl) {
           dataUrl = (photoMeta as any).dataUrl;
         }
         if (dataUrl) {
-          const area = (inventory.areas ?? []).find((a: any) => a.id === photoMeta.areaId);
+          const area = (inventory.areas ?? []).find(
+            (a: any) => a.id === photoMeta.areaId,
+          );
           photos.push({
             id: photoMeta.id,
             areaId: photoMeta.areaId,
-            areaLabel: area?.label ?? 'Sin área',
+            areaLabel: area?.label ?? "Sin área",
             dataUrl,
             phase,
           });
@@ -1681,8 +2126,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       });
       setLightboxIndex(null);
     } catch (err: any) {
-      console.error('[gallery] load photos:', err);
-      showToast('Error cargando fotos del inventario', 'error');
+      console.error("[gallery] load photos:", err);
+      showToast("Error cargando fotos del inventario", "error");
     } finally {
       setPhotoGalleryLoading(false);
     }
@@ -1695,11 +2140,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       if (property.mandatePdfUrl) {
         const url = driveDownloadUrl(property.mandatePdfUrl);
         // Para blob: el browser maneja la descarga directa. Para proxy, abrimos en nueva tab.
-        if (url.startsWith('blob:') || url.startsWith('/api/')) {
-          const a = document.createElement('a');
+        if (url.startsWith("blob:") || url.startsWith("/api/")) {
+          const a = document.createElement("a");
           a.href = url;
-          a.download = `Mandato_${property.address ?? 'propiedad'}.pdf`;
-          a.target = '_blank';
+          a.download = `Mandato_${property.address ?? "propiedad"}.pdf`;
+          a.target = "_blank";
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
@@ -1714,16 +2159,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         if (property.owners && property.owners.length > 0) {
           return property.owners.map((o: any) => ({
             name: o.name,
-            documentId: o.idNumber ?? '',
+            documentId: o.idNumber ?? "",
             phone: o.phone ?? undefined,
             email: o.email ?? undefined,
             ownershipPct: o.ownershipPct ?? null,
           }));
         }
-        return [{ name: property.owner, documentId: property.ownerIdNumber ?? '' }];
+        return [
+          { name: property.owner, documentId: property.ownerIdNumber ?? "" },
+        ];
       })();
       await generateMandatoPdf({
-        property: { address: property.address, owner: property.owner, chip: property.chip, ownerIdNumber: property.ownerIdNumber },
+        property: {
+          address: property.address,
+          owner: property.owner,
+          chip: property.chip,
+          ownerIdNumber: property.ownerIdNumber,
+        },
         owners: fallbackOwners,
         agency: {
           name: settings.agency.name,
@@ -1737,7 +2189,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       });
     } catch (err) {
       console.error(err);
-      showToast('Error al descargar el contrato de mandato', 'error');
+      showToast("Error al descargar el contrato de mandato", "error");
     }
   };
 
@@ -1751,7 +2203,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
     // Validación de campos básicos del paso 1: aunque estén en otro step,
     // no tiene sentido avanzar al inventario si no tenemos ni dirección.
     if (!address || !chip || !folio) {
-      showToast('Volvé al paso 1 y completá dirección, CHIP y folio', 'error');
+      showToast("Volvé al paso 1 y completá dirección, CHIP y folio", "error");
       return;
     }
     setStep(3);
@@ -1760,15 +2212,38 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
   // Cuando entramos al paso 3 con un propertyId temporal (en wizard de captación),
   // usamos un id sintético (state arriba). Cuando ya es una propiedad existente
   // (en modal), usamos su id real.
-  const wizardProperty = { address, chip, owner: wizardOwners[0]?.name ?? '', ownerIdNumber: wizardOwners[0]?.idNumber ?? '' };
+  const wizardProperty = {
+    address,
+    chip,
+    owner: wizardOwners[0]?.name ?? "",
+    ownerIdNumber: wizardOwners[0]?.idNumber ?? "",
+  };
 
   return (
     <>
-      <input type="file" ref={fileInputRef} className="hidden" accept=".pdf" onChange={handleFileChange} />
-      <input type="file" ref={mandatoFileInputRef} className="hidden" accept=".pdf" onChange={handleFileChange} />
-      <input type="file" ref={detailDocInputRef} className="hidden" accept=".pdf" onChange={handleFileChange} />
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept=".pdf"
+        onChange={handleFileChange}
+      />
+      <input
+        type="file"
+        ref={mandatoFileInputRef}
+        className="hidden"
+        accept=".pdf"
+        onChange={handleFileChange}
+      />
+      <input
+        type="file"
+        ref={detailDocInputRef}
+        className="hidden"
+        accept=".pdf"
+        onChange={handleFileChange}
+      />
 
-<motion.div
+      <motion.div
         initial={{ opacity: 0, x: 20 }}
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 1, x: -20 }}
@@ -1784,9 +2259,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
         {/* ── Header: título + botón Agregar / volver ── */}
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Gestión de Inmuebles</h2>
+            <h2 className="text-2xl font-bold text-slate-900">
+              Gestión de Inmuebles
+            </h2>
             <p className="text-slate-500 text-sm">
-              {showWizard ? 'Fase 1: Captación y Registro de Mandato' : `${properties.length} inmueble${properties.length !== 1 ? 's' : ''} registrado${properties.length !== 1 ? 's' : ''}`}
+              {showWizard
+                ? "Fase 1: Captación y Registro de Mandato"
+                : `${properties.length} inmueble${properties.length !== 1 ? "s" : ""} registrado${properties.length !== 1 ? "s" : ""}`}
             </p>
           </div>
           {!showWizard ? (
@@ -1794,18 +2273,40 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               onClick={() => {
                 // Liberar blob URLs del wizard anterior antes de empezar uno nuevo (memory leak fix)
                 Object.values(uploadedDocs).forEach((arr) => {
-                  if (Array.isArray(arr)) arr.forEach((u) => { if (u && u.startsWith('blob:')) URL.revokeObjectURL(u); });
+                  if (Array.isArray(arr))
+                    arr.forEach((u) => {
+                      // BUG-021: helper central.
+                      revokeIfBlob(u);
+                    });
                 });
-                setShowWizard(true); setStep(1);
-                setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
-                setPropertyType('apartamento');
-                setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+                setShowWizard(true);
+                setStep(1);
+                setAddress("");
+                setChip("");
+                setFolio("");
+                setOwnerIdNumber("");
+                setPropertyType("apartamento");
+                setWizardOwners([
+                  {
+                    id: `wizard-owner-${Date.now()}-1`,
+                    name: "",
+                    idNumber: "",
+                    phone: "",
+                    email: "",
+                    ownershipPct: "",
+                  },
+                ]);
                 setWizardUnits([]);
                 setUploadedDocs({});
                 setLastUploadedSlot(null);
                 // Si hay draft en localStorage, el useEffect de hidratación lo
                 // restaura al paso 1 (los archivos se re-suben desde el paso 2).
-                try { if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft)) setRestoreDraftOnOpen(true); } catch { /* silent */ }
+                try {
+                  if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft))
+                    setRestoreDraftOnOpen(true);
+                } catch {
+                  /* silent */
+                }
               }}
               className="gap-2"
             >
@@ -1835,17 +2336,33 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           <>
             {/* Barra de pasos + botón "Descartar draft" */}
             <div className="flex items-center gap-2">
-              {(['Datos', 'Documentos', 'Inventario'] as const).map((label, i) => (
-                <div key={label} className="flex items-center gap-2 flex-1">
-                  <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-all ${
-                    step > i + 1 ? 'bg-blue-600 text-white' : step === i + 1 ? 'bg-blue-600 text-white ring-4 ring-blue-100' : 'bg-slate-200 text-slate-500'
-                  }`}>
-                    {step > i + 1 ? '✓' : i + 1}
+              {(["Datos", "Documentos", "Inventario"] as const).map(
+                (label, i) => (
+                  <div key={label} className="flex items-center gap-2 flex-1">
+                    <div
+                      className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-all ${
+                        step > i + 1
+                          ? "bg-blue-600 text-white"
+                          : step === i + 1
+                            ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                            : "bg-slate-200 text-slate-500"
+                      }`}
+                    >
+                      {step > i + 1 ? "✓" : i + 1}
+                    </div>
+                    <span
+                      className={`text-xs font-semibold ${step === i + 1 ? "text-blue-700" : "text-slate-400"}`}
+                    >
+                      {label}
+                    </span>
+                    {i < 2 && (
+                      <div
+                        className={`flex-1 h-0.5 rounded-full ${step > i + 1 ? "bg-blue-600" : "bg-slate-200"}`}
+                      />
+                    )}
                   </div>
-                  <span className={`text-xs font-semibold ${step === i + 1 ? 'text-blue-700' : 'text-slate-400'}`}>{label}</span>
-                  {i < 2 && <div className={`flex-1 h-0.5 rounded-full ${step > i + 1 ? 'bg-blue-600' : 'bg-slate-200'}`} />}
-                </div>
-              ))}
+                ),
+              )}
               {/* Botón "Descartar borrador" — abre modal de confirmación */}
               <button
                 type="button"
@@ -1863,12 +2380,18 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 {step === 1 && (
                   <Card className="p-8">
                     <StepBasic
-                      address={address} setAddress={setAddress}
-                      chip={chip} setChip={setChip}
-                      folio={folio} setFolio={setFolio}
-                      propertyType={propertyType} setPropertyType={setPropertyType}
-                      owners={wizardOwners} setOwners={setWizardOwners}
-                      units={wizardUnits} setUnits={setWizardUnits}
+                      address={address}
+                      setAddress={setAddress}
+                      chip={chip}
+                      setChip={setChip}
+                      folio={folio}
+                      setFolio={setFolio}
+                      propertyType={propertyType}
+                      setPropertyType={setPropertyType}
+                      owners={wizardOwners}
+                      setOwners={setWizardOwners}
+                      units={wizardUnits}
+                      setUnits={setWizardUnits}
                       showToast={showToast}
                       onContinue={async () => {
                         // Option B: persistir la propiedad en MySQL antes de
@@ -1885,8 +2408,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                         const result = await ensurePropertyPersisted();
                         if (result) {
                           showToast(
-                            '✓ Avance guardado en el servidor (MySQL). Estado: Pendiente hasta subir el Mandato.',
-                            'success',
+                            "✓ Avance guardado en el servidor (MySQL). Estado: Pendiente hasta subir el Mandato.",
+                            "success",
                           );
                         }
                       }}
@@ -1897,16 +2420,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   <StepDocs
                     owners={wizardOwners}
                     units={wizardUnits}
-                    uploadedDocs={uploadedDocs} setUploadedDocs={setUploadedDocs}
-                    uploadingDoc={uploadingDoc} setUploadingDoc={setUploadingDoc}
-                    currentDocLabel={currentDocLabel} setCurrentDocLabel={setCurrentDocLabel}
-                    ownerIdNumber={ownerIdNumber} setOwnerIdNumber={setOwnerIdNumber}
-                    viewingDoc={viewingDoc} setViewingDoc={setViewingDoc}
+                    uploadedDocs={uploadedDocs}
+                    setUploadedDocs={setUploadedDocs}
+                    uploadingDoc={uploadingDoc}
+                    setUploadingDoc={setUploadingDoc}
+                    currentDocLabel={currentDocLabel}
+                    setCurrentDocLabel={setCurrentDocLabel}
+                    ownerIdNumber={ownerIdNumber}
+                    setOwnerIdNumber={setOwnerIdNumber}
+                    viewingDoc={viewingDoc}
+                    setViewingDoc={setViewingDoc}
                     showToast={showToast}
                     onBack={() => setStep(1)}
                     onContinue={validateStep2}
                     triggerFileInput={triggerFileInput}
-                    onSaveDraft={() => { /* el autosave ya persiste; el toast lo da el botón */ }}
+                    onSaveDraft={() => {
+                      /* el autosave ya persiste; el toast lo da el botón */
+                    }}
                     // Conectamos el slot del último upload exitoso para abrir el modal
                     // "¿Querés subir otro documento?" en StepDocs.
                     lastUploadedSlot={lastUploadedSlot}
@@ -1930,7 +2460,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                         // inventories.property_id explota. Solo guardamos el inventario
                         // en estado — handleFinalize se encarga de re-keyearlo a
                         // `${propertyDbId}:inicial` y postearlo con el UUID real.
-                        console.log('[inventory] Capturado en wizard, diferido a handleFinalize');
+                        console.log(
+                          "[inventory] Capturado en wizard, diferido a handleFinalize",
+                        );
                         setWizardInventory(inv);
                       }}
                     />
@@ -1940,19 +2472,26 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
               {/* ── Resumen de captación ── */}
               <Card className="p-6 h-fit">
-                <h4 className="font-bold text-sm uppercase text-slate-400 mb-4">Resumen de Captación</h4>
+                <h4 className="font-bold text-sm uppercase text-slate-400 mb-4">
+                  Resumen de Captación
+                </h4>
                 <div className="space-y-3">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Tipo</span>
-                    <span className="font-medium">{PROPERTY_TYPES.find(t => t.id === propertyType)?.label ?? propertyType}</span>
+                    <span className="font-medium">
+                      {PROPERTY_TYPES.find((t) => t.id === propertyType)
+                        ?.label ?? propertyType}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Dirección</span>
-                    <span className="font-medium text-right">{address || '---'}</span>
+                    <span className="font-medium text-right">
+                      {address || "---"}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">CHIP</span>
-                    <span className="font-medium">{chip || '---'}</span>
+                    <span className="font-medium">{chip || "---"}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Propietarios</span>
@@ -1960,7 +2499,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       {wizardOwners.filter((o) => o.name.trim()).length}
                       {wizardUnits.filter((u) => u.label.trim()).length > 0 && (
                         <span className="text-slate-400 text-[10px] block">
-                          + {wizardUnits.filter((u) => u.label.trim()).length} unidad(es) adic.
+                          + {wizardUnits.filter((u) => u.label.trim()).length}{" "}
+                          unidad(es) adic.
                         </span>
                       )}
                     </span>
@@ -1971,74 +2511,112 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-slate-100">
                     <span className="text-slate-500">Mandato</span>
-                    {Array.isArray(uploadedDocs[MANDATO_KEY]) && uploadedDocs[MANDATO_KEY]!.length > 0 ? (
+                    {Array.isArray(uploadedDocs[MANDATO_KEY]) &&
+                    uploadedDocs[MANDATO_KEY]!.length > 0 ? (
                       <span className="inline-flex items-center gap-1 text-emerald-700 font-bold">
                         <ClipboardCheck className="w-3.5 h-3.5" />
                         FIRMADO
                       </span>
                     ) : (
-                      <span className="text-amber-600 font-bold">Pendiente</span>
+                      <span className="text-amber-600 font-bold">
+                        Pendiente
+                      </span>
                     )}
                   </div>
                 </div>
               </Card>
             </div>
           </>
-        ) : (
-          /* ══ MODO LISTA DE INMUEBLES ════════════════════════════════════ */
-          properties.length === 0 ? (
-            <Card className="p-16 text-center">
-              <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-lg font-bold text-slate-500 mb-2">No hay inmuebles registrados</h3>
-              <p className="text-sm text-slate-400 mb-6">Comienza agregando tu primera propiedad con el botón de arriba.</p>
-              <Button onClick={() => {
-                setShowWizard(true); setStep(1); setPropertyType('apartamento');
-                setAddress(''); setChip(''); setFolio(''); setOwnerIdNumber('');
-                setWizardOwners([{ id: `wizard-owner-${Date.now()}-1`, name: '', idNumber: '', phone: '', email: '', ownershipPct: '' }]);
+        ) : /* ══ MODO LISTA DE INMUEBLES ════════════════════════════════════ */
+        properties.length === 0 ? (
+          <Card className="p-16 text-center">
+            <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <h3 className="text-lg font-bold text-slate-500 mb-2">
+              No hay inmuebles registrados
+            </h3>
+            <p className="text-sm text-slate-400 mb-6">
+              Comienza agregando tu primera propiedad con el botón de arriba.
+            </p>
+            <Button
+              onClick={() => {
+                setShowWizard(true);
+                setStep(1);
+                setPropertyType("apartamento");
+                setAddress("");
+                setChip("");
+                setFolio("");
+                setOwnerIdNumber("");
+                setWizardOwners([
+                  {
+                    id: `wizard-owner-${Date.now()}-1`,
+                    name: "",
+                    idNumber: "",
+                    phone: "",
+                    email: "",
+                    ownershipPct: "",
+                  },
+                ]);
                 setWizardUnits([]);
                 setUploadedDocs({});
                 // Si hay draft, restaurarlo
-                try { if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft)) setRestoreDraftOnOpen(true); } catch { /* silent */ }
-              }} className="gap-2">
-                + Agregar Primera Propiedad
-              </Button>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {properties.map((p) => {
-                const statusColor = p.status === 'Activo' ? 'emerald'
-                  : p.status === 'Pendiente' ? 'amber'
-                  : p.status === 'Arrendado' ? 'blue'
-                  : 'slate';
-                const statusBg: Record<string, string> = {
-                  emerald: 'bg-emerald-50 border-emerald-200',
-                  amber: 'bg-amber-50 border-amber-200',
-                  blue: 'bg-blue-50 border-blue-200',
-                  slate: 'bg-slate-50 border-slate-200',
-                };
-                const statusText: Record<string, string> = {
-                  emerald: 'text-emerald-700',
-                  amber: 'text-amber-700',
-                  blue: 'text-blue-700',
-                  slate: 'text-slate-700',
-                };
-                /** Activar requiere mandato firmado — regla de negocio inmutable. */
-                const canActivate = !!p.mandatePdfUrl;
-                const isInactive = p.status !== 'Activo';
-                return (
-                  <div
-                    key={p.id}
-                    onClick={() => void openDetailFresh(p)}
-                    className={`rounded-xl border ${statusBg[statusColor]} hover:shadow-md transition-shadow cursor-pointer`}
-                  >
-                    <Card className={`p-4 ${statusBg[statusColor]}`}>
+                try {
+                  if (localStorage.getItem(STORAGE_KEYS.wizardPropertyDraft))
+                    setRestoreDraftOnOpen(true);
+                } catch {
+                  /* silent */
+                }
+              }}
+              className="gap-2"
+            >
+              + Agregar Primera Propiedad
+            </Button>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {properties.map((p) => {
+              const statusColor =
+                p.status === "Activo"
+                  ? "emerald"
+                  : p.status === "Pendiente"
+                    ? "amber"
+                    : p.status === "Arrendado"
+                      ? "blue"
+                      : "slate";
+              const statusBg: Record<string, string> = {
+                emerald: "bg-emerald-50 border-emerald-200",
+                amber: "bg-amber-50 border-amber-200",
+                blue: "bg-blue-50 border-blue-200",
+                slate: "bg-slate-50 border-slate-200",
+              };
+              const statusText: Record<string, string> = {
+                emerald: "text-emerald-700",
+                amber: "text-amber-700",
+                blue: "text-blue-700",
+                slate: "text-slate-700",
+              };
+              /** Activar requiere mandato firmado — regla de negocio inmutable. */
+              const canActivate = !!p.mandatePdfUrl;
+              const isInactive = p.status !== "Activo";
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => void openDetailFresh(p)}
+                  className={`rounded-xl border ${statusBg[statusColor]} hover:shadow-md transition-shadow cursor-pointer`}
+                >
+                  <Card className={`p-4 ${statusBg[statusColor]}`}>
                     {/* Header: dirección + estado */}
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-slate-900 truncate">{p.address}</p>
-                        <p className="text-[11px] text-slate-500 truncate mt-0.5">{p.owner}</p>
+                        <p className="text-sm font-bold text-slate-900 truncate">
+                          {p.address}
+                        </p>
+                        <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                          {p.owner}
+                        </p>
                       </div>
-                      <span className={`flex-shrink-0 text-[9px] font-bold uppercase px-2 py-1 rounded-full border ${statusBg[statusColor]} ${statusText[statusColor]}`}>
+                      <span
+                        className={`flex-shrink-0 text-[9px] font-bold uppercase px-2 py-1 rounded-full border ${statusBg[statusColor]} ${statusText[statusColor]}`}
+                      >
                         {p.status}
                       </span>
                     </div>
@@ -2076,7 +2654,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                           data-testid={`inventory-count-${p.id}`}
                         >
                           <ListChecks className="w-3 h-3" />
-                          {p.inventoryCount} {p.inventoryCount === 1 ? 'inventario' : 'inventarios'}
+                          {p.inventoryCount}{" "}
+                          {p.inventoryCount === 1
+                            ? "inventario"
+                            : "inventarios"}
                         </div>
                       )}
                     </div>
@@ -2084,7 +2665,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     {/* Acciones */}
                     <div className="flex gap-2 pt-2 border-t border-slate-200">
                       <button
-                        onClick={(e) => { e.stopPropagation(); void openDetailFresh(p); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void openDetailFresh(p);
+                        }}
                         className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
                       >
                         <Eye className="w-3.5 h-3.5" />
@@ -2093,36 +2677,50 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (p.status === 'Activo') {
+                          if (p.status === "Activo") {
                             // Inactivar siempre está permitido
-                            onUpdateProperty(p.id, { status: 'Inactivo' });
-                            showToast('Inmueble marcado como Inactivo');
+                            onUpdateProperty(p.id, { status: "Inactivo" });
+                            showToast("Inmueble marcado como Inactivo");
                           } else if (canActivate) {
-                            onUpdateProperty(p.id, { status: 'Activo' });
-                            showToast('Inmueble Activado');
+                            onUpdateProperty(p.id, { status: "Activo" });
+                            showToast("Inmueble Activado");
                           } else {
                             // Sin mandato firmado → no se puede activar
-                            showToast('No se puede activar: sube primero el contrato de mandato firmado', 'error');
+                            showToast(
+                              "No se puede activar: sube primero el contrato de mandato firmado",
+                              "error",
+                            );
                           }
                         }}
                         className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors border ${
-                          p.status === 'Activo'
-                            ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          p.status === "Activo"
+                            ? "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
                             : canActivate
-                              ? 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'
-                              : 'bg-amber-50 border-amber-200 text-amber-600 cursor-not-allowed opacity-75'
+                              ? "bg-blue-600 border-blue-600 text-white hover:bg-blue-700"
+                              : "bg-amber-50 border-amber-200 text-amber-600 cursor-not-allowed opacity-75"
                         }`}
-                        title={!canActivate && isInactive ? 'Requiere contrato de mandato firmado para activar' : ''}
+                        title={
+                          !canActivate && isInactive
+                            ? "Requiere contrato de mandato firmado para activar"
+                            : ""
+                        }
                       >
                         <Power className="w-3.5 h-3.5" />
-                        {p.status === 'Activo' ? 'Inactivar' : isInactive && !canActivate ? 'Sin mandato' : 'Activar'}
+                        {p.status === "Activo"
+                          ? "Inactivar"
+                          : isInactive && !canActivate
+                            ? "Sin mandato"
+                            : "Activar"}
                       </button>
                       {/* Eliminar: solo si NO tiene inventario (los inventarios son trazabilidad legal).
                           Si tiene inventario, mostramos un candado explicativo para que el usuario
                           entienda por qué no se puede borrar (en lugar de ocultar el botón sin más). */}
                       {(p.inventoryCount ?? 0) === 0 ? (
                         <button
-                          onClick={(e) => { e.stopPropagation(); setPendingDelete(p); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDelete(p);
+                          }}
                           className="flex items-center justify-center px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors border bg-white border-red-200 text-red-600 hover:bg-red-50"
                           title="Eliminar inmueble (solo permitido si no tiene inventario)"
                           aria-label={`Eliminar ${p.address}`}
@@ -2142,18 +2740,19 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       )}
                     </div>
                   </Card>
-                  </div>
-                );
-              })}
-            </div>
-          )
+                </div>
+              );
+            })}
+          </div>
         )}
       </motion.div>
 
       {/* ── Modal de confirmación para eliminar inmueble ── */}
       <Modal
         isOpen={!!pendingDelete}
-        onClose={() => { if (!deleting) setPendingDelete(null); }}
+        onClose={() => {
+          if (!deleting) setPendingDelete(null);
+        }}
         title="¿Eliminar inmueble?"
       >
         {pendingDelete && (
@@ -2161,23 +2760,40 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-lg">
               <Trash2 className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-red-900">
-                <p className="font-semibold">Esta acción NO se puede deshacer.</p>
+                <p className="font-semibold">
+                  Esta acción NO se puede deshacer.
+                </p>
                 <p className="mt-1 text-red-800">
-                  Vas a eliminar <strong>{pendingDelete.address}</strong> del sistema.
+                  Vas a eliminar <strong>{pendingDelete.address}</strong> del
+                  sistema.
                 </p>
               </div>
             </div>
 
             <div className="space-y-2 text-sm text-slate-700">
-              <p><strong>Se eliminará de la Base de Datos:</strong></p>
+              <p>
+                <strong>Se eliminará de la Base de Datos:</strong>
+              </p>
               <ul className="list-disc pl-5 space-y-0.5 text-slate-600">
                 <li>El registro del inmueble y del propietario</li>
-                <li>Cualquier documento legal (cédula, certificado, predial, rut) que se haya subido</li>
+                <li>
+                  Cualquier documento legal (cédula, certificado, predial, rut)
+                  que se haya subido
+                </li>
               </ul>
-              <p className="mt-3"><strong>En Google Drive:</strong></p>
+              <p className="mt-3">
+                <strong>En Google Drive:</strong>
+              </p>
               <ul className="list-disc pl-5 space-y-0.5 text-slate-600">
-                <li>Si la carpeta Drive está vacía, se manda a la papelera automáticamente</li>
-                <li>Si tiene archivos subidos (mandato, predial, etc.), <em>la carpeta queda en Drive</em> como histórico — podés borrarla manual desde tu Drive</li>
+                <li>
+                  Si la carpeta Drive está vacía, se manda a la papelera
+                  automáticamente
+                </li>
+                <li>
+                  Si tiene archivos subidos (mandato, predial, etc.),{" "}
+                  <em>la carpeta queda en Drive</em> como histórico — podés
+                  borrarla manual desde tu Drive
+                </li>
               </ul>
             </div>
 
@@ -2198,7 +2814,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
               >
                 <Trash2 className="w-4 h-4" />
-                {deleting ? 'Eliminando…' : 'Sí, eliminar'}
+                {deleting ? "Eliminando…" : "Sí, eliminar"}
               </button>
             </div>
           </div>
@@ -2213,16 +2829,21 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       <Modal
         isOpen={!!finalizeSummary}
         onClose={() => setFinalizeSummary(null)}
-        title={finalizeSummary?.uploadedToDrive.length === finalizeSummary?.totalDocs
-          && (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
-            ? '✓ Propiedad creada — todo en Drive'
-            : '⚠ Propiedad creada con pendientes'}
+        title={
+          finalizeSummary?.uploadedToDrive.length ===
+            finalizeSummary?.totalDocs &&
+          (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
+            ? "✓ Propiedad creada — todo en Drive"
+            : "⚠ Propiedad creada con pendientes"
+        }
         size="lg"
       >
         {finalizeSummary && (
           <div className="space-y-4">
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
-              <p><strong>{finalizeSummary.address}</strong></p>
+              <p>
+                <strong>{finalizeSummary.address}</strong>
+              </p>
               {finalizeSummary.driveFolderPath && (
                 <p className="text-xs text-slate-500 mt-1">
                   📁 Drive: Mi unidad / {finalizeSummary.driveFolderPath}/
@@ -2239,7 +2860,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               {finalizeSummary.uploadedToDrive.length > 0 ? (
                 <ul className="text-xs text-emerald-800 mt-2 space-y-0.5 list-disc pl-5">
                   {finalizeSummary.uploadedToDrive.map((k) => (
-                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                    <li key={k}>
+                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
+                    </li>
                   ))}
                   {finalizeSummary.inventoryUploaded && (
                     <li>PDF de Inventario de captación</li>
@@ -2255,16 +2878,19 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-sm font-semibold text-amber-900 flex items-center gap-1.5">
                   <CloudOff className="w-4 h-4" />
-                  Solo en este navegador ({finalizeSummary.uploadedLocalOnly.length})
+                  Solo en este navegador (
+                  {finalizeSummary.uploadedLocalOnly.length})
                 </p>
                 <p className="text-xs text-amber-800 mt-1">
                   {finalizeSummary.driveConnected
-                    ? 'Falló la subida a Drive. Reintentá desde el Detalle del Inmueble.'
-                    : 'Drive no estaba conectado. Reintentá desde el Detalle del Inmueble.'}
+                    ? "Falló la subida a Drive. Reintentá desde el Detalle del Inmueble."
+                    : "Drive no estaba conectado. Reintentá desde el Detalle del Inmueble."}
                 </p>
                 <ul className="text-xs text-amber-800 mt-2 space-y-0.5 list-disc pl-5">
                   {finalizeSummary.uploadedLocalOnly.map((k) => (
-                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                    <li key={k}>
+                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -2278,13 +2904,16 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   Faltantes — no subiste ({finalizeSummary.missingDocs.length})
                 </p>
                 <p className="text-xs text-red-800 mt-1">
-                  Quedan como <strong>pendientes</strong>. La propiedad queda en estado
-                  <strong> Pendiente</strong> hasta que subas el Contrato de Mandato.
-                  Subilos desde el Detalle del Inmueble.
+                  Quedan como <strong>pendientes</strong>. La propiedad queda en
+                  estado
+                  <strong> Pendiente</strong> hasta que subas el Contrato de
+                  Mandato. Subilos desde el Detalle del Inmueble.
                 </p>
                 <ul className="text-xs text-red-800 mt-2 space-y-0.5 list-disc pl-5">
                   {finalizeSummary.missingDocs.map((k) => (
-                    <li key={k}>{slotKeyToLabel(k, wizardOwners, wizardUnits)}</li>
+                    <li key={k}>
+                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -2313,8 +2942,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   onClick={() => {
                     window.open(
                       `https://drive.google.com/drive/folders/${finalizeSummary.driveFolderId}`,
-                      '_blank',
-                      'noopener,noreferrer',
+                      "_blank",
+                      "noopener,noreferrer",
                     );
                   }}
                 >
@@ -2322,7 +2951,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   Ver carpeta en Drive
                 </Button>
               )}
-              <Button className="flex-1" onClick={() => setFinalizeSummary(null)}>
+              <Button
+                className="flex-1"
+                onClick={() => setFinalizeSummary(null)}
+              >
                 Cerrar
               </Button>
             </div>
@@ -2332,52 +2964,107 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
       {/* ── Modal Detalle del Inmueble — montado ANTES del viewer para que
           el viewer (siguiente) quede ENCIMA en el stacking order. */}
-      <Modal isOpen={!!viewingProperty} onClose={() => setViewingProperty(null)} title="Detalle del Inmueble">
+      <Modal
+        isOpen={!!viewingProperty}
+        onClose={() => setViewingProperty(null)}
+        title="Detalle del Inmueble"
+      >
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Dirección</p>
-              <p className="text-sm font-semibold">{viewingProperty?.address}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase">
+                Dirección
+              </p>
+              <p className="text-sm font-semibold">
+                {viewingProperty?.address}
+              </p>
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">CHIP</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase">
+                CHIP
+              </p>
               <p className="text-sm font-semibold">{viewingProperty?.chip}</p>
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">Creado</p>
-              <p className="text-sm font-semibold">{viewingProperty?.createdAt ? new Date(viewingProperty.createdAt).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase">
+                Creado
+              </p>
+              <p className="text-sm font-semibold">
+                {viewingProperty?.createdAt
+                  ? new Date(viewingProperty.createdAt).toLocaleDateString(
+                      "es-CO",
+                      { day: "2-digit", month: "short", year: "numeric" },
+                    )
+                  : "—"}
+              </p>
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase">
                 Propietarios ({viewingProperty?.owners?.length ?? 1})
               </p>
               <p className="text-sm font-semibold truncate">
-                {(viewingProperty?.owners ?? []).map((o: any) => o.name).join(', ') || viewingProperty?.owner || '—'}
+                {(viewingProperty?.owners ?? [])
+                  .map((o: any) => o.name)
+                  .join(", ") ||
+                  viewingProperty?.owner ||
+                  "—"}
               </p>
             </div>
             <div className="col-span-2">
-              <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Estado del Inmueble</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">
+                Estado del Inmueble
+              </p>
               <div className="flex flex-wrap gap-2">
-                {(['Pendiente', 'Activo', 'Arrendado', 'Inactivo'] as const).map((status) => {
+                {(
+                  ["Pendiente", "Activo", "Arrendado", "Inactivo"] as const
+                ).map((status) => {
                   const isCurrent = viewingProperty?.status === status;
                   let disabled = false;
-                  let reason = '';
+                  let reason = "";
                   const docsComplete = allDocsComplete(viewingProperty);
-                  const hasActiveContract = contracts.some((c: any) => c.propertyId === viewingProperty?.id && c.status === 'active');
+                  const hasActiveContract = contracts.some(
+                    (c: any) =>
+                      c.propertyId === viewingProperty?.id &&
+                      c.status === "active",
+                  );
 
                   if (!isCurrent) {
-                    if (status === 'Activo') {
-                      if (!docsComplete) { disabled = true; reason = 'Faltan documentos o mandato'; }
-                    } else if (status === 'Arrendado') {
-                      if (!docsComplete) { disabled = true; reason = 'Docs incompletos'; }
-                      else if (!hasActiveContract) { disabled = true; reason = 'Sin contrato activo'; }
+                    if (status === "Activo") {
+                      if (!docsComplete) {
+                        disabled = true;
+                        reason = "Faltan documentos o mandato";
+                      }
+                    } else if (status === "Arrendado") {
+                      if (!docsComplete) {
+                        disabled = true;
+                        reason = "Docs incompletos";
+                      } else if (!hasActiveContract) {
+                        disabled = true;
+                        reason = "Sin contrato activo";
+                      }
                     }
                   }
 
-                  const colors = status === 'Activo' ? { on: 'bg-emerald-500 text-white border-emerald-500', off: 'bg-white text-emerald-600 border-emerald-200 hover:border-emerald-400' }
-                    : status === 'Pendiente' ? { on: 'bg-amber-500 text-white border-amber-500', off: 'bg-white text-amber-600 border-amber-200 hover:border-amber-400' }
-                    : status === 'Arrendado' ? { on: 'bg-blue-500 text-white border-blue-500', off: 'bg-white text-blue-600 border-blue-200 hover:border-blue-400' }
-                    : { on: 'bg-slate-500 text-white border-slate-500', off: 'bg-white text-slate-500 border-slate-200 hover:border-slate-400' };
+                  const colors =
+                    status === "Activo"
+                      ? {
+                          on: "bg-emerald-500 text-white border-emerald-500",
+                          off: "bg-white text-emerald-600 border-emerald-200 hover:border-emerald-400",
+                        }
+                      : status === "Pendiente"
+                        ? {
+                            on: "bg-amber-500 text-white border-amber-500",
+                            off: "bg-white text-amber-600 border-amber-200 hover:border-amber-400",
+                          }
+                        : status === "Arrendado"
+                          ? {
+                              on: "bg-blue-500 text-white border-blue-500",
+                              off: "bg-white text-blue-600 border-blue-200 hover:border-blue-400",
+                            }
+                          : {
+                              on: "bg-slate-500 text-white border-slate-500",
+                              off: "bg-white text-slate-500 border-slate-200 hover:border-slate-400",
+                            };
 
                   return (
                     <button
@@ -2388,36 +3075,61 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                         setViewingProperty({ ...viewingProperty, status });
                         showToast(`Estado actualizado a ${status}`);
                       }}
-                      title={disabled ? reason : ''}
-                      className={`text-[10px] font-bold px-3 py-1.5 rounded-lg uppercase transition-all border ${isCurrent ? colors.on : colors.off} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} shadow-sm`}
-                    >{status}</button>
+                      title={disabled ? reason : ""}
+                      className={`text-[10px] font-bold px-3 py-1.5 rounded-lg uppercase transition-all border ${isCurrent ? colors.on : colors.off} ${disabled ? "opacity-50 cursor-not-allowed" : ""} shadow-sm`}
+                    >
+                      {status}
+                    </button>
                   );
                 })}
               </div>
               {!allDocsComplete(viewingProperty) && (
                 <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
-                  <p className="text-[9px] font-bold text-amber-700 uppercase mb-1">Lo que falta</p>
+                  <p className="text-[9px] font-bold text-amber-700 uppercase mb-1">
+                    Lo que falta
+                  </p>
                   <ul className="space-y-0.5">
                     {!viewingProperty?.mandatePdfUrl && (
                       <li className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Contrato de Mandato
+                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
+                        Contrato de Mandato
                       </li>
                     )}
-                    {(viewingProperty?.owners ?? []).filter((o: any) => o.name && !o.documents?.cedula).map((o: any) => (
-                      <li key={o.id} className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Cédula de {o.name}
-                      </li>
-                    ))}
-                    {!viewingProperty?.documents_property?.certificado_tradicion && !viewingProperty?.documents?.['Certificado de Tradición'] && (
-                      <li className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Certificado de Tradición (unidad principal)
-                      </li>
-                    )}
-                    {(viewingProperty?.units ?? []).filter((u: any) => u.label && !u.documents?.certificado_tradicion).map((u: any) => (
-                      <li key={u.id} className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />Certificado de {u.label}
-                      </li>
-                    ))}
+                    {(viewingProperty?.owners ?? [])
+                      .filter((o: any) => o.name && !o.documents?.cedula)
+                      .map((o: any) => (
+                        <li
+                          key={o.id}
+                          className="text-[9px] text-amber-600 flex items-center gap-1"
+                        >
+                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
+                          Cédula de {o.name}
+                        </li>
+                      ))}
+                    {!viewingProperty?.documents_property
+                      ?.certificado_tradicion &&
+                      !viewingProperty?.documents?.[
+                        "Certificado de Tradición"
+                      ] && (
+                        <li className="text-[9px] text-amber-600 flex items-center gap-1">
+                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
+                          Certificado de Tradición (unidad principal)
+                        </li>
+                      )}
+                    {(viewingProperty?.units ?? [])
+                      .filter(
+                        (u: any) =>
+                          u.label && !u.documents?.certificado_tradicion,
+                      )
+                      .map((u: any) => (
+                        <li
+                          key={u.id}
+                          className="text-[9px] text-amber-600 flex items-center gap-1"
+                        >
+                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
+                          Certificado de {u.label}
+                        </li>
+                      ))}
                   </ul>
                 </div>
               )}
@@ -2431,16 +3143,25 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2 flex-1">
                   Propietarios ({viewingProperty.owners.length})
                 </p>
-                {detailRefreshing && <span className="text-[10px] text-blue-500 animate-pulse">Actualizando…</span>}
+                {detailRefreshing && (
+                  <span className="text-[10px] text-blue-500 animate-pulse">
+                    Actualizando…
+                  </span>
+                )}
               </div>
               <div className="space-y-2">
                 {viewingProperty.owners.map((o: any, idx: number) => (
-                  <div key={o.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg">
+                  <div
+                    key={o.id}
+                    className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg"
+                  >
                     <div className="flex items-center gap-2 mb-2">
                       <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold">
                         {idx + 1}
                       </div>
-                      <p className="text-xs font-bold text-slate-800 flex-1">{o.name}</p>
+                      <p className="text-xs font-bold text-slate-800 flex-1">
+                        {o.name}
+                      </p>
                       {o.ownershipPct != null && (
                         <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
                           {o.ownershipPct}%
@@ -2449,45 +3170,77 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       {[
-                        { slotKey: `cedula:${o.id}`, label: 'Cédula', url: o.documents?.cedula },
-                        { slotKey: `rut:${o.id}`, label: 'RUT', url: o.documents?.rut },
+                        {
+                          slotKey: `cedula:${o.id}`,
+                          label: "Cédula",
+                          url: o.documents?.cedula,
+                        },
+                        {
+                          slotKey: `rut:${o.id}`,
+                          label: "RUT",
+                          url: o.documents?.rut,
+                        },
                       ].map(({ slotKey, label, url }) => {
                         // FIX AC-15 (jul-2026): si la URL es blob: o data: (fila
                         // zombie de un upload previo sin Drive), NO mostramos
                         // "Ver" verde — el visor no podría abrir el archivo.
                         // En su lugar, mostramos "Re-subir" para que el agente
                         // reemplace la fila con un PDF válido.
-                        const isBlob = !!url && (url.startsWith('blob:') || url.startsWith('data:'));
+                        const isBlob =
+                          !!url &&
+                          (url.startsWith("blob:") || url.startsWith("data:"));
                         if (url && !isBlob) {
                           return (
                             <button
                               key={slotKey}
-                              onClick={() => setViewingDoc({ label: `${label} de ${o.name}`, url })}
+                              onClick={() =>
+                                setViewingDoc({
+                                  label: `${label} de ${o.name}`,
+                                  url,
+                                })
+                              }
                               className="flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
                             >
                               <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">{label}</span>
-                              <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">
+                                {label}
+                              </span>
+                              <span className="text-[9px] font-bold text-emerald-700">
+                                Ver
+                              </span>
                             </button>
                           );
                         }
                         return (
                           <button
                             key={slotKey}
-                            onClick={() => triggerDetailDocUpload(viewingProperty.id, slotKey)}
+                            onClick={() =>
+                              triggerDetailDocUpload(
+                                viewingProperty.id,
+                                slotKey,
+                              )
+                            }
                             className={`flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
                               isBlob
-                                ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
-                                : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                                ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
+                                : "bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50"
                             }`}
-                            title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
+                            title={
+                              isBlob
+                                ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
+                                : undefined
+                            }
                           >
-                            <Upload className={`w-3 h-3 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
+                            <Upload
+                              className={`w-3 h-3 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
+                            />
                             <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
                               {isBlob ? `${label} (re-subir)` : label}
                             </span>
-                            <span className={`text-[9px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
-                              {isBlob ? 'Re-subir' : 'Subir'}
+                            <span
+                              className={`text-[9px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
+                            >
+                              {isBlob ? "Re-subir" : "Subir"}
                             </span>
                           </button>
                         );
@@ -2508,48 +3261,84 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {viewingProperty.units.map((u: any) => {
                   const certUrl = u.documents?.certificado_tradicion;
-                  const Icon = u.type === 'parking' ? Car : u.type === 'storage' ? Package : Box;
+                  const Icon =
+                    u.type === "parking"
+                      ? Car
+                      : u.type === "storage"
+                        ? Package
+                        : Box;
                   return (
-                    <div key={u.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg">
+                    <div
+                      key={u.id}
+                      className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg"
+                    >
                       <div className="flex items-center gap-2 mb-1.5">
                         <Icon className="w-3.5 h-3.5 text-blue-600" />
-                        <p className="text-xs font-bold text-slate-800 flex-1 truncate">{u.label}</p>
+                        <p className="text-xs font-bold text-slate-800 flex-1 truncate">
+                          {u.label}
+                        </p>
                       </div>
                       {u.folioMatricula && (
-                        <p className="text-[9px] text-slate-500 mb-1.5">Matrícula: {u.folioMatricula}</p>
+                        <p className="text-[9px] text-slate-500 mb-1.5">
+                          Matrícula: {u.folioMatricula}
+                        </p>
                       )}
                       {(() => {
                         // FIX AC-15: si certUrl es blob:, no es un archivo real —
                         // mostramos "Re-subir" para que el agente reemplace la fila.
-                        const isBlob = !!certUrl && (certUrl.startsWith('blob:') || certUrl.startsWith('data:'));
+                        const isBlob =
+                          !!certUrl &&
+                          (certUrl.startsWith("blob:") ||
+                            certUrl.startsWith("data:"));
                         if (certUrl && !isBlob) {
                           return (
                             <button
-                              onClick={() => setViewingDoc({ label: `Certificado de ${u.label}`, url: certUrl })}
+                              onClick={() =>
+                                setViewingDoc({
+                                  label: `Certificado de ${u.label}`,
+                                  url: certUrl,
+                                })
+                              }
                               className="w-full flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
                             >
                               <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">Certificado de Tradición</span>
-                              <span className="text-[9px] font-bold text-emerald-700">Ver</span>
+                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">
+                                Certificado de Tradición
+                              </span>
+                              <span className="text-[9px] font-bold text-emerald-700">
+                                Ver
+                              </span>
                             </button>
                           );
                         }
                         return (
                           <button
-                            onClick={() => triggerUnitDocUpload(viewingProperty.id, u.id)}
+                            onClick={() =>
+                              triggerUnitDocUpload(viewingProperty.id, u.id)
+                            }
                             className={`w-full flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
                               isBlob
-                                ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
-                                : 'bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                                ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
+                                : "bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50"
                             }`}
-                            title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
+                            title={
+                              isBlob
+                                ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
+                                : undefined
+                            }
                           >
-                            <Upload className={`w-3 h-3 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
+                            <Upload
+                              className={`w-3 h-3 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
+                            />
                             <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
-                              {isBlob ? 'Certificado (re-subir)' : 'Certificado de Tradición'}
+                              {isBlob
+                                ? "Certificado (re-subir)"
+                                : "Certificado de Tradición"}
                             </span>
-                            <span className={`text-[9px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
-                              {isBlob ? 'Re-subir' : 'Subir'}
+                            <span
+                              className={`text-[9px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
+                            >
+                              {isBlob ? "Re-subir" : "Subir"}
                             </span>
                           </button>
                         );
@@ -2569,44 +3358,83 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {(() => {
                 const items = [
-                  { slotKey: 'predial', label: 'Impuesto Predial', url: viewingProperty?.documents_property?.predial ?? viewingProperty?.documents?.['Impuesto Predial'] },
-                  { slotKey: 'certificado_tradicion:main', label: 'Certificado de Tradición', url: viewingProperty?.documents_property?.certificado_tradicion ?? viewingProperty?.documents?.['Certificado de Tradición'] },
+                  {
+                    slotKey: "predial",
+                    label: "Impuesto Predial",
+                    url:
+                      viewingProperty?.documents_property?.predial ??
+                      viewingProperty?.documents?.["Impuesto Predial"],
+                  },
+                  {
+                    slotKey: "certificado_tradicion:main",
+                    label: "Certificado de Tradición",
+                    url:
+                      viewingProperty?.documents_property
+                        ?.certificado_tradicion ??
+                      viewingProperty?.documents?.["Certificado de Tradición"],
+                  },
                 ];
                 return items.map((item) => {
                   // FIX AC-15: si la URL es blob:, no es un archivo real —
                   // mostramos "Re-subir" para que el agente reemplace la fila.
-                  const isBlob = !!item.url && (item.url.startsWith('blob:') || item.url.startsWith('data:'));
+                  const isBlob =
+                    !!item.url &&
+                    (item.url.startsWith("blob:") ||
+                      item.url.startsWith("data:"));
                   if (item.url && !isBlob) {
                     return (
                       <button
                         key={item.slotKey}
-                        onClick={() => setViewingDoc({ label: item.label, url: item.url! })}
+                        onClick={() =>
+                          setViewingDoc({ label: item.label, url: item.url! })
+                        }
                         className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-400 transition-colors text-left group"
                         data-testid={`view-doc-${item.slotKey}`}
                       >
                         <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <span className="text-xs font-medium text-slate-800 truncate flex-1">{item.label}</span>
-                        <span className="text-[10px] font-bold text-emerald-700 group-hover:underline">Ver</span>
+                        <span className="text-xs font-medium text-slate-800 truncate flex-1">
+                          {item.label}
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-700 group-hover:underline">
+                          Ver
+                        </span>
                       </button>
                     );
                   }
                   return (
                     <button
                       key={item.slotKey}
-                      onClick={() => triggerPropertyDocUpload(viewingProperty.id, item.slotKey as 'predial' | 'certificado_tradicion:main')}
+                      onClick={() =>
+                        triggerPropertyDocUpload(
+                          viewingProperty.id,
+                          item.slotKey as
+                            | "predial"
+                            | "certificado_tradicion:main",
+                        )
+                      }
                       className={`flex items-center gap-2 p-2.5 rounded-lg border border-dashed transition-colors text-left ${
                         isBlob
-                          ? 'bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100'
-                          : 'bg-slate-50 border-slate-200 hover:border-blue-400 hover:bg-blue-50'
+                          ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
+                          : "bg-slate-50 border-slate-200 hover:border-blue-400 hover:bg-blue-50"
                       }`}
-                      title={isBlob ? 'Archivo previo perdido (URL local expirada) — re-subí para acceder' : undefined}
+                      title={
+                        isBlob
+                          ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
+                          : undefined
+                      }
                     >
-                      <Upload className={`w-4 h-4 flex-shrink-0 ${isBlob ? 'text-amber-600' : 'text-slate-400'}`} />
-                      <span className={`text-[11px] font-medium truncate flex-1 ${isBlob ? 'text-slate-700' : 'text-slate-500'}`}>
+                      <Upload
+                        className={`w-4 h-4 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
+                      />
+                      <span
+                        className={`text-[11px] font-medium truncate flex-1 ${isBlob ? "text-slate-700" : "text-slate-500"}`}
+                      >
                         {isBlob ? `${item.label} (re-subir)` : item.label}
                       </span>
-                      <span className={`text-[10px] font-bold ${isBlob ? 'text-amber-700' : 'text-blue-600'}`}>
-                        {isBlob ? 'Re-subir' : 'Subir'}
+                      <span
+                        className={`text-[10px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
+                      >
+                        {isBlob ? "Re-subir" : "Subir"}
                       </span>
                     </button>
                   );
@@ -2618,26 +3446,34 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
           {/* Contratos */}
           <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">Contratos</p>
+            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
+              Contratos
+            </p>
             <div className="grid grid-cols-1 gap-2">
               <div className="w-full p-3 border border-blue-200 bg-blue-50/40 rounded-lg flex items-center gap-2">
                 <FileSignature className="w-4 h-4 text-blue-600 flex-shrink-0" />
                 <div className="flex-1 text-left min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold text-slate-900">Contrato de Mandato</p>
+                    <p className="text-xs font-bold text-slate-900">
+                      Contrato de Mandato
+                    </p>
                     {(() => {
                       // FIX AC-15: si mandatePdfUrl es blob:, NO mostrar "Firmado"
                       // (sería mentira). Mostrar "⚠ Archivo perdido" en color
                       // rojo para que el agente sepa que tiene que re-subir.
                       const mandateUrl = viewingProperty?.mandatePdfUrl;
-                      const isBlobMandate = !!mandateUrl && (mandateUrl.startsWith('blob:') || mandateUrl.startsWith('data:'));
+                      const isBlobMandate =
+                        !!mandateUrl &&
+                        (mandateUrl.startsWith("blob:") ||
+                          mandateUrl.startsWith("data:"));
                       if (isBlobMandate) {
                         return (
                           <span
                             className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-red-100 text-red-700"
                             title="El PDF del mandato se perdió (URL local expirada). Re-subilo para activar la propiedad."
                           >
-                            <AlertTriangle className="w-3 h-3" /> Archivo perdido
+                            <AlertTriangle className="w-3 h-3" /> Archivo
+                            perdido
                           </span>
                         );
                       }
@@ -2657,34 +3493,46 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   </div>
                   <p className="text-[10px] text-slate-500 mt-0.5">
                     {viewingProperty?.mandateSignedAt
-                      ? `Firmado el ${new Date(viewingProperty.mandateSignedAt).toLocaleDateString('es-CO')}`
-                      : 'No se subió durante la creación de la propiedad'}
+                      ? `Firmado el ${new Date(viewingProperty.mandateSignedAt).toLocaleDateString("es-CO")}`
+                      : "No se subió durante la creación de la propiedad"}
                   </p>
                 </div>
                 <div className="flex flex-col gap-1">
                   {(() => {
                     const mandateUrl = viewingProperty?.mandatePdfUrl;
-                    const isBlobMandate = !!mandateUrl && (mandateUrl.startsWith('blob:') || mandateUrl.startsWith('data:'));
+                    const isBlobMandate =
+                      !!mandateUrl &&
+                      (mandateUrl.startsWith("blob:") ||
+                        mandateUrl.startsWith("data:"));
                     if (mandateUrl && !isBlobMandate) {
                       // PDF firmado válido en Drive: Ver + Descargar + Reemplazar
                       return (
                         <>
                           <button
-                            onClick={() => setViewingDoc({ label: 'Contrato de Mandato', url: mandateUrl })}
+                            onClick={() =>
+                              setViewingDoc({
+                                label: "Contrato de Mandato",
+                                url: mandateUrl,
+                              })
+                            }
                             className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
                             title="Ver PDF firmado"
                           >
                             <Eye className="w-3.5 h-3.5 text-slate-600" />
                           </button>
                           <button
-                            onClick={() => handleDownloadMandato(viewingProperty)}
+                            onClick={() =>
+                              handleDownloadMandato(viewingProperty)
+                            }
                             className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
                             title="Descargar PDF"
                           >
                             <Download className="w-3.5 h-3.5 text-blue-600" />
                           </button>
                           <button
-                            onClick={() => triggerMandatoUpload(viewingProperty.id)}
+                            onClick={() =>
+                              triggerMandatoUpload(viewingProperty.id)
+                            }
                             className="p-1.5 bg-white border border-amber-200 rounded-md hover:bg-amber-50"
                             title="Reemplazar PDF (si quedó mal)"
                             data-testid="replace-mandato"
@@ -2700,7 +3548,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                       return (
                         <>
                           <button
-                            onClick={() => triggerMandatoUpload(viewingProperty.id)}
+                            onClick={() =>
+                              triggerMandatoUpload(viewingProperty.id)
+                            }
                             className="px-2 py-1.5 bg-amber-50 border border-amber-300 rounded-md hover:bg-amber-100 text-[10px] font-bold text-amber-700 flex items-center gap-1"
                             title="El PDF se perdió (URL local expirada) — re-subilo desde tu equipo"
                             data-testid="replace-mandato"
@@ -2728,12 +3578,17 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 
           {/* Acciones de Inventario */}
           <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">Inventarios</p>
+            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
+              Inventarios
+            </p>
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => { setInventoryModalProperty(viewingProperty); setInventoryPhase('inicial'); }}
+                onClick={() => {
+                  setInventoryModalProperty(viewingProperty);
+                  setInventoryPhase("inicial");
+                }}
               >
                 <ClipboardCheck className="w-4 h-4" />
                 Inicial
@@ -2741,7 +3596,10 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => { setInventoryModalProperty(viewingProperty); setInventoryPhase('final'); }}
+                onClick={() => {
+                  setInventoryModalProperty(viewingProperty);
+                  setInventoryPhase("final");
+                }}
               >
                 <ClipboardCheck className="w-4 h-4" />
                 Final
@@ -2751,17 +3609,19 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => void openPhotoGallery(viewingProperty, 'inicial')}
+                onClick={() =>
+                  void openPhotoGallery(viewingProperty, "inicial")
+                }
                 disabled={photoGalleryLoading}
                 data-testid={`view-photos-inicial-${viewingProperty?.id}`}
               >
                 <Camera className="w-4 h-4" />
-                {photoGalleryLoading ? 'Cargando…' : 'Fotos captación'}
+                {photoGalleryLoading ? "Cargando…" : "Fotos captación"}
               </Button>
               <Button
                 variant="outline"
                 className="gap-2"
-                onClick={() => void openPhotoGallery(viewingProperty, 'final')}
+                onClick={() => void openPhotoGallery(viewingProperty, "final")}
                 disabled={photoGalleryLoading}
                 data-testid={`view-photos-final-${viewingProperty?.id}`}
               >
@@ -2778,70 +3638,100 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             </Button>
 
             {/* PDFs del inventario subidos a Drive — links directos */}
-            {(viewingProperty?.inventoryPdfUrl || viewingProperty?.inventory_captacion_pdf_url) && (
+            {(viewingProperty?.inventoryPdfUrl ||
+              viewingProperty?.inventory_captacion_pdf_url) && (
               <div className="space-y-1.5 pt-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">PDFs en Drive</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">
+                  PDFs en Drive
+                </p>
                 {viewingProperty?.inventory_captacion_pdf_url && (
                   <a
-                    href={driveDownloadUrl(viewingProperty.inventory_captacion_pdf_url)}
+                    href={driveDownloadUrl(
+                      viewingProperty.inventory_captacion_pdf_url,
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
                     data-testid={`pdf-captacion-${viewingProperty.id}`}
                   >
                     <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-emerald-900 truncate">PDF Inventario de Captación</span>
+                    <span className="text-[11px] font-medium text-emerald-900 truncate">
+                      PDF Inventario de Captación
+                    </span>
                     <Download className="w-3 h-3 text-emerald-600 ml-auto flex-shrink-0" />
                   </a>
                 )}
                 {viewingProperty?.inventory_colocacion_pdf_url && (
                   <a
-                    href={driveDownloadUrl(viewingProperty.inventory_colocacion_pdf_url)}
+                    href={driveDownloadUrl(
+                      viewingProperty.inventory_colocacion_pdf_url,
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
                     data-testid={`pdf-colocacion-${viewingProperty.id}`}
                   >
                     <FileText className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-blue-900 truncate">PDF Inventario de Colocación</span>
+                    <span className="text-[11px] font-medium text-blue-900 truncate">
+                      PDF Inventario de Colocación
+                    </span>
                     <Download className="w-3 h-3 text-blue-600 ml-auto flex-shrink-0" />
                   </a>
                 )}
-                {viewingProperty?.inventoryPdfUrl && !viewingProperty?.inventory_captacion_pdf_url && (
-                  <a
-                    href={driveDownloadUrl(viewingProperty.inventoryPdfUrl)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
-                  >
-                    <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-emerald-900 truncate">PDF Inventario</span>
-                    <Download className="w-3 h-3 text-emerald-600 ml-auto flex-shrink-0" />
-                  </a>
-                )}
+                {viewingProperty?.inventoryPdfUrl &&
+                  !viewingProperty?.inventory_captacion_pdf_url && (
+                    <a
+                      href={driveDownloadUrl(viewingProperty.inventoryPdfUrl)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+                    >
+                      <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <span className="text-[11px] font-medium text-emerald-900 truncate">
+                        PDF Inventario
+                      </span>
+                      <Download className="w-3 h-3 text-emerald-600 ml-auto flex-shrink-0" />
+                    </a>
+                  )}
               </div>
             )}
 
             <p className="text-[10px] text-slate-500">
-              El Inicial se hace al captar la propiedad. El Final se hace al entregar/devolver el inmueble. La comparativa genera el Acta de Entrega.
+              El Inicial se hace al captar la propiedad. El Final se hace al
+              entregar/devolver el inmueble. La comparativa genera el Acta de
+              Entrega.
             </p>
           </div>
 
           {viewingProperty?.inventoryPhotos && (
             <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">Inventario Fotográfico (legacy)</p>
+              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
+                Inventario Fotográfico (legacy)
+              </p>
               <div className="grid grid-cols-2 gap-2">
-                {Object.entries(viewingProperty.inventoryPhotos).map(([area, urls]: [string, any]) => (
-                  <div key={area} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-100">
-                    <Image className="w-4 h-4 text-emerald-500" />
-                    <span className="text-[10px] font-medium">{area} ({urls.length})</span>
-                  </div>
-                ))}
+                {Object.entries(viewingProperty.inventoryPhotos).map(
+                  ([area, urls]: [string, any]) => (
+                    <div
+                      key={area}
+                      className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-100"
+                    >
+                      <Image className="w-4 h-4 text-emerald-500" />
+                      <span className="text-[10px] font-medium">
+                        {area} ({urls.length})
+                      </span>
+                    </div>
+                  ),
+                )}
               </div>
             </div>
           )}
 
-          <Button className="w-full mt-4" onClick={() => setViewingProperty(null)}>Cerrar</Button>
+          <Button
+            className="w-full mt-4"
+            onClick={() => setViewingProperty(null)}
+          >
+            Cerrar
+          </Button>
         </div>
       </Modal>
 
@@ -2854,15 +3744,21 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       >
         <div className="space-y-4">
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-900">
-            <p className="font-semibold mb-1">Vas a perder todo el progreso actual del wizard.</p>
+            <p className="font-semibold mb-1">
+              Vas a perder todo el progreso actual del wizard.
+            </p>
             <p className="text-xs text-red-700">
-              Se borran: dirección, CHIP, folio, propietarios, unidades, archivos subidos, fotos del inventario y
-              observaciones. Esta acción no se puede deshacer.
+              Se borran: dirección, CHIP, folio, propietarios, unidades,
+              archivos subidos, fotos del inventario y observaciones. Esta
+              acción no se puede deshacer.
             </p>
           </div>
           <p className="text-sm text-slate-600">
             Si solo querés cerrar el wizard y volver después, usá el botón
-            <span className="font-semibold"> "← Ver Inmuebles (guardar borrador)" </span>
+            <span className="font-semibold">
+              {" "}
+              "← Ver Inmuebles (guardar borrador)"{" "}
+            </span>
             en la parte superior. El borrador se preserva automáticamente.
           </p>
           <div className="flex gap-3 pt-2">
@@ -2873,11 +3769,7 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             >
               Cancelar
             </Button>
-            <Button
-              variant="danger"
-              className="flex-1"
-              onClick={discardDraft}
-            >
+            <Button variant="danger" className="flex-1" onClick={discardDraft}>
               Sí, descartar borrador
             </Button>
           </div>
@@ -2888,37 +3780,66 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           Montado DESPUÉS del Detalle del Inmueble para que aparezca ENCIMA
           del detalle cuando el usuario hace click en "Ver". Al cerrar el
           viewer, el detalle sigue abierto detrás — no hay que reabrirlo. */}
-      <Modal isOpen={!!viewingDoc} onClose={() => { if (viewingDoc?.url?.startsWith('blob:')) URL.revokeObjectURL(viewingDoc.url); setViewingDoc(null); }} title={`Visualizando: ${viewingDoc?.label}`}>
-
+      <Modal
+        isOpen={!!viewingDoc}
+        onClose={() => {
+          // BUG-021: helper central.
+          revokeIfBlob(viewingDoc?.url);
+          setViewingDoc(null);
+        }}
+        title={`Visualizando: ${viewingDoc?.label}`}
+      >
         <div className="w-full bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
           {!viewingDoc?.url ? (
-            <div className="h-[40vh] flex items-center justify-center text-slate-400 text-sm">No hay documento para mostrar</div>
-          ) : viewingDoc.url.startsWith('blob:') ? (
-            <iframe src={viewingDoc.url} title={viewingDoc.label} className="w-full h-[70vh]" />
+            <div className="h-[40vh] flex items-center justify-center text-slate-400 text-sm">
+              No hay documento para mostrar
+            </div>
+          ) : viewingDoc.url.startsWith("blob:") ? (
+            <iframe
+              src={viewingDoc.url}
+              title={viewingDoc.label}
+              className="w-full h-[70vh]"
+            />
           ) : (
             // FIX Drive "Necesitas acceso": en vez de cargar directamente
             // https://drive.google.com/file/d/X/view (que muestra login si la
             // sesión de Google del browser ≠ la del OAuth de la app),
             // pasamos por /api/drive/file que usa el token guardado en MySQL
             // para servir el archivo. El browser lo trata como contenido propio.
-            <iframe src={driveProxyUrl(viewingDoc.url)} title={viewingDoc.label} className="w-full h-[70vh]" />
+            <iframe
+              src={driveProxyUrl(viewingDoc.url)}
+              title={viewingDoc.label}
+              className="w-full h-[70vh]"
+            />
           )}
         </div>
-        <Button className="w-full mt-4" onClick={() => { if (viewingDoc?.url?.startsWith('blob:')) URL.revokeObjectURL(viewingDoc.url); setViewingDoc(null); }}>Cerrar</Button>
+        <Button
+          className="w-full mt-4"
+          onClick={() => {
+            // BUG-021: helper central.
+            revokeIfBlob(viewingDoc?.url);
+            setViewingDoc(null);
+          }}
+        >
+          Cerrar
+        </Button>
       </Modal>
 
       {/* Modal grande para Inventario Inicial/Final */}
       <Modal
         isOpen={!!inventoryModalProperty}
-        onClose={() => { setInventoryModalProperty(null); setInventoryPhase(null); }}
-        title={`Inventario ${inventoryPhase === 'final' ? 'Final' : 'Inicial'} — ${inventoryModalProperty?.address ?? ''}`}
+        onClose={() => {
+          setInventoryModalProperty(null);
+          setInventoryPhase(null);
+        }}
+        title={`Inventario ${inventoryPhase === "final" ? "Final" : "Inicial"} — ${inventoryModalProperty?.address ?? ""}`}
         size="xl"
       >
         {inventoryModalProperty && inventoryPhase && (
           <StepInventory
             showToast={showToast}
             propertyId={inventoryModalProperty.id}
-            propertyType={inventoryModalProperty.propertyType ?? 'apartamento'}
+            propertyType={inventoryModalProperty.propertyType ?? "apartamento"}
             property={{
               address: inventoryModalProperty.address,
               owner: inventoryModalProperty.owner,
@@ -2927,8 +3848,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             }}
             phase={inventoryPhase}
             baseInventory={baseInventory}
-            onBack={() => { setInventoryModalProperty(null); setInventoryPhase(null); }}
-            onComplete={() => { setInventoryModalProperty(null); setInventoryPhase(null); }}
+            onBack={() => {
+              setInventoryModalProperty(null);
+              setInventoryPhase(null);
+            }}
+            onComplete={() => {
+              setInventoryModalProperty(null);
+              setInventoryPhase(null);
+            }}
           />
         )}
       </Modal>
@@ -2952,8 +3879,11 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
           Click en miniatura → lightbox a pantalla completa con navegación. */}
       <Modal
         isOpen={!!photoGallery}
-        onClose={() => { setPhotoGallery(null); setLightboxIndex(null); }}
-        title={`📷 Fotos del Inventario — ${photoGallery?.address ?? ''}`}
+        onClose={() => {
+          setPhotoGallery(null);
+          setLightboxIndex(null);
+        }}
+        title={`📷 Fotos del Inventario — ${photoGallery?.address ?? ""}`}
         size="xl"
       >
         {photoGallery && (
@@ -2961,10 +3891,13 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
             {photoGallery.photos.length === 0 ? (
               <div className="p-8 text-center bg-slate-50 rounded-lg border border-dashed border-slate-200">
                 <Camera className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="text-sm text-slate-500">No hay fotos guardadas para este inventario.</p>
+                <p className="text-sm text-slate-500">
+                  No hay fotos guardadas para este inventario.
+                </p>
                 <p className="text-xs text-slate-400 mt-1">
-                  Las fotos se guardan en el navegador (IndexedDB). Si limpiaste la caché del navegador,
-                  podés volver a tomarlas desde el botón "Inicial" / "Final".
+                  Las fotos se guardan en el navegador (IndexedDB). Si limpiaste
+                  la caché del navegador, podés volver a tomarlas desde el botón
+                  "Inicial" / "Final".
                 </p>
                 {/* FIX Karpathy (jul-2026): si MySQL tiene las fotos (caso típico:
                     IndexedDB stale post-self-heal o limpieza de caché), este
@@ -2975,17 +3908,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   onClick={async () => {
                     setPhotoGalleryLoading(true);
                     try {
-                      const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(photoGallery.propertyId)}`);
+                      const res = await fetch(
+                        `/api/inventories?propertyId=${encodeURIComponent(photoGallery.propertyId)}`,
+                      );
                       if (!res.ok) throw new Error(`HTTP ${res.status}`);
                       const data = await res.json();
-                      const remote = (data.inventories ?? []).find((i: any) => i.phase === 'inicial' || i.phase === 'final');
+                      const remote = (data.inventories ?? []).find(
+                        (i: any) =>
+                          i.phase === "inicial" || i.phase === "final",
+                      );
                       if (!remote) {
-                        showToast('No se encontró inventario en el servidor', 'error');
+                        showToast(
+                          "No se encontró inventario en el servidor",
+                          "error",
+                        );
                         return;
                       }
                       const remotePhotos = normalizePhotosArray(remote.photos);
                       if (remotePhotos.length === 0) {
-                        showToast('El servidor tampoco tiene fotos para este inventario', 'error');
+                        showToast(
+                          "El servidor tampoco tiene fotos para este inventario",
+                          "error",
+                        );
                         return;
                       }
                       // Re-hidratar IndexedDB
@@ -3016,13 +3960,25 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                           });
                         }
                       }
-                      showToast(`✓ ${remotePhotos.length} fotos recuperadas del servidor`, 'success');
+                      showToast(
+                        `✓ ${remotePhotos.length} fotos recuperadas del servidor`,
+                        "success",
+                      );
                       // Cerrar y reabrir la galería para que se muestren
                       setPhotoGallery(null);
-                      void openPhotoGallery({ id: photoGallery.propertyId, address: photoGallery.address }, remote.phase as 'inicial' | 'final');
+                      void openPhotoGallery(
+                        {
+                          id: photoGallery.propertyId,
+                          address: photoGallery.address,
+                        },
+                        remote.phase as "inicial" | "final",
+                      );
                     } catch (err: any) {
-                      console.error('[gallery] manual re-hydrate failed:', err);
-                      showToast(`Error recuperando fotos: ${err?.message ?? err}`, 'error');
+                      console.error("[gallery] manual re-hydrate failed:", err);
+                      showToast(
+                        `Error recuperando fotos: ${err?.message ?? err}`,
+                        "error",
+                      );
                     } finally {
                       setPhotoGalleryLoading(false);
                     }
@@ -3031,7 +3987,9 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                   className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors disabled:opacity-50"
                   data-testid="gallery-recover-from-mysql"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${photoGalleryLoading ? 'animate-spin' : ''}`} />
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${photoGalleryLoading ? "animate-spin" : ""}`}
+                  />
                   Recuperar fotos del servidor
                 </button>
               </div>
@@ -3039,7 +3997,8 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
               <>
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-slate-500">
-                    <strong>{photoGallery.photos.length}</strong> fotos en total — click para ver en grande.
+                    <strong>{photoGallery.photos.length}</strong> fotos en total
+                    — click para ver en grande.
                   </p>
                   <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
                     Almacenamiento local del navegador
@@ -3049,19 +4008,28 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                     (normalizado en `openPhotoGallery` via `normalizePhotosArray`),
                     pero usamos `?? []` por defensa contra cualquier race futuro. */}
                 {Object.entries(
-                  (photoGallery.photos ?? []).reduce<Record<string, any[]>>((acc, p) => {
-                    (acc[p.areaLabel] ??= []).push(p);
-                    return acc;
-                  }, {} as Record<string, any[]>),
+                  (photoGallery.photos ?? []).reduce<Record<string, any[]>>(
+                    (acc, p) => {
+                      (acc[p.areaLabel] ??= []).push(p);
+                      return acc;
+                    },
+                    {} as Record<string, any[]>,
+                  ),
                 ).map(([areaLabel, photos]: [string, any[]]) => (
                   <div key={areaLabel} className="space-y-2">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-1">
-                      <p className="text-xs font-bold text-slate-700 uppercase">{areaLabel}</p>
-                      <span className="text-[10px] text-slate-400">{photos.length} foto{photos.length !== 1 ? 's' : ''}</span>
+                      <p className="text-xs font-bold text-slate-700 uppercase">
+                        {areaLabel}
+                      </p>
+                      <span className="text-[10px] text-slate-400">
+                        {photos.length} foto{photos.length !== 1 ? "s" : ""}
+                      </span>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                       {photos.map((photo, i) => {
-                        const globalIndex = photoGallery.photos.findIndex((p) => p.id === photo.id);
+                        const globalIndex = photoGallery.photos.findIndex(
+                          (p) => p.id === photo.id,
+                        );
                         return (
                           <button
                             key={photo.id}
@@ -3086,7 +4054,14 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
                 ))}
               </>
             )}
-            <Button variant="outline" className="w-full" onClick={() => { setPhotoGallery(null); setLightboxIndex(null); }}>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setPhotoGallery(null);
+                setLightboxIndex(null);
+              }}
+            >
               Cerrar
             </Button>
           </div>
@@ -3094,56 +4069,78 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
       </Modal>
 
       {/* ── Lightbox para ver foto a tamaño completo ───────────────── */}
-      {lightboxIndex !== null && photoGallery && photoGallery.photos[lightboxIndex] && (
-        <div
-          className="fixed inset-0 z-[300] bg-black/90 flex items-center justify-center p-4"
-          onClick={() => setLightboxIndex(null)}
-        >
-          <button
-            onClick={(e) => { e.stopPropagation(); setLightboxIndex(null); }}
-            className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-            title="Cerrar (Esc)"
+      {lightboxIndex !== null &&
+        photoGallery &&
+        photoGallery.photos[lightboxIndex] && (
+          <div
+            className="fixed inset-0 z-[300] bg-black/90 flex items-center justify-center p-4"
+            onClick={() => setLightboxIndex(null)}
           >
-            <X className="w-6 h-6" />
-          </button>
-          {lightboxIndex > 0 && (
             <button
-              onClick={(e) => { e.stopPropagation(); setLightboxIndex(lightboxIndex - 1); }}
-              className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-              title="Anterior (←)"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxIndex(null);
+              }}
+              className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+              title="Cerrar (Esc)"
             >
-              <ChevronLeft className="w-7 h-7" />
+              <X className="w-6 h-6" />
             </button>
-          )}
-          {lightboxIndex < photoGallery.photos.length - 1 && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setLightboxIndex(lightboxIndex + 1); }}
-              className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-              title="Siguiente (→)"
+            {lightboxIndex > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxIndex(lightboxIndex - 1);
+                }}
+                className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+                title="Anterior (←)"
+              >
+                <ChevronLeft className="w-7 h-7" />
+              </button>
+            )}
+            {lightboxIndex < photoGallery.photos.length - 1 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxIndex(lightboxIndex + 1);
+                }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+                title="Siguiente (→)"
+              >
+                <ChevronRight className="w-7 h-7" />
+              </button>
+            )}
+            <div
+              className="max-w-[90vw] max-h-[85vh] flex flex-col items-center"
+              onClick={(e) => e.stopPropagation()}
             >
-              <ChevronRight className="w-7 h-7" />
-            </button>
-          )}
-          <div className="max-w-[90vw] max-h-[85vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={photoGallery.photos[lightboxIndex].dataUrl}
-              alt={photoGallery.photos[lightboxIndex].areaLabel}
-              className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
-            />
-            <div className="mt-3 px-4 py-2 bg-white/10 rounded-lg text-white text-sm">
-              <strong>{photoGallery.photos[lightboxIndex].areaLabel}</strong>
-              {' · '}
-              foto {lightboxIndex + 1} de {photoGallery.photos.length}
+              <img
+                src={photoGallery.photos[lightboxIndex].dataUrl}
+                alt={photoGallery.photos[lightboxIndex].areaLabel}
+                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+              />
+              <div className="mt-3 px-4 py-2 bg-white/10 rounded-lg text-white text-sm">
+                <strong>{photoGallery.photos[lightboxIndex].areaLabel}</strong>
+                {" · "}
+                foto {lightboxIndex + 1} de {photoGallery.photos.length}
+              </div>
             </div>
+            {/* Navegación con teclado */}
           </div>
-          {/* Navegación con teclado */}
-        </div>
-      )}
+        )}
       {/* Listener de teclado para flechas/Esc en el lightbox */}
       {lightboxIndex !== null && (
         <KeyboardHandler
-          onPrev={() => setLightboxIndex((i) => (i !== null && i > 0) ? i - 1 : i)}
-          onNext={() => setLightboxIndex((i) => (i !== null && photoGallery && i < photoGallery.photos.length - 1) ? i + 1 : i)}
+          onPrev={() =>
+            setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))
+          }
+          onNext={() =>
+            setLightboxIndex((i) =>
+              i !== null && photoGallery && i < photoGallery.photos.length - 1
+                ? i + 1
+                : i,
+            )
+          }
           onClose={() => setLightboxIndex(null)}
         />
       )}
@@ -3152,15 +4149,23 @@ export function PropertiesView({ showToast, properties, onAddProperty, onUpdateP
 }
 
 /** Listener global de teclado para el lightbox (Esc cierra, ←/→ navega). */
-function KeyboardHandler({ onPrev, onNext, onClose }: { onPrev: () => void; onNext: () => void; onClose: () => void }) {
+function KeyboardHandler({
+  onPrev,
+  onNext,
+  onClose,
+}: {
+  onPrev: () => void;
+  onNext: () => void;
+  onClose: () => void;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowLeft') onPrev();
-      else if (e.key === 'ArrowRight') onNext();
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft") onPrev();
+      else if (e.key === "ArrowRight") onNext();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [onPrev, onNext, onClose]);
   return null;
 }
