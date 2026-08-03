@@ -19,7 +19,7 @@ export interface PaymentModalProps {
   row: AmortizationRow | null;
   policy: BillingPolicy;
   onClose: () => void;
-  onConfirm: (paidOnDayOfMonth: number, totalPaid: number) => Promise<void>;
+  onConfirm: (paidOnDayOfMonth: number, totalPaid: number) => Promise<boolean>;
 }
 
 export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalProps) {
@@ -50,10 +50,13 @@ export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalPr
   const handleConfirm = async () => {
     setSubmitting(true);
     try {
-      await onConfirm(day, totalAPagar);
-      onClose();
+      const ok = await onConfirm(day, totalAPagar);
+      if (ok) {
+        onClose();
+      }
+      // si !ok, modal queda abierto con día y monto pre-llenados
     } finally {
-      setSubmitting(false);
+      setSubmitting(false);  // rehabilita el botón siempre
     }
   };
 

@@ -210,13 +210,13 @@ export function BillingPanel({
     }
   }, [policy, selectedContract, showToast]);
 
-  const handlePay = useCallback(async (paidOnDayOfMonth: number, _totalPaid: number) => {
-    if (!payingRow || !selectedContract) return;
+  const handlePay = useCallback(async (paidOnDayOfMonth: number, _totalPaid: number): Promise<boolean> => {
+    if (!payingRow || !selectedContract) return false;
     try {
       const updated = await registerPayment(selectedContract.id, payingRow.id, paidOnDayOfMonth);
       if (!updated) {
         showToast('No se pudo registrar el pago', 'error');
-        return;
+        return false;
       }
       setRows((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
       await logAction(
@@ -227,9 +227,10 @@ export function BillingPanel({
       showToast(`Pago registrado: ${formatCurrency(updated.paidAmount ?? updated.total)}`, 'success');
       // Refrescar lookup por si el invoice se marcó paid (y desbloquea el mes N+1)
       void refreshInvoiceLookup();
+      return true;
     } catch (err: any) {
       showToast(`Error: ${err?.message ?? err}`, 'error');
-      throw err;
+      return false;  // FIX BUG-003: no re-throw, leave modal open
     }
   }, [payingRow, selectedContract, property.id, userName, showToast, refreshInvoiceLookup]);
 
@@ -554,7 +555,7 @@ export function BillingPanel({
         row={payingRow}
         policy={policy ?? defaultPolicyFor(property)}
         onClose={() => setPayingRow(null)}
-        onConfirm={async (day, total) => { await handlePay(day, total); }}
+        onConfirm={async (day, total) => await handlePay(day, total)}
       />
 
       <NovedadFormModal
