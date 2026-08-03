@@ -34,6 +34,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import pool, { ensureDefaultOrg } from "../db.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 // Reutilizamos los cálculos del cliente. tsx resuelve TS, no hay problema.
 import {
   generateAmortization,
@@ -173,11 +174,12 @@ router.get("/policies/:propertyId", async (req, res) => {
   }
 });
 
-router.put("/policies/:propertyId", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const propertyId = req.params.propertyId;
-  const p: BillingPolicy = req.body;
-  try {
+router.put(
+  "/policies/:propertyId",
+  asyncHandler(async (req, res) => {
+    const orgId = await ensureDefaultOrg();
+    const propertyId = req.params.propertyId;
+    const p: BillingPolicy = req.body;
     // FIX Karpathy (jul-2026): bug histórico. La columna `policy_id` NO
     // existe en el schema de `billing_policies` (ver
     // db/mysql/schema-hostinger.sql líneas 370-385). Incluirla en el INSERT
@@ -223,24 +225,24 @@ router.put("/policies/:propertyId", async (req, res) => {
       ],
     );
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  }),
+);
 
 // ─── Amortización ───────────────────────────────────────────────────────
 
-router.post("/amortization/generate", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const { contract, policy } = req.body as {
-    contract: Contract;
-    policy: BillingPolicy;
-  };
-  if (!contract?.id || !policy?.propertyId) {
-    return res.status(400).json({ error: "contract y policy son requeridos" });
-  }
-
-  try {
+router.post(
+  "/amortization/generate",
+  asyncHandler(async (req, res) => {
+    const orgId = await ensureDefaultOrg();
+    const { contract, policy } = req.body as {
+      contract: Contract;
+      policy: BillingPolicy;
+    };
+    if (!contract?.id || !policy?.propertyId) {
+      return res
+        .status(400)
+        .json({ error: "contract y policy son requeridos" });
+    }
     const [incRows] = await pool.query(
       `SELECT * FROM rent_increases WHERE contract_id = ? ORDER BY effective_from ASC`,
       [contract.id],
@@ -322,11 +324,8 @@ router.post("/amortization/generate", async (req, res) => {
       );
     }
     res.json(rows);
-  } catch (err: any) {
-    console.error("[amortization/generate]", err);
-    res.status(500).json({ error: err?.message });
-  }
-});
+  }),
+);
 
 router.get("/amortization/:contractId", async (req, res) => {
   try {
@@ -369,14 +368,15 @@ router.get("/amortization", async (_req, res) => {
 
 // ─── Pagos ─────────────────────────────────────────────────────────────
 
-router.post("/payments", async (req, res) => {
-  const { contractId, rowId, paidOnDayOfMonth } = req.body as {
-    contractId: string;
-    rowId: string;
-    paidOnDayOfMonth: number;
-  };
-  const orgId = await ensureDefaultOrg();
-  try {
+router.post(
+  "/payments",
+  asyncHandler(async (req, res) => {
+    const { contractId, rowId, paidOnDayOfMonth } = req.body as {
+      contractId: string;
+      rowId: string;
+      paidOnDayOfMonth: number;
+    };
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query(
       `SELECT * FROM amortization_rows WHERE id = ? AND contract_id = ?`,
       [rowId, contractId],
@@ -425,11 +425,8 @@ router.post("/payments", async (req, res) => {
     );
 
     res.json(updated);
-  } catch (err: any) {
-    console.error("[payments]", err);
-    res.status(500).json({ error: err?.message });
-  }
-});
+  }),
+);
 
 /**
  * Marca una cuenta de cobro como PAGADA. Si ya existe el invoice (caso normal:
