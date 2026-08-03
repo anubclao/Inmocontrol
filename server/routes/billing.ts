@@ -259,7 +259,22 @@ router.post("/amortization/generate", async (req, res) => {
 
     const rows = generateAmortization(contract, policy, { increases });
 
+    // Contar pagos existentes antes (para logging) - FIX BUG-004
+    const [paidRowsBefore] = await pool.query(
+      `SELECT COUNT(*) as paid_count FROM amortization_rows WHERE contract_id = ? AND status IN ('paid', 'partial')`,
+      [contract.id],
+    );
+    const paidCount = (paidRowsBefore as any[])[0]?.paid_count ?? 0;
+    if (paidCount > 0) {
+      console.warn(
+        `[amortization/generate] Regenerando con ${paidCount} pagos existentes preservados.`,
+      );
+    }
+
     // Persistir (INSERT ... ON DUPLICATE KEY UPDATE para idempotencia)
+    // FIX BUG-004: status, paid_at, paid_amount NO se incluyen en el UPDATE.
+    // Filas con status='paid'/'partial' preservan su estado, solo se actualizan
+    // los valores monetarios.
     for (const row of rows) {
       await pool.query(
         `INSERT INTO amortization_rows
@@ -281,8 +296,7 @@ router.post("/amortization/generate", async (req, res) => {
            total        = VALUES(total),
            total_early  = VALUES(total_early),
            total_mid    = VALUES(total_mid),
-           total_late   = VALUES(total_late),
-           status       = VALUES(status)`,
+           total_late   = VALUES(total_late)`,
         [
           row.id,
           orgId,
