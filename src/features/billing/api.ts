@@ -18,16 +18,14 @@
  *   /api/billing/insurance-policies
  *   /api/entities/sync
  */
-import {
-  useBillingStore
-} from './billingStore';
+import { useBillingStore } from "./billingStore";
 import {
   generateAmortization,
   generateInvoiceFromRow,
   calculateAccountStatement,
   applyPaymentToRow,
   summarizeInvoiceCharges,
-} from './calculations';
+} from "./calculations";
 import type {
   AccountStatement,
   AmortizationRow,
@@ -44,46 +42,46 @@ import type {
   RentInvoice,
   BankAccount,
   PolicyInfo,
-} from './types';
+} from "./types";
 // ─── Modo de operación ─────────────────────────────────────────────────
 
-type Mode = 'backend' | 'local';
+type Mode = "backend" | "local";
 
-let currentMode: Mode = 'local'; // default conservador; /api/health lo cambia a 'backend' si responde
+let currentMode: Mode = "local"; // default conservador; /api/health lo cambia a 'backend' si responde
 let modeDetected = false;
 
 async function detectMode(): Promise<Mode> {
   if (modeDetected) return currentMode;
   modeDetected = true;
   try {
-    const r = await fetch('/api/health', { method: 'GET' });
+    const r = await fetch("/api/health", { method: "GET" });
     if (r.ok) {
       const j = await r.json().catch(() => ({}));
       if (j?.db?.ok) {
-        currentMode = 'backend';
-        console.info('[billing/api] Backend MySQL detectado. Usando fetch.');
-        return 'backend';
+        currentMode = "backend";
+        console.info("[billing/api] Backend MySQL detectado. Usando fetch.");
+        return "backend";
       }
     }
   } catch {
     // silent
   }
-  console.info('[billing/api] Backend no disponible. Usando localStorage.');
+  console.info("[billing/api] Backend no disponible. Usando localStorage.");
   return currentMode;
 }
 
 async function api<T>(method: string, path: string, body?: any): Promise<T> {
   const mode = await detectMode();
-  if (mode === 'local') {
-    throw new Error('backend unavailable');
+  if (mode === "local") {
+    throw new Error("backend unavailable");
   }
   const r = await fetch(`/api${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
-    const text = await r.text().catch(() => '');
+    const text = await r.text().catch(() => "");
     throw new Error(`HTTP ${r.status}: ${text}`);
   }
   if (r.status === 204) return undefined as T;
@@ -91,13 +89,16 @@ async function api<T>(method: string, path: string, body?: any): Promise<T> {
 }
 
 // Helper: try backend; on error, run fallback.
-async function tryBackendOrFallback<T>(backendCall: () => Promise<T>, fallback: () => T | Promise<T>): Promise<T> {
+async function tryBackendOrFallback<T>(
+  backendCall: () => Promise<T>,
+  fallback: () => T | Promise<T>,
+): Promise<T> {
   const mode = await detectMode();
-  if (mode === 'local') return fallback();
+  if (mode === "local") return fallback();
   try {
     return await backendCall();
   } catch (err) {
-    console.warn('[billing/api] backend falló, usando fallback local:', err);
+    console.warn("[billing/api] backend falló, usando fallback local:", err);
     return fallback();
   }
 }
@@ -112,21 +113,26 @@ export async function syncEntities(payload: {
   contracts?: any[];
 }): Promise<void> {
   const mode = await detectMode();
-  if (mode === 'local') return;
+  if (mode === "local") return;
   try {
-    await api('POST', '/entities/sync', payload);
+    await api("POST", "/entities/sync", payload);
   } catch (err) {
-    console.warn('[billing/api] syncEntities falló:', err);
+    console.warn("[billing/api] syncEntities falló:", err);
   }
 }
 
 // ─── BillingPolicy ─────────────────────────────────────────────────────
 
-export async function getBillingPolicy(propertyId: string): Promise<BillingPolicy | null> {
+export async function getBillingPolicy(
+  propertyId: string,
+): Promise<BillingPolicy | null> {
   return tryBackendOrFallback(
     async () => {
       try {
-        return await api<BillingPolicy>('GET', `/billing/policies/${encodeURIComponent(propertyId)}`);
+        return await api<BillingPolicy>(
+          "GET",
+          `/billing/policies/${encodeURIComponent(propertyId)}`,
+        );
       } catch (err: any) {
         // FIX Karpathy (jul-2026): distinguir 404 (no existe policy — estado
         // válido) de cualquier otro error (500, network). Antes `.catch(() => null)`
@@ -135,33 +141,44 @@ export async function getBillingPolicy(propertyId: string): Promise<BillingPolic
         // quedaba pegado, form mostraba 0/0 (default). Ahora 404 → null, otro
         // error → re-throw para que `tryBackendOrFallback` use el cache local
         // y/o el BillingPanel muestre un toast honesto al usuario.
-        const msg = String(err?.message ?? '');
-        if (msg.includes('HTTP 404')) return null;
+        const msg = String(err?.message ?? "");
+        if (msg.includes("HTTP 404")) return null;
         throw err;
       }
     },
-    () => useBillingStore.getState().billingPolicies[propertyId] ?? null
+    () => useBillingStore.getState().billingPolicies[propertyId] ?? null,
   );
 }
 
 export async function saveBillingPolicy(policy: BillingPolicy): Promise<void> {
   await tryBackendOrFallback(
     async () => {
-      await api('PUT', `/billing/policies/${encodeURIComponent(policy.propertyId)}`, policy);
+      await api(
+        "PUT",
+        `/billing/policies/${encodeURIComponent(policy.propertyId)}`,
+        policy,
+      );
       // Cache local para UI inmediata
       useBillingStore.getState().setBillingPolicy(policy.propertyId, policy);
     },
-    () => useBillingStore.getState().setBillingPolicy(policy.propertyId, policy)
+    () =>
+      useBillingStore.getState().setBillingPolicy(policy.propertyId, policy),
   );
 }
 
 // ─── Amortización ─────────────────────────────────────────────────────
 
-export async function getOrGenerateAmortization(contract: Contract, policy: BillingPolicy): Promise<AmortizationRow[]> {
+export async function getOrGenerateAmortization(
+  contract: Contract,
+  policy: BillingPolicy,
+): Promise<AmortizationRow[]> {
   return tryBackendOrFallback(
     async () => {
       try {
-        const existing = await api<AmortizationRow[]>('GET', `/billing/amortization/${encodeURIComponent(contract.id)}`);
+        const existing = await api<AmortizationRow[]>(
+          "GET",
+          `/billing/amortization/${encodeURIComponent(contract.id)}`,
+        );
         if (existing && existing.length > 0) {
           useBillingStore.getState().setAmortization(contract.id, existing);
           return existing;
@@ -169,29 +186,38 @@ export async function getOrGenerateAmortization(contract: Contract, policy: Bill
       } catch {
         // 404 o sin rows → generar
       }
-      const rows = await api<AmortizationRow[]>('POST', '/billing/amortization/generate', { contract, policy });
+      const rows = await api<AmortizationRow[]>(
+        "POST",
+        "/billing/amortization/generate",
+        { contract, policy },
+      );
       useBillingStore.getState().setAmortization(contract.id, rows);
       return rows;
     },
     () => {
       const existing = useBillingStore.getState().amortization[contract.id];
       if (existing && existing.length > 0) return existing;
-      const increases = useBillingStore.getState().increases[contract.propertyId] ?? [];
+      const increases =
+        useBillingStore.getState().increases[contract.propertyId] ?? [];
       const rows = generateAmortization(contract, policy, { increases });
       useBillingStore.getState().setAmortization(contract.id, rows);
       return rows;
-    }
+    },
   );
 }
 
 export async function registerPayment(
   contractId: string,
   rowId: string,
-  paidOnDayOfMonth: number
+  paidOnDayOfMonth: number,
 ): Promise<AmortizationRow | null> {
   return tryBackendOrFallback(
     async () => {
-      const updated = await api<AmortizationRow>('POST', '/billing/payments', { contractId, rowId, paidOnDayOfMonth });
+      const updated = await api<AmortizationRow>("POST", "/billing/payments", {
+        contractId,
+        rowId,
+        paidOnDayOfMonth,
+      });
       // Update local cache
       const rows = useBillingStore.getState().amortization[contractId] ?? [];
       const idx = rows.findIndex((r) => r.id === rowId);
@@ -212,7 +238,7 @@ export async function registerPayment(
       const updated = applyPaymentToRow(row, paidOnDayOfMonth, policy);
       state.updateAmortizationRow(contractId, updated);
       return updated;
-    }
+    },
   );
 }
 
@@ -224,13 +250,17 @@ export async function registerPayment(
  */
 export async function addPropertyDiscount(
   propertyId: string,
-  data: Omit<PropertyDiscount, 'id' | 'recordedAt'>
+  data: Omit<PropertyDiscount, "id" | "recordedAt">,
 ): Promise<PropertyDiscount> {
   return tryBackendOrFallback(
     async () => {
       const id = crypto.randomUUID();
-      const created: PropertyDiscount = { id, recordedAt: new Date().toISOString(), ...data };
-      await api('POST', '/billing/discounts', created);
+      const created: PropertyDiscount = {
+        id,
+        recordedAt: new Date().toISOString(),
+        ...data,
+      };
+      await api("POST", "/billing/discounts", created);
       useBillingStore.getState().addDiscount(propertyId, data);
       return created;
     },
@@ -238,23 +268,25 @@ export async function addPropertyDiscount(
       useBillingStore.getState().addDiscount(propertyId, data);
       const list = useBillingStore.getState().discounts[propertyId] ?? [];
       return list[list.length - 1];
-    }
+    },
   );
 }
 
 /**
  * @deprecated Usar `listPropertyCharges` y filtrar por `chargedTo`.
  */
-export async function listPropertyDiscounts(propertyId: string): Promise<PropertyDiscount[]> {
+export async function listPropertyDiscounts(
+  propertyId: string,
+): Promise<PropertyDiscount[]> {
   return tryBackendOrFallback(
     async () => {
       const charges = await api<PropertyCharge[]>(
-        'GET',
+        "GET",
         `/billing/charges?propertyId=${encodeURIComponent(propertyId)}`,
       );
       // Mapear cargos con chargedTo='owner'/'both' a la forma legacy
       return charges
-        .filter((c) => c.chargedTo === 'owner' || c.chargedTo === 'both')
+        .filter((c) => c.chargedTo === "owner" || c.chargedTo === "both")
         .map((c) => ({
           id: c.id,
           propertyId: c.propertyId,
@@ -270,7 +302,7 @@ export async function listPropertyDiscounts(propertyId: string): Promise<Propert
     () => {
       const charges = useBillingStore.getState().charges[propertyId] ?? [];
       return charges
-        .filter((c) => c.chargedTo === 'owner' || c.chargedTo === 'both')
+        .filter((c) => c.chargedTo === "owner" || c.chargedTo === "both")
         .map((c) => ({
           id: c.id,
           propertyId: c.propertyId,
@@ -295,13 +327,17 @@ export async function listPropertyDiscounts(propertyId: string): Promise<Propert
  */
 export async function addPropertyCharge(
   propertyId: string,
-  data: Omit<PropertyCharge, 'id' | 'recordedAt'>,
+  data: Omit<PropertyCharge, "id" | "recordedAt">,
 ): Promise<PropertyCharge> {
   const created = await tryBackendOrFallback(
     async () => {
       const id = crypto.randomUUID();
-      const full: PropertyCharge = { id, recordedAt: new Date().toISOString(), ...data };
-      const saved = await api<PropertyCharge>('POST', '/billing/charges', full);
+      const full: PropertyCharge = {
+        id,
+        recordedAt: new Date().toISOString(),
+        ...data,
+      };
+      const saved = await api<PropertyCharge>("POST", "/billing/charges", full);
       useBillingStore.getState().addCharge(propertyId, data);
       return saved;
     },
@@ -315,12 +351,15 @@ export async function addPropertyCharge(
 }
 
 /** Lista todas las novedades de cargo de una propiedad. */
-export async function listPropertyCharges(propertyId: string): Promise<PropertyCharge[]> {
+export async function listPropertyCharges(
+  propertyId: string,
+): Promise<PropertyCharge[]> {
   return tryBackendOrFallback(
-    async () => api<PropertyCharge[]>(
-      'GET',
-      `/billing/charges?propertyId=${encodeURIComponent(propertyId)}`,
-    ),
+    async () =>
+      api<PropertyCharge[]>(
+        "GET",
+        `/billing/charges?propertyId=${encodeURIComponent(propertyId)}`,
+      ),
     () => useBillingStore.getState().charges[propertyId] ?? [],
   );
 }
@@ -331,20 +370,30 @@ export async function listPropertyChargesForPeriod(
   period: string,
 ): Promise<PropertyCharge[]> {
   return tryBackendOrFallback(
-    async () => api<PropertyCharge[]>(
-      'GET',
-      `/billing/charges?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
-    ),
-    () => (useBillingStore.getState().charges[propertyId] ?? [])
-      .filter((c) => c.period === period),
+    async () =>
+      api<PropertyCharge[]>(
+        "GET",
+        `/billing/charges?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
+      ),
+    () =>
+      (useBillingStore.getState().charges[propertyId] ?? []).filter(
+        (c) => c.period === period,
+      ),
   );
 }
 
 /** Elimina una novedad de cargo por id. */
-export async function removePropertyCharge(propertyId: string, chargeId: string): Promise<void> {
+export async function removePropertyCharge(
+  propertyId: string,
+  chargeId: string,
+): Promise<void> {
   await tryBackendOrFallback(
-    async () => { await api('DELETE', `/billing/charges/${encodeURIComponent(chargeId)}`); },
-    () => { useBillingStore.getState().removeCharge(propertyId, chargeId); },
+    async () => {
+      await api("DELETE", `/billing/charges/${encodeURIComponent(chargeId)}`);
+    },
+    () => {
+      useBillingStore.getState().removeCharge(propertyId, chargeId);
+    },
   );
 }
 
@@ -358,10 +407,11 @@ export async function getInvoiceChargesSummary(
   period: string,
 ): Promise<InvoiceChargesSummary> {
   return tryBackendOrFallback(
-    async () => api<InvoiceChargesSummary>(
-      'GET',
-      `/billing/charges/invoice-summary?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
-    ),
+    async () =>
+      api<InvoiceChargesSummary>(
+        "GET",
+        `/billing/charges/invoice-summary?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
+      ),
     () => {
       const charges = useBillingStore.getState().charges[propertyId] ?? [];
       return summarizeInvoiceCharges(propertyId, period, charges);
@@ -373,13 +423,17 @@ export async function getInvoiceChargesSummary(
 
 export async function addRentIncrease(
   propertyId: string,
-  data: Omit<RentIncrease, 'id' | 'recordedAt'>
+  data: Omit<RentIncrease, "id" | "recordedAt">,
 ): Promise<RentIncrease> {
   return tryBackendOrFallback(
     async () => {
       const id = crypto.randomUUID();
-      const created: RentIncrease = { id, recordedAt: new Date().toISOString(), ...data };
-      await api('POST', '/billing/increases', created);
+      const created: RentIncrease = {
+        id,
+        recordedAt: new Date().toISOString(),
+        ...data,
+      };
+      await api("POST", "/billing/increases", created);
       useBillingStore.getState().addIncrease(propertyId, data);
       return created;
     },
@@ -387,14 +441,20 @@ export async function addRentIncrease(
       useBillingStore.getState().addIncrease(propertyId, data);
       const list = useBillingStore.getState().increases[propertyId] ?? [];
       return list[list.length - 1];
-    }
+    },
   );
 }
 
-export async function listRentIncreases(propertyId: string): Promise<RentIncrease[]> {
+export async function listRentIncreases(
+  propertyId: string,
+): Promise<RentIncrease[]> {
   return tryBackendOrFallback(
-    async () => api<RentIncrease[]>('GET', `/billing/increases?propertyId=${encodeURIComponent(propertyId)}`),
-    () => useBillingStore.getState().increases[propertyId] ?? []
+    async () =>
+      api<RentIncrease[]>(
+        "GET",
+        `/billing/increases?propertyId=${encodeURIComponent(propertyId)}`,
+      ),
+    () => useBillingStore.getState().increases[propertyId] ?? [],
   );
 }
 
@@ -402,27 +462,34 @@ export async function listRentIncreases(propertyId: string): Promise<RentIncreas
 
 export async function getAccountStatement(
   propertyId: string,
-  period: string
+  period: string,
 ): Promise<AccountStatement> {
   return tryBackendOrFallback(
-    async () => api<AccountStatement>('GET', `/billing/account-statement?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`),
+    async () =>
+      api<AccountStatement>(
+        "GET",
+        `/billing/account-statement?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
+      ),
     () => {
-      const rows: AmortizationRow[] = Object.values(useBillingStore.getState().amortization)
+      const rows: AmortizationRow[] = Object.values(
+        useBillingStore.getState().amortization,
+      )
         .flat()
-        .filter((r) => r.propertyId === propertyId && r.periodStart.startsWith(period));
+        .filter(
+          (r) =>
+            r.propertyId === propertyId && r.periodStart.startsWith(period),
+        );
       const grossIncome = rows
-        .filter((r) => r.status === 'paid')
+        .filter((r) => r.status === "paid")
         .reduce((s, r) => s + r.total, 0);
       // Combinar descuentos legacy + cargos nuevos unificados (chargedTo IN ('owner','both')).
       const legacy = useBillingStore.getState().discounts[propertyId] ?? [];
       const charges = useBillingStore.getState().charges[propertyId] ?? [];
-      return calculateAccountStatement(
-        propertyId,
-        period,
-        grossIncome,
-        [...legacy, ...charges],
-      );
-    }
+      return calculateAccountStatement(propertyId, period, grossIncome, [
+        ...legacy,
+        ...charges,
+      ]);
+    },
   );
 }
 
@@ -431,27 +498,38 @@ export async function getAccountStatement(
 export async function generateInvoiceForMonth(
   propertyId: string,
   contractId: string,
-  period: string
+  period: string,
 ): Promise<RentInvoice | null> {
   return tryBackendOrFallback(
-    async () => api<RentInvoice>('POST', '/billing/invoices/generate', { propertyId, contractId, period }),
+    async () =>
+      api<RentInvoice>("POST", "/billing/invoices/generate", {
+        propertyId,
+        contractId,
+        period,
+      }),
     () => {
       const rows = useBillingStore.getState().amortization[contractId] ?? [];
       const row = rows.find((r) => r.periodStart.startsWith(period));
       if (!row) return null;
       const invoice = generateInvoiceFromRow(row, {
-        paymentLink: useBillingStore.getState().billingPolicies[propertyId]?.primaryBankAccountId,
+        paymentLink:
+          useBillingStore.getState().billingPolicies[propertyId]
+            ?.primaryBankAccountId,
       });
       useBillingStore.getState().updateInvoice(propertyId, invoice);
       return invoice;
-    }
+    },
   );
 }
 
 export async function listInvoices(propertyId: string): Promise<RentInvoice[]> {
   return tryBackendOrFallback(
-    async () => api<RentInvoice[]>('GET', `/billing/invoices?propertyId=${encodeURIComponent(propertyId)}`),
-    () => useBillingStore.getState().invoices[propertyId] ?? []
+    async () =>
+      api<RentInvoice[]>(
+        "GET",
+        `/billing/invoices?propertyId=${encodeURIComponent(propertyId)}`,
+      ),
+    () => useBillingStore.getState().invoices[propertyId] ?? [],
   );
 }
 
@@ -462,14 +540,21 @@ export async function listInvoices(propertyId: string): Promise<RentInvoice[]> {
  */
 export async function getInvoiceForPeriod(
   contractId: string,
-  period: string
+  period: string,
 ): Promise<RentInvoice | null> {
   return tryBackendOrFallback(
-    async () => api<RentInvoice | null>('GET', `/billing/invoices/lookup?contractId=${encodeURIComponent(contractId)}&period=${encodeURIComponent(period)}`),
+    async () =>
+      api<RentInvoice | null>(
+        "GET",
+        `/billing/invoices/lookup?contractId=${encodeURIComponent(contractId)}&period=${encodeURIComponent(period)}`,
+      ),
     () => {
       const all = Object.values(useBillingStore.getState().invoices).flat();
-      return all.find((i) => i.contractId === contractId && i.period === period) ?? null;
-    }
+      return (
+        all.find((i) => i.contractId === contractId && i.period === period) ??
+        null
+      );
+    },
   );
 }
 
@@ -487,11 +572,15 @@ export async function getInvoiceForPeriod(
 export async function markInvoiceAsSent(
   propertyId: string,
   contractId: string,
-  period: string
+  period: string,
 ): Promise<RentInvoice | null> {
   return tryBackendOrFallback(
     async () => {
-      const updated = await api<RentInvoice>('POST', '/billing/invoices/send', { propertyId, contractId, period });
+      const updated = await api<RentInvoice>("POST", "/billing/invoices/send", {
+        propertyId,
+        contractId,
+        period,
+      });
       // Cache local para UI inmediata
       if (updated) {
         useBillingStore.getState().updateInvoice(propertyId, updated);
@@ -502,10 +591,14 @@ export async function markInvoiceAsSent(
       // Fallback local: genera un invoice_number sintético + marca sent
       const local = useBillingStore.getState();
       const existingList = local.invoices[propertyId] ?? [];
-      const existing = existingList.find((i) => i.contractId === contractId && i.period === period);
+      const existing = existingList.find(
+        (i) => i.contractId === contractId && i.period === period,
+      );
       const seq = existingList.filter((i) => i.period === period).length + 1;
-      const periodCompact = period.replace('-', '');
-      const invoiceNumber = existing?.invoiceNumber ?? `CC-${periodCompact}-${String(seq).padStart(3, '0')}`;
+      const periodCompact = period.replace("-", "");
+      const invoiceNumber =
+        existing?.invoiceNumber ??
+        `CC-${periodCompact}-${String(seq).padStart(3, "0")}`;
       const updated: RentInvoice = {
         id: existing?.id ?? `inv-local-${Date.now()}`,
         invoiceNumber,
@@ -517,7 +610,7 @@ export async function markInvoiceAsSent(
         totalEarly: existing?.totalEarly ?? 0,
         totalMid: existing?.totalMid ?? 0,
         totalLate: existing?.totalLate ?? 0,
-        status: existing?.status === 'paid' ? 'paid' : 'pending',
+        status: existing?.status === "paid" ? "paid" : "pending",
         sentAt: existing?.sentAt ?? new Date().toISOString(),
         paidAt: existing?.paidAt,
         paidAmount: existing?.paidAmount,
@@ -526,46 +619,76 @@ export async function markInvoiceAsSent(
       };
       local.updateInvoice(propertyId, updated);
       return updated;
-    }
+    },
   );
 }
 
 // ─── Owner payouts (transferencias reales al propietario) ─────────────
 
-export async function listOwnerPayouts(propertyId: string, period?: string): Promise<OwnerPayout[]> {
+export async function listOwnerPayouts(
+  propertyId: string,
+  period?: string,
+): Promise<OwnerPayout[]> {
   return tryBackendOrFallback(
     async () => {
       const q = period
         ? `?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`
         : `?propertyId=${encodeURIComponent(propertyId)}`;
-      return api<OwnerPayout[]>('GET', `/billing/owner-payouts${q}`);
+      return api<OwnerPayout[]>("GET", `/billing/owner-payouts${q}`);
     },
-    () => useBillingStore.getState().payouts[propertyId]?.filter((p) => !period || p.period === period) ?? []
+    () =>
+      useBillingStore
+        .getState()
+        .payouts[propertyId]?.filter((p) => !period || p.period === period) ??
+      [],
   );
 }
 
 export async function saveOwnerPayout(
-  payout: Omit<OwnerPayout, 'id' | 'recordedAt'> & { id?: string }
+  payout: Omit<OwnerPayout, "id" | "recordedAt"> & { id?: string },
 ): Promise<OwnerPayout> {
   const id = payout.id ?? crypto.randomUUID();
   return tryBackendOrFallback(
     async () => {
-      const saved = await api<OwnerPayout>('POST', '/billing/owner-payouts', { ...payout, id });
-      useBillingStore.getState().addPayout(payout.propertyId, { ...payout, id, recordedAt: new Date().toISOString() });
+      const saved = await api<OwnerPayout>("POST", "/billing/owner-payouts", {
+        ...payout,
+        id,
+      });
+      useBillingStore
+        .getState()
+        .addPayout(payout.propertyId, {
+          ...payout,
+          id,
+          recordedAt: new Date().toISOString(),
+        });
       return saved;
     },
     () => {
-      const full: OwnerPayout = { ...payout, id, recordedAt: new Date().toISOString() };
+      const full: OwnerPayout = {
+        ...payout,
+        id,
+        recordedAt: new Date().toISOString(),
+      };
       useBillingStore.getState().addPayout(payout.propertyId, full);
       return full;
-    }
+    },
   );
 }
 
-export async function deleteOwnerPayout(propertyId: string, payoutId: string): Promise<void> {
+export async function deleteOwnerPayout(
+  propertyId: string,
+  payoutId: string,
+): Promise<void> {
   await tryBackendOrFallback(
-    async () => { await api('DELETE', `/billing/owner-payouts/${encodeURIComponent(payoutId)}`); },
-    () => { useBillingStore.getState().removePayout(propertyId, payoutId); }
+    async () => {
+      await api(
+        "DELETE",
+        `/billing/owner-payouts/${encodeURIComponent(payoutId)}`,
+      );
+    },
+    () => {
+      useBillingStore.getState().removePayout(propertyId, payoutId);
+    },
   );
 }
 
@@ -579,25 +702,34 @@ export async function deleteOwnerPayout(propertyId: string, payoutId: string): P
  *
  * El PDF de estado de cuenta consume esta salida directamente.
  */
-export async function getOwnerStatement(propertyId: string, period: string): Promise<OwnerStatement | null> {
+export async function getOwnerStatement(
+  propertyId: string,
+  period: string,
+): Promise<OwnerStatement | null> {
   return tryBackendOrFallback(
-    async () => api<OwnerStatement>(
-      'GET',
-      `/billing/owner-statement?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`
-    ),
+    async () =>
+      api<OwnerStatement>(
+        "GET",
+        `/billing/owner-statement?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`,
+      ),
     () => {
       // Fallback local: arma el statement desde el store (amortización + cargos + payouts)
       const state = useBillingStore.getState();
-      const amortization = Object.values(state.amortization).flat()
-        .filter((r) => r.propertyId === propertyId && r.periodStart.startsWith(period));
+      const amortization = Object.values(state.amortization)
+        .flat()
+        .filter(
+          (r) =>
+            r.propertyId === propertyId && r.periodStart.startsWith(period),
+        );
       // Cargos unificados del período. Compat: descuentos legacy también cuentan.
       const periodCharges: PropertyCharge[] =
         state.charges[propertyId]?.filter((c) => c.period === period) ?? [];
       const ownerCharges = periodCharges.filter(
-        (c) => c.chargedTo === 'owner' || c.chargedTo === 'both',
+        (c) => c.chargedTo === "owner" || c.chargedTo === "both",
       );
       const legacyDiscounts: PropertyDiscount[] =
-        state.discounts[propertyId]?.filter((d) => d.monthPeriod === period) ?? [];
+        state.discounts[propertyId]?.filter((d) => d.monthPeriod === period) ??
+        [];
       // Mapeo los descuentos legacy a cargos para homogeneizar el cálculo.
       const legacyAsCharges: PropertyCharge[] = legacyDiscounts.map((d) => ({
         id: d.id,
@@ -606,7 +738,7 @@ export async function getOwnerStatement(propertyId: string, period: string): Pro
         type: d.type,
         description: d.description,
         amount: d.amount,
-        chargedTo: 'owner' as const,
+        chargedTo: "owner" as const,
         appliesToInvoice: false,
         attachmentUrl: d.attachmentUrl,
         recordedAt: d.recordedAt,
@@ -616,27 +748,45 @@ export async function getOwnerStatement(propertyId: string, period: string): Pro
       const totalDiscounts = allOwnerCharges.reduce((s, c) => s + c.amount, 0);
 
       const tenantCharges = periodCharges.filter(
-        (c) => c.chargedTo === 'tenant' || c.chargedTo === 'both',
+        (c) => c.chargedTo === "tenant" || c.chargedTo === "both",
       );
-      const totalChargesToTenant = tenantCharges.reduce((s, c) => s + c.amount, 0);
+      const totalChargesToTenant = tenantCharges.reduce(
+        (s, c) => s + c.amount,
+        0,
+      );
 
-      const payouts = state.payouts[propertyId]?.filter((p) => p.period === period) ?? [];
+      const payouts =
+        state.payouts[propertyId]?.filter((p) => p.period === period) ?? [];
 
-      const grossRent = amortization.filter((r) => r.status === 'paid').reduce((s, r) => s + r.baseRent, 0);
-      const grossAdmin = amortization.filter((r) => r.status === 'paid').reduce((s, r) => s + r.baseAdmin, 0);
-      const grossLateFee = amortization.filter((r) => r.status === 'paid').reduce((s, r) => s + r.lateFeeAmount, 0);
+      const grossRent = amortization
+        .filter((r) => r.status === "paid")
+        .reduce((s, r) => s + r.baseRent, 0);
+      const grossAdmin = amortization
+        .filter((r) => r.status === "paid")
+        .reduce((s, r) => s + r.baseAdmin, 0);
+      const grossLateFee = amortization
+        .filter((r) => r.status === "paid")
+        .reduce((s, r) => s + r.lateFeeAmount, 0);
       const totalPayouts = payouts.reduce((s, p) => s + p.amount, 0);
 
       // Estimación de settlement (sin retefuente si canon <= 27 UVT)
       // La comisión por default es 8% — el cálculo preciso lo hace el backend
-      // cuando está disponible (loadPolicy + contract.commission_percentage).
+      // cuando está disponible (loadPolicy + contract.commission_pct).
       const commissionPct = 8;
       const baseGross = grossRent + grossLateFee;
       const comision = Math.round(baseGross * (commissionPct / 100));
       const ivaOnComision = Math.round(comision * 0.19);
       const baseGmf = Math.max(0, baseGross - comision - ivaOnComision);
       const gmf = Math.round(baseGmf * 0.004);
-      const netCalculated = Math.max(0, baseGross + grossAdmin - comision - ivaOnComision - gmf - totalDiscounts);
+      const netCalculated = Math.max(
+        0,
+        baseGross +
+          grossAdmin -
+          comision -
+          ivaOnComision -
+          gmf -
+          totalDiscounts,
+      );
 
       // discounts en formato legacy PropertyDiscount para UI ya en producción
       const discountsLegacy: PropertyDiscount[] = allOwnerCharges.map((c) => ({
@@ -675,7 +825,7 @@ export async function getOwnerStatement(propertyId: string, period: string): Pro
         totalChargesToTenant,
         finalBalance: netCalculated - totalPayouts,
       };
-    }
+    },
   );
 }
 
@@ -686,7 +836,7 @@ export async function logAction(
   type: PropertyActionType,
   description: string,
   actorName: string,
-  payload?: Record<string, any>
+  payload?: Record<string, any>,
 ): Promise<PropertyAction> {
   return tryBackendOrFallback(
     async () => {
@@ -700,43 +850,71 @@ export async function logAction(
         actorName,
         occurredAt: new Date().toISOString(),
       };
-      await api('POST', '/billing/actions', created);
-      useBillingStore.getState().recordAction(propertyId, type, description, actorName, payload);
+      await api("POST", "/billing/actions", created);
+      useBillingStore
+        .getState()
+        .recordAction(propertyId, type, description, actorName, payload);
       return created;
     },
-    () => useBillingStore.getState().recordAction(propertyId, type, description, actorName, payload)
+    () =>
+      useBillingStore
+        .getState()
+        .recordAction(propertyId, type, description, actorName, payload),
   );
 }
 
-export async function listActions(propertyId: string): Promise<PropertyAction[]> {
+export async function listActions(
+  propertyId: string,
+): Promise<PropertyAction[]> {
   return tryBackendOrFallback(
-    async () => api<PropertyAction[]>('GET', `/billing/actions?propertyId=${encodeURIComponent(propertyId)}`),
-    () => useBillingStore.getState().actions[propertyId] ?? []
+    async () =>
+      api<PropertyAction[]>(
+        "GET",
+        `/billing/actions?propertyId=${encodeURIComponent(propertyId)}`,
+      ),
+    () => useBillingStore.getState().actions[propertyId] ?? [],
   );
 }
 
 // ─── Bank Accounts ───────────────────────────────────────────────────
 
-export async function listBankAccounts(propertyId?: string): Promise<BankAccount[]> {
+export async function listBankAccounts(
+  propertyId?: string,
+): Promise<BankAccount[]> {
   return tryBackendOrFallback(
-    async () => api<BankAccount[]>('GET', `/billing/bank-accounts${propertyId ? `?propertyId=${encodeURIComponent(propertyId)}` : ''}`),
-    () => []
+    async () =>
+      api<BankAccount[]>(
+        "GET",
+        `/billing/bank-accounts${propertyId ? `?propertyId=${encodeURIComponent(propertyId)}` : ""}`,
+      ),
+    () => [],
   );
 }
 
-export async function saveBankAccount(account: BankAccount & { propertyId?: string | null }): Promise<void> {
+export async function saveBankAccount(
+  account: BankAccount & { propertyId?: string | null },
+): Promise<void> {
   await tryBackendOrFallback(
-    async () => { await api('POST', '/billing/bank-accounts', account); },
-    () => { /* no-op local: las cuentas están dentro de BillingPolicy.bankAccounts */ }
+    async () => {
+      await api("POST", "/billing/bank-accounts", account);
+    },
+    () => {
+      /* no-op local: las cuentas están dentro de BillingPolicy.bankAccounts */
+    },
   );
 }
 
 // ─── Insurance Policies ──────────────────────────────────────────────
 
-export async function getInsurancePolicy(propertyId: string): Promise<PolicyInfo | null> {
+export async function getInsurancePolicy(
+  propertyId: string,
+): Promise<PolicyInfo | null> {
   return tryBackendOrFallback(
     async () => {
-      const rows = await api<any[]>('GET', `/billing/insurance-policies/${encodeURIComponent(propertyId)}`);
+      const rows = await api<any[]>(
+        "GET",
+        `/billing/insurance-policies/${encodeURIComponent(propertyId)}`,
+      );
       const latest = rows?.[0];
       if (!latest) return null;
       return {
@@ -751,14 +929,16 @@ export async function getInsurancePolicy(propertyId: string): Promise<PolicyInfo
         notes: latest.notes ?? undefined,
       };
     },
-    () => null
+    () => null,
   );
 }
 
-export async function saveInsurancePolicy(p: PolicyInfo & { propertyId: string }): Promise<void> {
+export async function saveInsurancePolicy(
+  p: PolicyInfo & { propertyId: string },
+): Promise<void> {
   await tryBackendOrFallback(
     async () => {
-      await api('POST', '/billing/insurance-policies', {
+      await api("POST", "/billing/insurance-policies", {
         propertyId: p.propertyId,
         insurer: p.insurer,
         policyNumber: p.policyNumber,
@@ -770,7 +950,9 @@ export async function saveInsurancePolicy(p: PolicyInfo & { propertyId: string }
         notes: p.notes,
       });
     },
-    () => { /* no-op local */ }
+    () => {
+      /* no-op local */
+    },
   );
 }
 
@@ -779,7 +961,7 @@ export async function saveInsurancePolicy(p: PolicyInfo & { propertyId: string }
 /** Fuerza re-detección del modo (útil tras login o settings change). */
 export function resetApiMode(): void {
   modeDetected = false;
-  currentMode = 'local';
+  currentMode = "local";
 }
 
 export function getApiMode(): Mode {
