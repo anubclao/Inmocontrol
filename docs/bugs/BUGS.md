@@ -344,7 +344,7 @@
 ## 🟢 Ola 4 — Ya fixed (histórico)
 
 | ID          | Bug                                                     | Fix commit |
-| ----------- | ------------------------------------------------------- | ---------- |
+| ----------- | ------------------------------------------------------- | ---------- | --- | ------- | ------------------------------------------------- | --------------------- |
 | (linter-1)  | `t.documentId` no existe en Tenant                      | `77fee39`  |
 | BUG-001     | CORS no permite PATCH en prod                           | `8f5c88e`  |
 | BUG-002     | `commission_percentage` (typo) → `commission_pct`       | `7c551b0`  |
@@ -358,7 +358,8 @@
 | (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
 | BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
-| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  || BUG-029     | Central error wrapper (estructural, mata 5+ bugs)    | `6bbec81` + `11c49f6` |
+| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |     | BUG-029 | Central error wrapper (estructural, mata 5+ bugs) | `6bbec81` + `11c49f6` |
+
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
