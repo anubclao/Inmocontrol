@@ -515,7 +515,9 @@ const CHARGE_COLS = `(id, organization_id, property_id, period, type,
                        attachment_url, recorded_by)`;
 
 router.post("/charges", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() se llama DENTRO del try para que cualquier
+  // error (MySQL caído, schema drift, FK corrupta) devuelva JSON 500
+  // en vez del HTML 500 del default error handler de Express.
   const c = req.body as {
     id: string;
     propertyId: string;
@@ -529,6 +531,7 @@ router.post("/charges", async (req, res) => {
     recordedBy: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `INSERT INTO property_charges
          ${CHARGE_COLS}
@@ -561,10 +564,11 @@ router.post("/charges", async (req, res) => {
 });
 
 router.get("/charges", async (req, res) => {
+  // BUG-006: mismo fix — ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const where: string[] = ["organization_id = ?"];
     const args: any[] = [orgId];
     if (propertyId) {
@@ -588,8 +592,9 @@ router.get("/charges", async (req, res) => {
 });
 
 router.delete("/charges/:id", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: mismo fix — ensureDefaultOrg() adentro del try.
   try {
+    const orgId = await ensureDefaultOrg();
     const [result] = await pool.query(
       `DELETE FROM property_charges WHERE id = ? AND organization_id = ?`,
       [req.params.id, orgId],
@@ -616,8 +621,9 @@ router.get("/charges/invoice-summary", async (req, res) => {
       .status(400)
       .json({ error: "propertyId y period son requeridos" });
   }
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query(
       `SELECT * FROM property_charges
        WHERE organization_id = ?
@@ -643,7 +649,7 @@ router.get("/charges/invoice-summary", async (req, res) => {
 // (tabla histórica) para mantener trazabilidad legacy.
 
 router.post("/discounts", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const d = req.body as {
     id: string;
     propertyId: string;
@@ -655,6 +661,7 @@ router.post("/discounts", async (req, res) => {
     recordedBy: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `INSERT INTO property_discounts
          (id, organization_id, property_id, type, description, amount, month_period, attachment_url, recorded_by)
@@ -710,9 +717,10 @@ router.post("/discounts", async (req, res) => {
 });
 
 router.get("/discounts", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = propertyId
       ? await pool.query(
           `SELECT * FROM property_discounts WHERE property_id = ? AND organization_id = ? ORDER BY recorded_at DESC`,
@@ -731,7 +739,7 @@ router.get("/discounts", async (req, res) => {
 // ─── Aumentos (al inquilino) ────────────────────────────────────────────
 
 router.post("/increases", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const i = req.body as {
     id: string;
     propertyId: string;
@@ -743,6 +751,7 @@ router.post("/increases", async (req, res) => {
     recordedBy: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `INSERT INTO rent_increases
          (id, organization_id, property_id, contract_id, type, description, amount, effective_from, recorded_by)
@@ -771,9 +780,10 @@ router.post("/increases", async (req, res) => {
 });
 
 router.get("/increases", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = propertyId
       ? await pool.query(
           `SELECT * FROM rent_increases WHERE property_id = ? AND organization_id = ? ORDER BY effective_from ASC`,
@@ -792,10 +802,11 @@ router.get("/increases", async (req, res) => {
 // ─── Estado de cuenta ─────────────────────────────────────────────────
 
 router.get("/account-statement", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string;
   const period = req.query.period as string; // 'YYYY-MM'
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const [paidRows] = await pool.query(
       `SELECT COALESCE(SUM(total), 0) AS gross
        FROM amortization_rows
@@ -916,13 +927,14 @@ function rowToInvoice(r: any): RentInvoice {
  // Enviar → /invoices/send que marca sent_at y genera invoice_number).
  */
 router.post("/invoices/generate", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const { propertyId, contractId, period } = req.body as {
     propertyId: string;
     contractId: string;
     period: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query(
       `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
       [contractId, `${period}%`],
@@ -980,13 +992,14 @@ router.post("/invoices/generate", async (req, res) => {
  * Body: { propertyId, contractId, period }
  */
 router.post("/invoices/send", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const { propertyId, contractId, period } = req.body as {
     propertyId: string;
     contractId: string;
     period: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     // 0. Sumar cargos al inquilino para este período (chargedTo IN ('tenant','both'),
     //    appliesToInvoice=true). Si hay cargos, los añadimos al subtotal.
     const [chargeRows] = await pool.query(
@@ -1113,10 +1126,11 @@ router.post("/invoices/send", async (req, res) => {
 });
 
 router.get("/invoices", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
   const contractId = req.query.contractId as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const where: string[] = ["organization_id = ?"];
     const args: any[] = [orgId];
     if (propertyId) {
@@ -1145,14 +1159,15 @@ router.get("/invoices", async (req, res) => {
  * ¿tiene invoice_number?).
  */
 router.get("/invoices/lookup", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try (después de la validación 400).
   const contractId = req.query.contractId as string | undefined;
   const period = req.query.period as string | undefined;
-  const orgId = await ensureDefaultOrg();
   if (!contractId || !period)
     return res
       .status(400)
       .json({ error: "contractId y period son requeridos" });
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query(
       `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ? AND organization_id = ?`,
       [contractId, period, orgId],
@@ -1168,7 +1183,7 @@ router.get("/invoices/lookup", async (req, res) => {
 // ─── Histórico (append-only) ───────────────────────────────────────────
 
 router.post("/actions", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const a = req.body as {
     id: string;
     propertyId: string;
@@ -1178,6 +1193,7 @@ router.post("/actions", async (req, res) => {
     actorName: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `INSERT INTO property_actions
          (id, organization_id, property_id, type, description, payload, actor_name)
@@ -1199,9 +1215,10 @@ router.post("/actions", async (req, res) => {
 });
 
 router.get("/actions", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const [rows] = propertyId
       ? await pool.query(
           `SELECT * FROM property_actions WHERE property_id = ? AND organization_id = ? ORDER BY occurred_at DESC`,
@@ -1256,11 +1273,12 @@ function rowToOwnerPayout(r: any): OwnerPayout {
 }
 
 router.post("/owner-payouts", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const p = req.body as Omit<OwnerPayout, "id" | "recordedAt"> & {
     id?: string;
   };
   try {
+    const orgId = await ensureDefaultOrg();
     const id = p.id ?? crypto.randomUUID();
     const recordedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
     await pool.query(
@@ -1305,10 +1323,11 @@ router.post("/owner-payouts", async (req, res) => {
 });
 
 router.get("/owner-payouts", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try.
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string | undefined;
-  const orgId = await ensureDefaultOrg();
   try {
+    const orgId = await ensureDefaultOrg();
     const where: string[] = ["organization_id = ?"];
     const args: any[] = [orgId];
     if (propertyId) {
@@ -1330,8 +1349,9 @@ router.get("/owner-payouts", async (req, res) => {
 });
 
 router.delete("/owner-payouts/:id", async (req, res) => {
-  const orgId = await ensureDefaultOrg();
+  // BUG-006: ensureDefaultOrg() adentro del try.
   try {
+    const orgId = await ensureDefaultOrg();
     await pool.query(
       `DELETE FROM owner_payouts WHERE id = ? AND organization_id = ?`,
       [req.params.id, orgId],
@@ -1350,15 +1370,16 @@ router.delete("/owner-payouts/:id", async (req, res) => {
  * reales. El PDF de estado de cuenta consume esta salida.
  */
 router.get("/owner-statement", async (req, res) => {
+  // BUG-006: ensureDefaultOrg() adentro del try (después de la validación 400).
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string;
-  const orgId = await ensureDefaultOrg();
   if (!propertyId || !period) {
     return res
       .status(400)
       .json({ error: "propertyId y period son requeridos" });
   }
   try {
+    const orgId = await ensureDefaultOrg();
     // 1) Ingresos del mes (amortization_rows pagados del period)
     const [paidRows] = await pool.query(
       `SELECT
