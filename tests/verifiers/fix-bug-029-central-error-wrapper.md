@@ -34,6 +34,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-1: Existe `server/lib/asyncHandler.ts`
 
 **Pasos:**
+
 1. Verificar que el archivo existe: `ls server/lib/asyncHandler.ts`.
 2. **Verificar**: exporta una función `asyncHandler` que toma un async handler y devuelve un `RequestHandler`.
 3. **Verificar**: el wrapper usa `Promise.resolve(fn(...)).catch(next)` para capturar errores sync y async.
@@ -46,6 +47,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-2: Existe middleware central de errores en `server.ts`
 
 **Pasos:**
+
 1. Verificar: `server/lib/errorHandler.ts` existe.
 2. **Verificar**: `server.ts` importa `errorHandler` y lo registra con `app.use(errorHandler)`.
 3. **Verificar**: el middleware tiene la firma de 4 argumentos `(err, req, res, next)`.
@@ -58,6 +60,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-3: Migración de los 6 endpoints con el antipatrón
 
 **Pasos:**
+
 1. Para cada uno de los 6 endpoints:
    - `POST /api/billing/policies/:propertyId` (billing.ts:165-166)
    - `POST /api/billing/amortization/generate` (billing.ts:214-215)
@@ -76,6 +79,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-4: Handlers existentes con try local SE PRESERVAN
 
 **Pasos:**
+
 1. `tenants.ts`, `properties.ts`, `entities.ts`, `saasBilling.ts` deben seguir teniendo su `try { ... }` local.
 2. **Verificar**: NO se rompieron durante la migración.
 3. **Verificar**: un POST a `/api/tenants` con body inválido sigue devolviendo 400 JSON (no HTML).
@@ -96,6 +100,7 @@ Write-Host $h.Content
 ```
 
 **Esperado**:
+
 - Status: `400` (NO 500)
 - Content-Type: `application/json` (NO `text/html`)
 - Body: `{ "error": "Unexpected token...", "code": "INVALID_JSON" }` (JSON parseado, NO HTML)
@@ -107,6 +112,7 @@ Write-Host $h.Content
 ### AC-6: No se introdujeron nuevas dependencias
 
 **Pasos:**
+
 1. `git diff package.json` → **Verificar**: NO se agregaron deps.
 2. `git diff package-lock.json` → **Verificar**: NO se agregaron deps transitivas.
 
@@ -117,6 +123,7 @@ Write-Host $h.Content
 ### AC-7: Compatibilidad con el flujo Karpathy (2 commits)
 
 **Pasos:**
+
 1. `git log --oneline -3` → **Verificar**: hay 2 commits separados del fix (1 para el wrapper, 1 para la migración de endpoints).
 2. Cada commit pasa `npm run lint` exit 0.
 3. La app arranca correctamente entre los 2 commits (revisar el output de `npm run dev`).
@@ -130,6 +137,7 @@ Write-Host $h.Content
 ### EC-1: Error de sintaxis JSON en el body
 
 **Pasos:**
+
 1. `curl -X POST -H "Content-Type: application/json" -d 'xxx' https://inmocontrol.tecnowebsupportia.com/api/properties`
 2. **Verificar**: status 400, Content-Type `application/json`, body con `code: 'INVALID_JSON'`.
 3. Repetir para `/api/billing/policies/X`, `/api/inventories`, `/api/contracts/xxx`, `/api/tenants`.
@@ -142,6 +150,7 @@ Write-Host $h.Content
 ### EC-2: Error de FK constraint en MySQL
 
 **Pasos:**
+
 1. Intentar crear un inventario con `propertyId` inválido.
 2. **Esperado**: 500 JSON con `code: 'INTERNAL'` (genérico, no leak del SQL).
 3. **Verificar** en server logs: el error SQL original se logueó con stack.
@@ -153,6 +162,7 @@ Write-Host $h.Content
 ### EC-3: Abort del cliente
 
 **Pasos:**
+
 1. `curl --max-time 1` (1 segundo) a un endpoint lento.
 2. **Esperado**: el server loguea como warning, no como error.
 3. **Verificar**: el cliente recibe error de timeout, pero el server no entra en panic.
@@ -164,6 +174,7 @@ Write-Host $h.Content
 ### EC-4: Error en llamada a Google Drive
 
 **Pasos:**
+
 1. Con Drive desconectado (logout), intentar una operación de Drive.
 2. **Esperado**: 500 JSON con `code: 'INTERNAL'`.
 3. **Verificar** en server logs: el error de Drive se logueó.
@@ -175,11 +186,15 @@ Write-Host $h.Content
 ### EC-5: Handler con asyncHandler que tira un error sync
 
 **Pasos:**
+
 1. Temporalmente, agregar a un endpoint:
    ```ts
-   router.get('/test-sync-error', asyncHandler((req, res) => {
-     throw new Error('test sync error');
-   }));
+   router.get(
+     "/test-sync-error",
+     asyncHandler((req, res) => {
+       throw new Error("test sync error");
+     }),
+   );
    ```
 2. `curl https://inmocontrol.tecnowebsupportia.com/api/test-sync-error`
 3. **Verificar**: 500 JSON, NO 500 HTML.
@@ -191,12 +206,12 @@ Write-Host $h.Content
 
 ## Resumen
 
-| Tipo | Cantidad |
-|------|----------|
-| Pre-checks | 1 (PRE-1) |
+| Tipo                | Cantidad        |
+| ------------------- | --------------- |
+| Pre-checks          | 1 (PRE-1)       |
 | Acceptance Criteria | 7 (AC-1 a AC-7) |
-| Edge Cases | 5 (EC-1 a EC-5) |
-| **Total checks** | **13** |
+| Edge Cases          | 5 (EC-1 a EC-5) |
+| **Total checks**    | **13**          |
 
 ---
 

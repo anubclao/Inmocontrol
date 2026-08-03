@@ -26,12 +26,12 @@
 
 ### Resultado
 
-| Escenario | Comportamiento actual | Comportamiento esperado |
-|---|---|---|
-| Error dentro de `try` local | 500 JSON | 500 JSON |
-| Error ANTES del `try` (ej. `ensureDefaultOrg` falla) | **HTML 500** (default Express) | 500 JSON |
-| Handler async que tira fuera de try | **HTML 500** | 500 JSON |
-| Error de cualquier tipo no atrapado | **HTML 500** | 500 JSON con shape consistente |
+| Escenario                                            | Comportamiento actual          | Comportamiento esperado        |
+| ---------------------------------------------------- | ------------------------------ | ------------------------------ |
+| Error dentro de `try` local                          | 500 JSON                       | 500 JSON                       |
+| Error ANTES del `try` (ej. `ensureDefaultOrg` falla) | **HTML 500** (default Express) | 500 JSON                       |
+| Handler async que tira fuera de try                  | **HTML 500**                   | 500 JSON                       |
+| Error de cualquier tipo no atrapado                  | **HTML 500**                   | 500 JSON con shape consistente |
 
 ### Por qué importa
 
@@ -42,6 +42,7 @@
 ## 3. Acceptance Criteria
 
 ### AC-1: Existe `server/lib/asyncHandler.ts` que envuelve handlers async
+
 - La función toma un handler `(req, res, next) => Promise<any>` y lo envuelve para que cualquier error que tire se propague a `next(err)`.
 - **NO** modifica el handler, solo lo envuelve.
 - Preserva el `req`, `res`, `next` originales.
@@ -49,15 +50,19 @@
 
 ```typescript
 // Forma de uso:
-import { asyncHandler } from '../lib/asyncHandler';
+import { asyncHandler } from "../lib/asyncHandler";
 
-router.post('/foo', asyncHandler(async (req, res) => {
-  // ... lógica del handler sin try/catch ...
-  // Si tira algo, asyncHandler lo manda a next(err)
-}));
+router.post(
+  "/foo",
+  asyncHandler(async (req, res) => {
+    // ... lógica del handler sin try/catch ...
+    // Si tira algo, asyncHandler lo manda a next(err)
+  }),
+);
 ```
 
 ### AC-2: Middleware central de errores en `server.ts`
+
 - Express necesita un middleware con **4 argumentos** (`(err, req, res, next)`) al final de la pila.
 - Captura cualquier error de `next(err)` o error async no atrapado.
 - Devuelve siempre **JSON** con shape `{ error: string, code?: string, details?: any }`.
@@ -66,6 +71,7 @@ router.post('/foo', asyncHandler(async (req, res) => {
 - Loguea el error con `console.error` (incluye stack si es 500).
 
 ### AC-3: Migración gradual de los 6 endpoints con el antipatrón
+
 Los 6 endpoints identificados con `const orgId = await ensureDefaultOrg();` (o equivalente) ANTES del try local:
 
 1. `server/routes/billing.ts:165-166` — `PUT /api/billing/policies/:propertyId`
@@ -76,27 +82,32 @@ Los 6 endpoints identificados con `const orgId = await ensureDefaultOrg();` (o e
 6. `server/routes/googleAuth.ts` — varios endpoints (revisar)
 
 **Para cada uno:**
+
 - Mover el código que está ANTES del `try` DENTRO del try (sin asyncHandler), O
 - Convertir el handler completo a `asyncHandler(async (req, res) => { ... })` y remover el try local (el wrapper central lo maneja).
 - **Decisión a tomar**: en este fix, preferimos la opción 2 (usar asyncHandler) para que **el patrón sea uniforme** y todos los handlers se vean iguales.
 
 ### AC-4: Handlers existentes con try/catch local SE PRESERVAN
+
 - `tenants.ts`, `properties.ts`, `entities.ts`, `saasBilling.ts` ya tienen try/catch locales.
 - **NO se tocan en este fix** (out of scope: refactor completo es riesgoso).
 - Solo los 6 endpoints del AC-3 se migran.
 
 ### AC-5: El response shape es siempre `{ error: string, code?: string }`
+
 - Para 400: `{ "error": "Faltan campos...", "code": "MISSING_FIELDS" }`
 - Para 500: `{ "error": "Internal server error", "code": "INTERNAL" }` (sin leak)
 - Para 500 con `err.expose=true`: `{ "error": "Error message", "code": "EXPOSED" }`
 - Para 404 (recurso no existe): `{ "error": "Property not found", "code": "NOT_FOUND" }`
 
 ### AC-6: No se introducen nuevas dependencias
+
 - El wrapper es 10 líneas de TypeScript puro.
 - El middleware es 20 líneas de TypeScript puro.
 - **No** usar `express-async-errors`, `express-async-handler`, ni similares. Mantener cero deps nuevas (regla de AGENTS.md).
 
 ### AC-7: Compatibilidad con la regla de Karpathy "NO rompas el monolito en un solo commit"
+
 - El fix se hace en 2 commits:
   1. Commit 1: agregar `server/lib/asyncHandler.ts` + middleware en `server.ts` (sin tocar handlers).
   2. Commit 2: migrar los 6 endpoints al wrapper.
@@ -105,27 +116,32 @@ Los 6 endpoints identificados con `const orgId = await ensureDefaultOrg();` (o e
 ## 4. Edge Cases
 
 ### EC-1: Error de sintaxis JSON en el body
+
 - Body: `xxx` (no es JSON).
 - **Esperado**: middleware central devuelve 400 `{ "error": "Unexpected token 'x'...", "code": "INVALID_JSON" }`.
 - **Actual**: `500 { "error": "Unexpected token 'x'..." }` (status 500 incorrecto, debería ser 400).
 - **Decisión**: el middleware central detecta `err.type === 'entity.parse.failed'` y devuelve 400 con code `INVALID_JSON`.
 
 ### EC-2: Error de FK constraint en MySQL
+
 - `err.code = 'ER_NO_REFERENCED_ROW_2'` o similar.
 - **Esperado**: el middleware NO cambia el status (sigue siendo 500). Loguea el SQL error para debug. Devuelve JSON genérico al cliente.
 - **Out of scope**: traducir errores SQL a mensajes user-friendly. Eso es un fix futuro.
 
 ### EC-3: Abort del cliente (ECONNABORTED, "request aborted")
+
 - El cliente cierra la conexión antes de que termine el handler.
 - **Esperado**: el middleware NO responde (la conexión ya está cerrada). El error se loguea como warning, no como error. NO se llama a `res.json()` porque tira.
 - Ya hay un filtro para esto en `server.ts:140-148`. **NO se duplica**.
 
 ### EC-4: Error en una llamada a Google Drive (`drive.files.list`)
+
 - Drive está caído o token expirado.
 - **Esperado**: 500 JSON `{ "error": "Internal server error", "code": "DRIVE_ERROR" }` con el error logueado internamente.
 - **Out of scope**: reintentar la llamada. Eso es un fix futuro (con backoff).
 
 ### EC-5: Un endpoint que YA usa asyncHandler pero tira un error sync
+
 - El handler es `asyncHandler((req, res) => { throw new Error('sync') })`.
 - **Esperado**: el error se captura igual (Express 4 NO lo hace por default, pero `asyncHandler` envuelve en `Promise.resolve().then(handler).catch(next)`).
 - **Verificación**: agregar un test manual que tire sync desde un handler con asyncHandler y ver que devuelve 500 JSON.
@@ -135,7 +151,7 @@ Los 6 endpoints identificados con `const orgId = await ensureDefaultOrg();` (o e
 ### Archivo nuevo: `server/lib/asyncHandler.ts`
 
 ```typescript
-import { Request, Response, NextFunction, RequestHandler } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from "express";
 
 /**
  * Envuelve un handler async para que cualquier error se propague a `next(err)`.
@@ -143,7 +159,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
  * No usar express-async-errors ni similares (regla: 0 deps nuevas).
  */
 export const asyncHandler = (
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>,
 ): RequestHandler => {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
@@ -154,19 +170,19 @@ export const asyncHandler = (
 ### Archivo nuevo: `server/lib/errorHandler.ts`
 
 ```typescript
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from "express";
 
 export function errorHandler(
   err: any,
   req: Request,
   res: Response,
-  next: NextFunction  // eslint-disable-line @typescript-eslint/no-unused-vars
+  next: NextFunction, // eslint-disable-line @typescript-eslint/no-unused-vars
 ): void {
   // JSON parse error → 400
-  if (err?.type === 'entity.parse.failed') {
+  if (err?.type === "entity.parse.failed") {
     res.status(400).json({
       error: err.message,
-      code: 'INVALID_JSON',
+      code: "INVALID_JSON",
     });
     return;
   }
@@ -174,14 +190,15 @@ export function errorHandler(
   // Errores esperados (4xx) que el handler llamó con res.status(...).json(...)
   // ya están responded. Si llegamos acá es porque el handler no respondió.
   if (res.headersSent) {
-    return;  // No podemos responder de nuevo
+    return; // No podemos responder de nuevo
   }
 
   const status = err?.statusCode ?? err?.status ?? 500;
   const expose = err?.expose === true;
-  const message = status < 500 || expose
-    ? (err?.message ?? 'Internal server error')
-    : 'Internal server error';
+  const message =
+    status < 500 || expose
+      ? (err?.message ?? "Internal server error")
+      : "Internal server error";
 
   if (status >= 500) {
     console.error(`[errorHandler] ${req.method} ${req.path}:`, err);
@@ -189,7 +206,7 @@ export function errorHandler(
 
   res.status(status).json({
     error: message,
-    code: err?.code ?? (status >= 500 ? 'INTERNAL' : 'CLIENT_ERROR'),
+    code: err?.code ?? (status >= 500 ? "INTERNAL" : "CLIENT_ERROR"),
   });
 }
 ```
@@ -198,44 +215,49 @@ export function errorHandler(
 
 ```typescript
 // Al final, después de los middlewares existentes:
-import { errorHandler } from './lib/errorHandler';
+import { errorHandler } from "./lib/errorHandler";
 app.use(errorHandler);
 ```
 
 ### Ejemplo de migración de un endpoint
 
 **Antes** (billing.ts):
+
 ```typescript
-router.post('/amortization/generate', async (req, res) => {
-  const orgId = await ensureDefaultOrg();  // ← si falla, HTML 500
+router.post("/amortization/generate", async (req, res) => {
+  const orgId = await ensureDefaultOrg(); // ← si falla, HTML 500
   const { contract, policy } = req.body as any;
   if (!contract?.id || !policy?.propertyId) {
-    return res.status(400).json({ error: '...' });
+    return res.status(400).json({ error: "..." });
   }
   try {
     // ... lógica ...
     res.json(rows);
   } catch (err: any) {
-    console.error('[amortization/generate]', err);
+    console.error("[amortization/generate]", err);
     res.status(500).json({ error: err?.message });
   }
 });
 ```
 
 **Después**:
-```typescript
-import { asyncHandler } from '../lib/asyncHandler';
 
-router.post('/amortization/generate', asyncHandler(async (req, res) => {
-  const orgId = await ensureDefaultOrg();  // ← si falla, JSON 500 (vía middleware)
-  const { contract, policy } = req.body as any;
-  if (!contract?.id || !policy?.propertyId) {
-    return res.status(400).json({ error: '...' });
-  }
-  // ... lógica ...
-  res.json(rows);
-  // No try/catch: el middleware lo maneja
-}));
+```typescript
+import { asyncHandler } from "../lib/asyncHandler";
+
+router.post(
+  "/amortization/generate",
+  asyncHandler(async (req, res) => {
+    const orgId = await ensureDefaultOrg(); // ← si falla, JSON 500 (vía middleware)
+    const { contract, policy } = req.body as any;
+    if (!contract?.id || !policy?.propertyId) {
+      return res.status(400).json({ error: "..." });
+    }
+    // ... lógica ...
+    res.json(rows);
+    // No try/catch: el middleware lo maneja
+  }),
+);
 ```
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
@@ -254,10 +276,12 @@ Este fix es server-side, no tiene toasts. Pero el cliente puede mejorar los mens
 ## 8. Dependencias
 
 ### Archivos nuevos
+
 - `server/lib/asyncHandler.ts` (10 líneas)
 - `server/lib/errorHandler.ts` (30 líneas)
 
 ### Archivos a modificar
+
 - `server.ts` (1 import + 1 línea `app.use(errorHandler)`)
 - `server/routes/billing.ts` (2 endpoints migrados)
 - `server/routes/inventories.ts` (1 endpoint migrado)
@@ -265,6 +289,7 @@ Este fix es server-side, no tiene toasts. Pero el cliente puede mejorar los mens
 - `server/routes/googleAuth.ts` (revisar cuántos endpoints requieren migración)
 
 ### Archivos a NO tocar
+
 - `server/routes/tenants.ts` (ya tiene try local)
 - `server/routes/entities.ts` (ya tiene try local)
 - `server/routes/saasBilling.ts` (ya tiene try local)

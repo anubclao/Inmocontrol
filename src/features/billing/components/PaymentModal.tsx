@@ -6,14 +6,18 @@
  * la mora en vivo. Al confirmar, llama onConfirm(day, total).
  */
 
-import React, { useState, useMemo } from 'react';
-import { Calendar, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { Button, Modal, cn } from '../../../shared/ui';
-import { calculateLateFee } from '../calculations';
-import type { AmortizationRow, BillingPolicy } from '../types';
+import React, { useState, useMemo } from "react";
+import { Calendar, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Button, Modal, cn } from "../../../shared/ui";
+import { calculateLateFee } from "../calculations";
+import type { AmortizationRow, BillingPolicy } from "../types";
 
 const COP = (n: number) =>
-  new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
+  new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: "COP",
+    maximumFractionDigits: 0,
+  }).format(n);
 
 export interface PaymentModalProps {
   row: AmortizationRow | null;
@@ -22,7 +26,12 @@ export interface PaymentModalProps {
   onConfirm: (paidOnDayOfMonth: number, totalPaid: number) => Promise<boolean>;
 }
 
-export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalProps) {
+export function PaymentModal({
+  row,
+  policy,
+  onClose,
+  onConfirm,
+}: PaymentModalProps) {
   const [day, setDay] = useState<number>(5);
   const [submitting, setSubmitting] = useState(false);
 
@@ -56,12 +65,17 @@ export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalPr
       }
       // si !ok, modal queda abierto con día y monto pre-llenados
     } finally {
-      setSubmitting(false);  // rehabilita el botón siempre
+      setSubmitting(false); // rehabilita el botón siempre
     }
   };
 
   return (
-    <Modal isOpen={!!row} onClose={onClose} title={`Registrar pago — ${row.periodStart.slice(0, 7)}`} size="md">
+    <Modal
+      isOpen={!!row}
+      onClose={onClose}
+      title={`Registrar pago — ${row.periodStart.slice(0, 7)}`}
+      size="md"
+    >
       <div className="space-y-5">
         {/* Resumen del mes */}
         <div className="bg-slate-50 rounded-lg p-4 space-y-1.5 text-sm">
@@ -97,10 +111,10 @@ export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalPr
                 key={d}
                 onClick={() => setDay(d)}
                 className={cn(
-                  'px-3 py-2 rounded-lg border text-sm font-medium transition-all',
+                  "px-3 py-2 rounded-lg border text-sm font-medium transition-all",
                   day === d
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                    ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                    : "bg-white text-slate-700 border-slate-200 hover:border-slate-300",
                 )}
               >
                 Día {d}
@@ -110,22 +124,27 @@ export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalPr
         </div>
 
         {/* Resultado del cálculo */}
-        <div className={cn(
-          'rounded-lg p-4 border-2',
-          isOnTime
-            ? 'bg-emerald-50 border-emerald-200'
-            : 'bg-red-50 border-red-200'
-        )}>
+        <div
+          className={cn(
+            "rounded-lg p-4 border-2",
+            isOnTime
+              ? "bg-emerald-50 border-emerald-200"
+              : "bg-red-50 border-red-200",
+          )}
+        >
           {isOnTime ? (
             <div className="flex items-center gap-2 text-emerald-700 mb-2">
               <CheckCircle2 className="w-4 h-4" />
-              <span className="text-sm font-semibold">¡Sin mora! Pagó dentro del día de gracia.</span>
+              <span className="text-sm font-semibold">
+                ¡Sin mora! Pagó dentro del día de gracia.
+              </span>
             </div>
           ) : (
             <div className="flex items-center gap-2 text-red-700 mb-2">
               <AlertTriangle className="w-4 h-4" />
               <span className="text-sm font-semibold">
-                Mora del {lateFee.pct}% por pago después del día {policy.graceDay}.
+                Mora del {lateFee.pct}% por pago después del día{" "}
+                {policy.graceDay}.
               </span>
             </div>
           )}
@@ -155,7 +174,7 @@ export function PaymentModal({ row, policy, onClose, onConfirm }: PaymentModalPr
             Cancelar
           </Button>
           <Button onClick={handleConfirm} disabled={submitting}>
-            {submitting ? 'Guardando…' : `Confirmar pago · ${COP(totalAPagar)}`}
+            {submitting ? "Guardando…" : `Confirmar pago · ${COP(totalAPagar)}`}
           </Button>
         </div>
       </div>

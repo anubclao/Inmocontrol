@@ -25,11 +25,11 @@
 
 **Estado por ola de fix:**
 
-| Ola                   | Bugs              | Status                                                    |
-| --------------------- | ----------------- | --------------------------------------------------------- |
-| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 2/24 specs aprobados (BUG-019, BUG-029)              |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                                              |
+| Ola                   | Bugs              | Status                                     |
+| --------------------- | ----------------- | ------------------------------------------ |
+| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK                 |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 2/24 specs aprobados (BUG-019, BUG-029) |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                               |
 
 ---
 
@@ -357,23 +357,23 @@
 | (formato-2) | `id; name;` (semicolons en object types, inválido TS)   | `53f8753`  |
 | (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
-| BUG-003     | PaymentModal cierra en error (UX rota)               | `df8a4b2`  |
-| BUG-004     | Regenerar amortización revierte `paid` a `pending`   | `e99ad2b`  |
+| BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
+| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |
 
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
 
-| Bug               |       Spec       |  Verifier   | Status              |
-| ----------------- | :--------------: | :---------: | ------------------- |
-| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`        |
-| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`        |
-| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`        |
-| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`        |
-| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`        |
-| BUG-006 a BUG-028 |        ❌        |     ❌      | ⏳                  |
-| BUG-029           |  ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente)      |
-| BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳                  |
+| Bug               |       Spec       |  Verifier   | Status         |
+| ----------------- | :--------------: | :---------: | -------------- |
+| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`   |
+| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`   |
+| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`   |
+| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`   |
+| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`   |
+| BUG-006 a BUG-028 |        ❌        |     ❌      | ⏳             |
+| BUG-029           |   ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente) |
+| BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳             |
 
 ---
 
