@@ -270,9 +270,11 @@ export interface PropertyCharge {
 
 /**
  * @deprecated Mantenido por compatibilidad histórica — la nueva fuente de
- * verdad es `PropertyCharge`. La migración 006_property_charges.sql copió
+ * verdad es `PropertyCharge`. La migración 011_property_charges.sql copió
  * los registros viejos a la tabla nueva con `charged_to='owner'`. No usar
  * en código nuevo.
+ * (BUG-031: antes era 006_property_charges.sql, renombrada para no chocar
+ * con 006_password_hash.sql.)
  */
 export type DiscountType = ChargeType;
 

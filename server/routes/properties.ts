@@ -5,6 +5,7 @@ import { google } from "googleapis";
 import crypto from "crypto";
 import pool, { ensureDefaultOrg } from "../db.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
+import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
 
 const router = express.Router();
 
@@ -251,10 +252,13 @@ router.post("/", async (req, res) => {
           const rootFolderId = tokenRows[0]?.drive_folder_id;
 
           if (rootFolderId) {
+            // BUG-010: usar el helper central de escape. Escapa `\` antes
+            // que `'` — el orden importa.
+            const safeAddress = escapeDriveQueryValue(address);
             // BUG-016: con withTimeout en las 4 llamadas a Drive.
             const existing = await withTimeout(
               drive.files.list({
-                q: `name='${String(address).replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+                q: `name='${safeAddress}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
                 fields: "files(id)",
                 spaces: "drive",
               }),

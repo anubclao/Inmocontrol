@@ -44,7 +44,9 @@ interface BillingState {
   actions: Record<string, PropertyAction[]>;
   /**
    * Novedades de cargos por propertyId. Fuente de verdad unificada desde
-   * la migración 006_property_charges.sql.
+   * la migración 011_property_charges.sql.
+   * (BUG-031: antes era 006_property_charges.sql, renombrada para no chocar
+   * con 006_password_hash.sql.)
    */
   charges: Record<string, PropertyCharge[]>;
 

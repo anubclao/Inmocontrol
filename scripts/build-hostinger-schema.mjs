@@ -3,9 +3,11 @@
 //
 // Entrada:
 //   - db/mysql/schema-completo.sql  (modelo base consolidado)
-//   - db/mysql/migrations/006_property_charges.sql  (tabla nueva; el backfill
+//   - db/mysql/migrations/011_property_charges.sql  (tabla nueva; el backfill
 //     SQL está pensado para upgrade de DBs viejas, lo saltamos acá porque es
 //     deploy limpio)
+//     BUG-031: antes era 006_property_charges.sql, renombrada para no chocar
+//     con 006_password_hash.sql.
 //
 // Salida:
 //   - db/mysql/schema-hostinger.sql

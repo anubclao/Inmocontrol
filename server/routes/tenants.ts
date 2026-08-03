@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { Readable } from "stream";
 import pool, { ensureDefaultOrg } from "../db.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
+import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
 
 /**
  * FIX 2026-07-22: timeout estricto para llamadas a Google Drive.
@@ -173,10 +174,13 @@ router.post("/", async (req, res) => {
           const rootFolderId = tokensRows[0]?.drive_folder_id;
 
           if (rootFolderId) {
+            // BUG-010: usar el helper central de escape (mismo patrón que
+            // properties.ts). Escapa `\` antes que `'` — el orden importa.
+            const safeAddress = escapeDriveQueryValue(propertyAddress);
             // Buscar si ya existe una carpeta con este address
             const existing = await withTimeout(
               drive.files.list({
-                q: `name='${propertyAddress.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+                q: `name='${safeAddress}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
                 fields: "files(id)",
                 spaces: "drive",
               }),

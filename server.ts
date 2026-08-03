@@ -10,7 +10,9 @@ import { fileURLToPath } from "url";
 
 import entitiesRouter from "./server/routes/entities.js";
 import billingRouter from "./server/routes/billing.js";
-import banksRouter from "./server/routes/banks.js";
+// BUG-028: banksRouter consolidado en billingRouter — ver routes/billing.ts
+// sección "Bank Accounts". Mantener un solo router en /api/billing evita
+// colisiones silenciosas cuando se agregan paths nuevos.
 import googleAuthRouter from "./server/routes/googleAuth.js";
 import authRouter from "./server/routes/auth.js";
 import tenantsRouter from "./server/routes/tenants.js";
@@ -82,10 +84,11 @@ async function startServer() {
   app.use("/api/admin", adminRouter);
 
   app.use("/api/entities", entitiesRouter);
-  app.use("/api/billing", billingRouter);
 
-  // Bank accounts e insurance policies viven bajo /api/billing/* también
-  app.use("/api/billing", banksRouter);
+  // BUG-028: bank-accounts e insurance-policies están consolidadas en
+  // billingRouter (no más routers paralelos con el mismo path). Un solo
+  // router montado en /api/billing, sin ambigüedad.
+  app.use("/api/billing", billingRouter);
 
   // Google OAuth + Google Drive upload
   app.use("/api", googleAuthRouter);
