@@ -27,7 +27,7 @@
 
 | Ola                   | Bugs              | Status                                                    |
 | --------------------- | ----------------- | --------------------------------------------------------- |
-| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | 🟡 3/5 fixed (005 en próximo commit), 3/5 specs aprobados |
+| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK |
 | 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ⏳ Pendiente                                              |
 | 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                                              |
 
@@ -357,6 +357,8 @@
 | (formato-2) | `id; name;` (semicolons en object types, inválido TS)   | `53f8753`  |
 | (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
+| BUG-003     | PaymentModal cierra en error (UX rota)               | `df8a4b2`  |
+| BUG-004     | Regenerar amortización revierte `paid` a `pending`   | `e99ad2b`  |
 
 ---
 
@@ -366,9 +368,9 @@
 | ----------------- | :--------------: | :---------: | ------------------- |
 | BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`        |
 | BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`        |
-| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente)      |
-| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ⏳                  |
-| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ (próximo commit) |
+| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`        |
+| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`        |
+| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`        |
 | BUG-006 a BUG-029 |        ❌        |     ❌      | ⏳                  |
 | BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳                  |
 
