@@ -92,23 +92,28 @@ src/
 > Cada `git push` → redeploy automático. NO requiere FTP ni intervención manual.
 
 **El proyecto compila en 2 outputs:**
+
 - `dist/` — frontend estático (vite build)
 - `dist-server/server.js` — backend bundleado (esbuild, single-file con todo inline)
 
 **Scripts clave:**
+
 - `npm run build` → corre `build:client` + `build:server` (ambos en uno)
 - `npm start` → `NODE_ENV=production node dist-server/server.js`
 
 **Lo que NO se sube al server:**
+
 - `node_modules/` (Hostinger instala con npm install en cada deploy)
 - `supabase/` (legacy — ya no se usa, eliminar)
 - `.env*` (los env vars se configuran en el panel)
 
 **Auto-deploy Hostinger:**
+
 1. Push a `main` → Hostinger clona, `npm install`, `npm run build`, publica `dist/`, arranca `npm start`.
 2. Si falla: revisar "Registros de tiempo de ejecución" en el panel (debe tener logs, no estar vacío).
 
 **Para deploy fresh:**
+
 1. Panel → Avanzado → Node.js → Create Application (Application root: project root, startup: `npm start`).
 2. Variables de entorno (ver `.env.production.example`).
 3. Schema de DB: importar `db/mysql/schema-hostinger.sql` vía phpMyAdmin.
@@ -116,23 +121,24 @@ src/
 
 ## Estado del refactor
 
-| Fase | Estado | Notas |
-|------|--------|-------|
-| 1. Ordenar lo existente | ✅ | README, metadata, lint, hooks base, store base |
-| 2. Refactor por dominios | ⏳ | App.tsx sigue monolítico, 3158 líneas |
-| 3. Auth + roles | ⏸️ | Diferido por decisión del usuario |
-| 4. Lógica financiera Colombia | ⏳ | Falta retefuente, GMF ya está |
-| 5. Datos y exportación | ⏸️ | Después de Fase 2 |
-| 6. Notificaciones (Twilio) | ✅ | Tipos + derivación + config + log + adapter WhatsApp (sandbox → producción) |
-| 7. Notificaciones (Email) | ✅ | Multi-buzón por propósito (cobros, contratos, alertas, marketing, general) con SMTP o SendGrid. Backend con nodemailer. Frontend con `emailConfig` per-agency en `notificationConfigStore` (SaaS-ready). |
-| 8. SaaS Billing | ✅ | Planes CRUD en DB (`saas_plans`), subscripción per-agency (`saas_subscriptions`), métodos de pago (`saas_payment_methods`), facturas con IVA 19% (`saas_invoices`). PSP MOCK (Wompi/MercadoPago cuando se enchufe). UI: `SaasBillingView` customer-facing + `PlanAdminView` admin. Banner de límite en Dashboard. |
-| 9. Cuenta de cobro mensual | ✅ | Flujo "Enviar CC" → "Marcar pagado" en `AmortizationTable` del módulo Billing. PDF con formato colombiano clásico (`cuentaCobroPdf.ts`). Consecutivo `invoice_number` (CC-YYYYMM-NNN) generado por backend. Mes N+1 se desbloquea automáticamente al marcar paid el mes N. Endpoint nuevo: `POST /api/billing/invoices/send`. Migración: `004_invoice_number.sql`. |
-| 10. Estado de cuenta del propietario | ✅ | Estado de cuenta mensual al PROPIETARIO con resumen ejecutivo + tabla de detalle de movimientos + transferencias reales registradas. PDF replica el `modelo-estado-de-cuenta.pdf` adaptado (omite sección 5 "antigüedad", adapta sección 6 "instrucciones de pago" al propietario). Tabla nueva `owner_payouts` para registrar transferencias reales. Endpoint nuevo: `GET /api/billing/owner-statement` (combina amortización + descuentos + settlement + payouts). Migración: `005_owner_payouts.sql`. UI: `EstadoCuentaView` reemplaza `AccountStatementView`. |
-| 11. Subida automática a Google Drive | ✅ | Acta de entrega + cuenta de cobro + estado de cuenta se suben automáticamente a Drive tras generarse. Endpoint genérico nuevo: `POST /api/drive/upload-pdf` (subcarpeta arbitraria, crea on-demand). Helper frontend: `uploadPdfToDrive` en `driveService.ts`. Destinos: acta → `Acta/` del inquilino · cuenta de cobro → `Recibos/` del inquilino · estado de cuenta → `Propietario/EstadosCuenta/` de la propiedad. Si Drive no está conectado, el PDF se descarga local igual (no rompe el flujo). |
+| Fase                                 | Estado | Notas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Ordenar lo existente              | ✅     | README, metadata, lint, hooks base, store base                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 2. Refactor por dominios             | ⏳     | App.tsx sigue monolítico, 3158 líneas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 3. Auth + roles                      | ⏸️     | Diferido por decisión del usuario                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 4. Lógica financiera Colombia        | ⏳     | Falta retefuente, GMF ya está                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 5. Datos y exportación               | ⏸️     | Después de Fase 2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 6. Notificaciones (Twilio)           | ✅     | Tipos + derivación + config + log + adapter WhatsApp (sandbox → producción)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 7. Notificaciones (Email)            | ✅     | Multi-buzón por propósito (cobros, contratos, alertas, marketing, general) con SMTP o SendGrid. Backend con nodemailer. Frontend con `emailConfig` per-agency en `notificationConfigStore` (SaaS-ready).                                                                                                                                                                                                                                                                                                                                                          |
+| 8. SaaS Billing                      | ✅     | Planes CRUD en DB (`saas_plans`), subscripción per-agency (`saas_subscriptions`), métodos de pago (`saas_payment_methods`), facturas con IVA 19% (`saas_invoices`). PSP MOCK (Wompi/MercadoPago cuando se enchufe). UI: `SaasBillingView` customer-facing + `PlanAdminView` admin. Banner de límite en Dashboard.                                                                                                                                                                                                                                                 |
+| 9. Cuenta de cobro mensual           | ✅     | Flujo "Enviar CC" → "Marcar pagado" en `AmortizationTable` del módulo Billing. PDF con formato colombiano clásico (`cuentaCobroPdf.ts`). Consecutivo `invoice_number` (CC-YYYYMM-NNN) generado por backend. Mes N+1 se desbloquea automáticamente al marcar paid el mes N. Endpoint nuevo: `POST /api/billing/invoices/send`. Migración: `004_invoice_number.sql`.                                                                                                                                                                                                |
+| 10. Estado de cuenta del propietario | ✅     | Estado de cuenta mensual al PROPIETARIO con resumen ejecutivo + tabla de detalle de movimientos + transferencias reales registradas. PDF replica el `modelo-estado-de-cuenta.pdf` adaptado (omite sección 5 "antigüedad", adapta sección 6 "instrucciones de pago" al propietario). Tabla nueva `owner_payouts` para registrar transferencias reales. Endpoint nuevo: `GET /api/billing/owner-statement` (combina amortización + descuentos + settlement + payouts). Migración: `005_owner_payouts.sql`. UI: `EstadoCuentaView` reemplaza `AccountStatementView`. |
+| 11. Subida automática a Google Drive | ✅     | Acta de entrega + cuenta de cobro + estado de cuenta se suben automáticamente a Drive tras generarse. Endpoint genérico nuevo: `POST /api/drive/upload-pdf` (subcarpeta arbitraria, crea on-demand). Helper frontend: `uploadPdfToDrive` en `driveService.ts`. Destinos: acta → `Acta/` del inquilino · cuenta de cobro → `Recibos/` del inquilino · estado de cuenta → `Propietario/EstadosCuenta/` de la propiedad. Si Drive no está conectado, el PDF se descarga local igual (no rompe el flujo).                                                             |
 
 ## Decisiones cerradas (no renegociar sin conversación explícita)
 
 ### Flujo de propiedad
+
 1. **Wizard 3 pasos**: Datos básicos → 5 docs legales (CC, Certificado, Predial, RUT, Mandato) → Inventario.
 2. **Inventario de captación** (`phase='inicial'`): **sin firmas de arrendatario** — solo agente + propietario firman al finalizar (en realidad, en el wizard actual el PDF se genera con placeholders "pendiente" para arrendatario/agente; la firma real de esas dos partes se hace en el Inventario de Colocación cuando hay inquilino).
 3. **Inventario de colocación** (`phase='final'`): **2 firmas** (arrendatario + agente). Se hace DESPUÉS de asignar el inquilino. La firma del propietario va en el Contrato de Mandato y en el Contrato de Arrendamiento, NO acá.
@@ -140,6 +146,7 @@ src/
 5. **Mandato firmado**: requerido para pasar estado a "Activo" 100%. Vive en `properties.mandato_pdf_url` (no en `property_documents`).
 
 ### Estructura Drive (NO cambiar sin discutir)
+
 ```
 Mi unidad / InmoControl/                          ← creado por OAuth una vez
 └── {dirección del inmueble}/                      ← por propiedad
@@ -152,11 +159,13 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 ```
 
 ### Reglas de borrado (trazabilidad legal)
+
 - `DELETE /api/properties/:id` retorna **409** si la propiedad tiene inventarios.
 - En la UI, el botón 🗑 trash se reemplaza por 🔒 candado gris con tooltip cuando `inventoryCount > 0`.
 - Para retirar un inmueble del mercado → cambiar a estado `Inactivo`, **NO eliminar**.
 
 ### Reglas del wizard (evitar regresiones ya corregidas)
+
 - `PropertiesView.handleFinalize` es la ÚNICA función que crea carpetas Drive para una propiedad. NO llamar `createPropertyFolders()` desde fuera (estaba duplicando carpetas).
 - El endpoint `GET /api/drive/create-property-folders` **chequea si ya existe** antes de crear (defensa por si algo lo llama).
 - `appStore.addProperty` chequea `if (p.id)` antes de postear — si la propiedad ya viene con `id` del wizard, **no postea de nuevo**.
@@ -164,6 +173,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 - El preview de PDFs en el wizard usa `blob:` URL real (no `'__pending__'`) — `URL.revokeObjectURL` se llama al cerrar/reemplazar doc para evitar memory leaks.
 
 ### Flujo de cuenta de cobro mensual (BillingPanel → AmortizationTable)
+
 - **Matriz de UX por fila** (decisión del usuario: "marcar pagado habilita el siguiente mes"):
   - Mes N+1 **BLOQUEADO** (🔒 + tooltip "Pagá el mes anterior para habilitar") hasta que el mes N esté `paid`.
   - Mes N habilitado y NO enviado → botón **"Enviar CC"** (PDF con formato colombiano clásico).
@@ -179,6 +189,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 - **Schema**: `rent_invoices.invoice_number VARCHAR(20) NULL` (migración `004_invoice_number.sql`). Índice `invoices_invoice_number_idx`. Aplicar con `node scripts/apply-004-migration.mjs` después de arrancar MySQL.
 
 ### Flujo de estado de cuenta del propietario (BillingPanel → EstadoCuentaView)
+
 - **Concepto**: documento MENSUAL que INMOVIRTUAL le envía al PROPIETARIO con el detalle del mes (ingresos cobrados al inquilino, gastos aplicados, retenciones, neto calculado, transferencias reales, saldo final). El propietario debe revisarlo y reportar inconsistencias en 5 días hábiles.
 - **Doble componente del documento** (decisión del usuario: "mostrar ambos"):
   - **NETO CALCULADO** (teórico): sale de `calculateMonthlySettlement` con inputs del contrato activo (canon, admin, comisionPct).
@@ -194,6 +205,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 - **Endpoint clave**: `GET /api/billing/owner-statement?propertyId=&period=` devuelve el statement consolidado con TODO (ingresos + descuentos + settlement + payouts). El PDF y la UI consumen esta salida directamente.
 
 ### Subida automática a Google Drive (acta + cuenta de cobro + estado de cuenta)
+
 - Los 3 tipos de PDF que genera la app se suben a Drive automáticamente tras emitirse, además de la descarga local. **Si Drive no está conectado, la descarga local sigue funcionando** (el flujo no se rompe).
 - **Endpoint genérico**: `POST /api/drive/upload-pdf` (`server/routes/googleAuth.ts`) — acepta cualquier nombre de subcarpeta y la crea on-demand si no existe. Helper interno: `getFreshDriveClientPublic()` (refresca el token OAuth si está por expirar).
 - **Helper frontend**: `uploadPdfToDrive(blob, parentFolderId, parentKind, subfolder, fileName)` en `src/lib/drive/driveService.ts`. Convierte el Blob a base64 y llama al endpoint. Devuelve `{ fileId?, webViewLink?, skipped?, error? }`.
@@ -211,6 +223,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 - **Logs**: el `handleSendInvoice` y `handleGeneratePdf` loggean acción en `property_actions` con sufijo "· subida a Drive" cuando la subida fue exitosa.
 
 ### Endpoints backend útiles
+
 - `GET /api/properties/:id` — devuelve propiedad puntual con `inventory_count` y `documents`. Usado para refrescar local state post-wizard.
 - `GET /api/properties` — lista con `inventory_count` (LEFT JOIN).
 - `POST /api/properties` — INSERT si `localId` es `wizard-*` o undefined; UPSERT si `localId` es UUID real. Crea carpeta Drive solo en INSERT.
@@ -221,6 +234,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 - `POST /api/tenants/upload-document` — sube PDF a la subcarpeta del inquilino.
 
 ### Nombres de columnas de PDFs del inventario (NO confundir)
+
 - ✅ `inventory_pdf_url` (legacy, se mantiene por compat)
 - ✅ `inventory_captacion_pdf_url` (inglés, este es el real en la DB)
 - ✅ `inventory_colocacion_pdf_url` (inglés, este es el real en la DB)
@@ -230,6 +244,7 @@ Mi unidad / InmoControl/                          ← creado por OAuth una vez
 Si un SELECT falla con "Unknown column inventario_captacion_pdf_url", es porque alguien (como yo) usó el nombre español. Usar el inglés: `inventory_captacion_pdf_url`. La respuesta del API puede usar el alias español para clientes que lo prefieran, pero la DB es inglés.
 
 ### Migración 009 — reconcilia el schema canónico con la realidad (jul-2026)
+
 El `schema-hostinger.sql` y `schema-completo.sql` documentaban las 2 columnas
 (`inventory_captacion_pdf_url`, `inventory_colocacion_pdf_url`) **pero nunca las
 incluían en el `CREATE TABLE`**. Resultado: drift silencioso entre docs y DB.
@@ -247,18 +262,21 @@ Cualquier `GET /api/properties/:id` o `POST /api/inventories/upload-pdf` tiraba
   rama era un parche que en realidad rompía más de lo que arreglaba.
 
 ### Schema importante de `properties.status`
+
 - Constraint: `CHECK (status IN ('Pendiente','Activo','En Colocación','Arrendado','Inactivo'))`
 - NO acepta 'available'/'rented'/'maintenance' (esa era la convención vieja)
 - Wizard DEBE mandar el status en el UPSERT del step 3 (no solo al store local)
 - Frontend mapper convierte automáticamente server → Spanish por si quedan rows viejos
 
 ### Flujo de status de una propiedad
+
 ```
 Pendiente ──(wizard completo + mandato firmado)──► Activo
 Activo    ──(crear arrendatario)────────────────► En Colocación
 En Colocación ──(firmar inventario de colocación)──► Arrendado
 Activo | En Colocación | Arrendado ──(dueño retira)──► Inactivo
 ```
+
 - **En Colocación** = ya tiene arrendatario asignado pero el Inventario de Colocación
   todavía no está firmado. No se debe poder asignar otro inquilino a esa propiedad
   (filtro `availableProperties` ya lo excluye).
@@ -266,9 +284,11 @@ Activo | En Colocación | Arrendado ──(dueño retira)──► Inactivo
   arrendatario + agente). Hasta entonces, la propiedad NO está formalmente arrendada.
 
 ### `GET /api/properties/:id` auto-refresh
+
 Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/properties/:id` para traer el estado real del server (no el Zustand state stale). Si la query SQL falla con 500, el modal muestra datos viejos. **SIEMPRE verificar los nombres de columnas en inglés (`inventory_*` no `inventario_*`).**
 
 ### SaaS Billing (Fase 8) — namespace separado
+
 - **NO** usar `/api/billing/*` para billing del SaaS — ese namespace es de
   billing de PROPIEDADES (arriendos). Para SaaS usar `/api/saas-billing/*`.
 - Tablas `saas_*` (planes, subscriptions, payment_methods, invoices) — son
@@ -283,6 +303,7 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
   Mostrar subtotal + IVA + total en UI (estándar colombiano).
 
 ### Onboarding de testers (Google OAuth)
+
 - **Problema típico**: tester intenta "Conectar Drive" → rebota con
   `403 access_denied` + mensaje de Google "la app se está probando y solo
   pueden acceder a ella los testers aprobados por el desarrollador".
@@ -307,10 +328,12 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
   o salga un tester.
 
 ### Recuperación de wizard interrumpido (PENDIENTE)
+
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
 - Estado futuro: wizard state en localStorage para permitir "Continuar registro" al volver. **NO implementar hasta que se cierre el flujo actual completo** (Cobranza + Comparativa + Acta).
 
 ### Metodología Karpathy (Agent Skill) — Spec + Verifier + Environment
+
 Adoptada el 2026-07-22 después de la cadena de bugs en producción
 ("Guardar borrador" mintiendo, "Continuar a Documentación" colgando,
 phone/email NULL, modal de tenant cerrándose antes del POST, etc.).
@@ -341,9 +364,10 @@ phone/email NULL, modal de tenant cerrándose antes del POST, etc.).
    cambiar el spec, volver a Fase 2 (no "arreglar por las suyas").
 
 5. **FASE 5 — REFACTOR & VERIFY**: correr el verifier de nuevo. `npm
-   run lint` debe pasar. Commit solo cuando el verifier pasa 100%.
+run lint` debe pasar. Commit solo cuando el verifier pasa 100%.
 
 #### Anti-patrones explícitos (vistos en prod)
+
 - ❌ Escribir código antes del spec → bugs que se ven en prod.
 - ❌ Tostadas que mienten ("guardado" cuando solo se guardó en localStorage).
 - ❌ Endpoints sin timeout → el server se cuelga para siempre.
@@ -352,7 +376,9 @@ phone/email NULL, modal de tenant cerrándose antes del POST, etc.).
 - ❌ Modificar el verifier para que pase.
 
 #### Aplicación a los wizards actuales (julio-2026)
+
 Por cada wizard roto, vamos a:
+
 1. Escribir `docs/specs/wizard_{X}.md` (qué DEBE hacer)
 2. Escribir `tests/verifiers/wizard_{X}.md` (cómo verificar)
 3. Correr el verifier contra prod (esperamos que FALLE en varios puntos)
@@ -363,6 +389,7 @@ Orden de aplicación: `wizard_property` (más roto) → `wizard_tenant`
 → `wizard_contract` → `wizard_inventory` → `wizard_billing`.
 
 ### "Guardar avance (este equipo)" — wizard pre-crea propiedad en MySQL al pasar a step 2
+
 - **Opción B (julio-2026)**: el botón "💾 Guardar avance (este equipo)" en
   step 1 SÍ persiste al servidor. Al hacer click (o al pasar a step 2 vía
   "Continuar a Documentación"), se hace un `POST /api/properties` con
@@ -394,6 +421,7 @@ Orden de aplicación: `wizard_property` (más roto) → `wizard_tenant`
   en MySQL y el wizard se reconecta a ella sin re-crear.
 
 ### Estados de almacenamiento de documentos (wizard) — siempre honestos
+
 - Cada card de documento en `StepDocs` muestra un **badge explícito de estado**:
   - 🟢 **En Drive** (verde, `CheckCircle2`): todos los archivos del slot ya están
     en Google Drive (URL `https://drive.google.com/...`).
@@ -410,3 +438,43 @@ Orden de aplicación: `wizard_property` (más roto) → `wizard_tenant`
   auto-dismiss — el usuario decide cuándo cerrarlo. Botón "Ver carpeta en
   Drive" si hubo uploads exitosos.
 
+---
+
+---
+
+## 🎓 Skill de Karpathy instalada (julio 2026)
+
+> Metodología Spec + Verifier + Environment de Andrej Karpathy, adaptada
+> a InmoControl (no es el template genérico Next.js). Vive en estos 9
+> archivos canónicos — leerlos en este orden antes de empezar:
+
+| #   | Archivo                                   | Para qué                                                                |
+| --- | ----------------------------------------- | ----------------------------------------------------------------------- |
+| 1   | AGENTS.md (este archivo)                  | Reglas del proyecto + workflow Karpathy                                 |
+| 2   | docs/env/ARCHITECTURE.md                  | Stack real (React 19 + Vite 6 + Express + MySQL)                        |
+| 3   | docs/env/CONSTRAINTS.md                   | Reglas duras (no `any`, no ESLint aún, timeouts, JSON en errores)       |
+| 4   | docs/specs/wizard\_\*.md (5)              | Specs de los 5 wizards (property, tenant, contract, inventory, billing) |
+| 5   | tests/verifiers/wizard\_\*.md (4)         | E2E checklists binarios por wizard                                      |
+| 6   | tests/verifiers/TEMPLATE_e2e-checklist.md | Template para nuevos verifiers                                          |
+| 7   | docs/specs/TEMPLATE_feature-spec.md       | Template para nuevos specs                                              |
+| 8   | scripts/verifier-wizard-property.ps1      | Runner ejecutable del verifier de wizard_property contra prod           |
+| 9   | scripts/diag-oauth-users.mjs              | Diagnóstico de mismatch entre user_oauth_tokens.user_id y profiles.id   |
+
+### Cómo invocar la metodología en una sesión nueva
+
+```
+"Lee @AGENTS.md, @docs/env/ARCHITECTURE.md y @docs/env/CONSTRAINTS.md.
+Confírmame que entendés el entorno. NO escribas código todavía."
+```
+
+Luego seguir FASE 2 → 3 → 4 → 5 como está descrito en la sección
+"Metodología Karpathy" más arriba.
+
+### Regla anti-regresión
+
+- ❌ **NO** commitear templates genéricos Next.js / Vitest / Tailwind 3.
+  Si te cruzás con un ZIP de skill genérica, extraélo en .tmp-skill-extract/
+  (ignorado por .gitignore) y adaptá archivo por archivo antes de mover a la raíz.
+- ✅ La skill instalada en raíz es **InmoControl-flavored**. Si reemplazás un
+  archivo de la skill, mantené el stack real (React 19 + Vite 6, no Next.js;
+  E2E markdown, no Vitest; MySQL, no Postgres).

@@ -18,6 +18,17 @@ dev-*.txt
 dev-dist/
 logs-*.txt
 logs-*.out
+
+# ─── Skill extracts y zips de descarga (no subir al repo) ──────────────
+# Cuando bajás un zip de skill (ej: Karpathy) y lo extraés para revisarlo,
+# NO queremos commitear ni el zip ni el staging. La skill instalada vive
+# en la raíz (AGENTS.md, docs/env/, docs/specs/, tests/verifiers/).
+.tmp-*/
+.tmp-*
+*.zip
+karpathy_*
+SKILL-EXTRACT-*/
+skill-extract-*/
 server.out
 server.err
 server.log
