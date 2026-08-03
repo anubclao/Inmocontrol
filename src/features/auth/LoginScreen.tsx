@@ -1,13 +1,20 @@
-import { useState } from 'react';
-import { Building2, Shield, Loader2, AlertCircle } from 'lucide-react';
-import { Button, Card, Input } from '../../shared/ui';
+import { useState } from "react";
+import type * as React from "react";
+import { Building2, Shield, Loader2, AlertCircle } from "lucide-react";
+import { Button, Card, Input } from "../../shared/ui";
 
 export interface LoginScreenProps {
   /**
    * Se llama con el user object cuando el login es exitoso.
    * El padre se encarga de pasar al Dashboard.
    */
-  onLogin: (user: { id: string; email: string; displayName: string; role: string; organizationId: string }) => void;
+  onLogin: (user: {
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+    organizationId: string;
+  }) => void;
 }
 
 /**
@@ -22,8 +29,8 @@ export interface LoginScreenProps {
  * pantalla se reemplaza por OAuth Google.
  */
 export function LoginScreen({ onLogin }: LoginScreenProps) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,32 +39,32 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     setError(null);
 
     if (!email.trim() || !password) {
-      setError('Ingresa email y contraseña');
+      setError("Ingresa email y contraseña");
       return;
     }
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
-        credentials: 'include',  // necesario para que el browser mande/acepte la cookie
+        credentials: "include", // necesario para que el browser mande/acepte la cookie
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         // Mensaje genérico — el server no distingue entre "email no existe"
         // y "password incorrecto" para evitar enumeración de usuarios.
-        setError(data.error ?? 'Credenciales inválidas');
+        setError(data.error ?? "Credenciales inválidas");
         return;
       }
 
       const data = await res.json();
       onLogin(data.user);
     } catch (err) {
-      console.error('[LoginScreen] error:', err);
-      setError('Error de conexión. Verifica que el backend esté corriendo.');
+      console.error("[LoginScreen] error:", err);
+      setError("Error de conexión. Verifica que el backend esté corriendo.");
     } finally {
       setSubmitting(false);
     }
@@ -137,11 +144,15 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           <div className="flex justify-center gap-4">
             <div className="flex flex-col items-center gap-1 opacity-50">
               <Shield className="w-4 h-4 text-slate-400" />
-              <span className="text-[8px] text-slate-500 font-bold uppercase">Bcrypt</span>
+              <span className="text-[8px] text-slate-500 font-bold uppercase">
+                Bcrypt
+              </span>
             </div>
             <div className="flex flex-col items-center gap-1 opacity-50">
               <Shield className="w-4 h-4 text-slate-400" />
-              <span className="text-[8px] text-slate-500 font-bold uppercase">httpOnly cookie</span>
+              <span className="text-[8px] text-slate-500 font-bold uppercase">
+                httpOnly cookie
+              </span>
             </div>
           </div>
         </div>

@@ -457,6 +457,7 @@ function RuleRow({
   onToggleChannel: (c: ChannelType) => void;
   onToggleAudience: (a: Audience) => void;
   onSetOffset: (n: number) => void;
+  key?: string;
 }) {
   const channels: ChannelType[] = ['whatsapp', 'email', 'in_app'];
   const audiences: Audience[] = ['tenant', 'owner', 'agent'];
@@ -548,6 +549,7 @@ function ChannelConfigRow({
   onToggleConnected: () => void;
   onChangeIdentifier: (v: string) => void;
   onTest: () => void;
+  key?: string;
 }) {
   const Icon = CHANNEL_ICON[config.type];
   return (
@@ -622,8 +624,7 @@ function ChannelConfigRow({
     </div>
   );
 }
-
-function LogRow({ entry }: { entry: NotificationEntry }) {
+function LogRow({ entry }: { entry: NotificationEntry; key?: string }) {
   const Icon = CHANNEL_ICON[entry.channel];
   const time = new Date(entry.sentAt);
   return (

@@ -15,20 +15,27 @@
  *    (sin enviarlas). Útil para mostrar al usuario qué va a salir antes de confirmar.
  */
 
-import type { Alert } from './types';
-import { ALERT_CATEGORY_LABEL } from './types';
+import type { Alert } from "./types";
+import { ALERT_CATEGORY_LABEL } from "./types";
 import type {
   AlertRule,
   Audience,
   ChannelType,
   ConfigurableCategory,
   EmailMailbox,
-} from './ruleTypes';
-import { AUDIENCE_LABEL, CATEGORY_LABEL, categoryToEmailPurpose } from './ruleTypes';
-import { selectMailboxForPurpose, useNotificationConfigStore } from './notificationConfigStore';
-import { getAdapter } from './channels';
-import { useAppStore } from '../../shared/store/appStore';
-import { useSettingsStore } from '../../shared/store/settingsStore';
+} from "./ruleTypes";
+import {
+  AUDIENCE_LABEL,
+  CATEGORY_LABEL,
+  categoryToEmailPurpose,
+} from "./ruleTypes";
+import {
+  selectMailboxForPurpose,
+  useNotificationConfigStore,
+} from "./notificationConfigStore";
+import { getAdapter } from "./channels";
+import { useAppStore } from "../../shared/store/appStore";
+import { useSettingsStore } from "../../shared/store/settingsStore";
 
 export interface PlannedNotification {
   channel: ChannelType;
@@ -43,23 +50,29 @@ export interface PlannedNotification {
 
 /** Resuelve la data del destinatario según audiencia. Devuelve null si no hay forma
  *  de entregar (ej: tenant sin teléfono para WhatsApp). El caller decide si skip. */
-function resolveRecipient(audience: Audience, alert: Alert): { name: string; handle: string } | null {
+function resolveRecipient(
+  audience: Audience,
+  alert: Alert,
+): { name: string; handle: string } | null {
   const tenants = useAppStore.getState().tenants;
   const properties = useAppStore.getState().properties;
   const profile = useSettingsStore.getState().profile;
 
-  if (audience === 'agent') {
-    return { name: profile.name || 'Agente', handle: profile.email || 'agente@inmocontrol.co' };
+  if (audience === "agent") {
+    return {
+      name: profile.name || "Agente",
+      handle: profile.email || "agente@inmocontrol.co",
+    };
   }
 
-  if (audience === 'tenant') {
+  if (audience === "tenant") {
     const tenant = alert.entity.tenantId
       ? tenants.find((t) => t.id === alert.entity.tenantId)
       : undefined;
     if (!tenant) return null;
     if (tenant.phone) return { name: tenant.name, handle: tenant.phone };
     if (tenant.email) return { name: tenant.name, handle: tenant.email };
-    return { name: tenant.name, handle: 'sin contacto' };
+    return { name: tenant.name, handle: "sin contacto" };
   }
 
   // owner
@@ -70,33 +83,39 @@ function resolveRecipient(audience: Audience, alert: Alert): { name: string; han
   // AGENTS.md: Property guarda ownerId pero el Owner como entidad no está
   // modelado en stores. Usamos el address como label y un email genérico.
   return {
-    name: 'Propietario',
+    name: "Propietario",
     handle: `owner-${property.ownerId}@inmocontrol.co`,
   };
 }
 
 /** Compone subject + body para una alerta × canal × audiencia. */
-function composeMessage(alert: Alert, channel: ChannelType, audience: Audience): { subject: string; body: string } {
-  const cat = CATEGORY_LABEL[alert.category as ConfigurableCategory] ?? ALERT_CATEGORY_LABEL[alert.category];
+function composeMessage(
+  alert: Alert,
+  channel: ChannelType,
+  audience: Audience,
+): { subject: string; body: string } {
+  const cat =
+    CATEGORY_LABEL[alert.category as ConfigurableCategory] ??
+    ALERT_CATEGORY_LABEL[alert.category];
   const aud = AUDIENCE_LABEL[audience];
 
   // Subject corto (asunto de email / primer línea de WhatsApp / título push)
   const subject = `[${cat}] ${alert.title}`;
 
   // Body — depende del canal
-  if (channel === 'whatsapp') {
+  if (channel === "whatsapp") {
     return {
       subject,
       body:
-        aud === 'Inquilino'
+        aud === "Inquilino"
           ? `Hola 👋\n\n${alert.title}\n${alert.description}\n\nPor favor revisa tu cuenta de cobro. Si ya pagaste, ignora este mensaje.`
-          : aud === 'Propietario'
-          ? `Hola,\n\n${alert.title}\n${alert.description}\n\nRevisa el detalle en la app.`
-          : `🔔 ${alert.title}\n${alert.description}`,
+          : aud === "Propietario"
+            ? `Hola,\n\n${alert.title}\n${alert.description}\n\nRevisa el detalle en la app.`
+            : `🔔 ${alert.title}\n${alert.description}`,
     };
   }
 
-  if (channel === 'email') {
+  if (channel === "email") {
     return {
       subject,
       body:
@@ -110,7 +129,10 @@ function composeMessage(alert: Alert, channel: ChannelType, audience: Audience):
   return { subject, body: alert.description };
 }
 
-function ruleMatchesCategory(rule: AlertRule | undefined, alert: Alert): rule is AlertRule {
+function ruleMatchesCategory(
+  rule: AlertRule | undefined,
+  alert: Alert,
+): rule is AlertRule {
   if (!rule) return false;
   if (!rule.enabled) return false;
   if (rule.category !== (alert.category as ConfigurableCategory)) return false;
@@ -120,25 +142,28 @@ function ruleMatchesCategory(rule: AlertRule | undefined, alert: Alert): rule is
 /** Devuelve las notificaciones que SE generarían para esta alerta (sin enviar). */
 export function previewForAlert(alert: Alert): PlannedNotification[] {
   const config = useNotificationConfigStore.getState();
-  const rule = config.rules.find((r) => r.category === alert.entity.category);
+  const rule = config.rules.find((r) => r.category === alert.category);
 
   if (!ruleMatchesCategory(rule, alert)) return [];
 
-  const globalChannel = (t: ChannelType) => config.channels.find((c) => c.type === t);
+  const globalChannel = (t: ChannelType) =>
+    config.channels.find((c) => c.type === t);
   const out: PlannedNotification[] = [];
 
   // Resolver buzón de email una sola vez por alerta (mismo purpose para todas las audiencias).
-  const emailPurpose = categoryToEmailPurpose(alert.category as ConfigurableCategory);
+  const emailPurpose = categoryToEmailPurpose(
+    alert.category as ConfigurableCategory,
+  );
   const mailbox = selectMailboxForPurpose(config, emailPurpose);
 
   for (const channel of rule.channels) {
     const ch = globalChannel(channel);
     if (!ch || !ch.enabled || !ch.connected) continue;
     // Para email, además del switch global, debe haber un buzón configurado.
-    if (channel === 'email' && !mailbox) continue;
+    if (channel === "email" && !mailbox) continue;
     for (const audience of rule.audiences) {
       const recipient = resolveRecipient(audience, alert);
-      if (!recipient || recipient.handle === 'sin contacto') continue;
+      if (!recipient || recipient.handle === "sin contacto") continue;
       const { subject, body } = composeMessage(alert, channel, audience);
       out.push({
         channel,
@@ -147,7 +172,7 @@ export function previewForAlert(alert: Alert): PlannedNotification[] {
         recipientHandle: recipient.handle,
         subject,
         body,
-        ...(channel === 'email' && mailbox ? { mailbox } : {}),
+        ...(channel === "email" && mailbox ? { mailbox } : {}),
       });
     }
   }

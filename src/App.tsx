@@ -1,32 +1,32 @@
-import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { DashboardView } from './features/dashboard/DashboardView';
-import { PropertiesView } from './features/properties/PropertiesView';
-import { TenantsView } from './features/tenants/TenantsView';
-import { FinancialView } from './features/financial/FinancialView';
-import { ReportsView } from './features/reports/ReportsView';
-import { AlertsView } from './features/alerts/AlertsView';
-import { SettingsView } from './features/settings/SettingsView';
-import { LoginScreen } from './features/auth/LoginScreen';
-import { AppShell, TabId } from './features/shell/AppShell';
-import { LoadingScreen } from './features/shell/LoadingScreen';
-import { ContractsView } from './features/contracts/ContractsView';
-import { BillingView } from './features/billing/views/BillingView';
-import { Role, can } from './features/auth/permissions';
-import { useContractStore } from './features/contracts/contractStore';
-import { inventoryDB } from './features/properties/inventoryDB';
-import type { Contract } from './features/contracts/contractTypes';
-import { useAppStore } from './shared/store/appStore';
+import { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { DashboardView } from "./features/dashboard/DashboardView";
+import { PropertiesView } from "./features/properties/PropertiesView";
+import { TenantsView } from "./features/tenants/TenantsView";
+import { FinancialView } from "./features/financial/FinancialView";
+import { ReportsView } from "./features/reports/ReportsView";
+import { AlertsView } from "./features/alerts/AlertsView";
+import { SettingsView } from "./features/settings/SettingsView";
+import { LoginScreen } from "./features/auth/LoginScreen";
+import { AppShell, TabId } from "./features/shell/AppShell";
+import { LoadingScreen } from "./features/shell/LoadingScreen";
+import { ContractsView } from "./features/contracts/ContractsView";
+import { BillingView } from "./features/billing/views/BillingView";
+import { Role, can } from "./features/auth/permissions";
+import { useContractStore } from "./features/contracts/contractStore";
+import { inventoryDB } from "./features/properties/inventoryDB";
+import type { Contract } from "./features/contracts/contractTypes";
+import { useAppStore } from "./shared/store/appStore";
 // createPropertyFolders se importaba aquí y se llamaba después de addProperty, pero
 // eso creaba una SEGUNDA carpeta en Drive (el wizard ya la crea en POST /api/properties).
 // Eliminado: el path actual (wizard) maneja toda la creación de carpetas.
-import type { FinancialRecord } from './shared/store/types';
-import { STORAGE_KEYS } from './shared/hooks/storageKeys';
-import { useGoogleDriveStore } from './shared/store/googleDriveStore';
-import { DriveStatusBanner } from './shared/ui/DriveStatusBanner';
-import { useBillingStore } from './features/billing/billingStore';
-import { deriveAlerts } from './features/alerts/deriveAlerts';
-import { useAlertsStore } from './features/alerts/alertsStore';
+import type { FinancialRecord } from "./shared/store/types";
+import { STORAGE_KEYS } from "./shared/hooks/storageKeys";
+import { useGoogleDriveStore } from "./shared/store/googleDriveStore";
+import { DriveStatusBanner } from "./shared/ui/DriveStatusBanner";
+import { useBillingStore } from "./features/billing/billingStore";
+import { deriveAlerts } from "./features/alerts/deriveAlerts";
+import { useAlertsStore } from "./features/alerts/alertsStore";
 
 /**
  * Inactividad → logout automático.
@@ -47,22 +47,29 @@ interface LocalUser {
 }
 
 const DEFAULT_USER: LocalUser = {
-  uid: 'admin-local',
-  displayName: 'Administrador Inmobiliario',
-  email: 'admin@inmocontrol.com',
-  role: 'admin',
-  photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=admin',
+  uid: "admin-local",
+  displayName: "Administrador Inmobiliario",
+  email: "admin@inmocontrol.com",
+  role: "admin",
+  photoURL: "https://api.dicebear.com/7.x/avataaars/svg?seed=admin",
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+  } | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [user, setUser] = useState<LocalUser | null>(null);
   const [role, setRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
-  const [inventoryModalProperty, setInventoryModalProperty] = useState<any | null>(null);
-  const [inventoryPhase, setInventoryPhase] = useState<'inicial' | 'final' | null>(null);
+  const [inventoryModalProperty, setInventoryModalProperty] = useState<
+    any | null
+  >(null);
+  const [inventoryPhase, setInventoryPhase] = useState<
+    "inicial" | "final" | null
+  >(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contracts = useContractStore((s) => s.contracts);
   const billingInvoices = useBillingStore((s) => s.invoices);
@@ -84,7 +91,10 @@ export default function App() {
   const [closedMonths, setClosedMonths] = useState<string[]>([]);
   const [openedMonths, setOpenedMonths] = useState<string[]>([]);
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (
+    message: string,
+    type: "success" | "error" = "success",
+  ) => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
@@ -92,7 +102,13 @@ export default function App() {
   // Reset inactivity timeout
   useEffect(() => {
     if (user) {
-      const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+      const events = [
+        "mousedown",
+        "mousemove",
+        "keypress",
+        "scroll",
+        "touchstart",
+      ];
       const handler = () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         timeoutRef.current = setTimeout(() => {
@@ -116,14 +132,14 @@ export default function App() {
       try {
         const parsed = JSON.parse(savedUser) as LocalUser;
         setUser(parsed);
-        setRole(parsed.role ?? 'admin');
+        setRole(parsed.role ?? "admin");
       } catch {
         setUser(DEFAULT_USER);
-        setRole('admin');
+        setRole("admin");
       }
     } else {
       setUser(DEFAULT_USER);
-      setRole('admin');
+      setRole("admin");
     }
 
     // Limpiar localStorage legacy (ya no se usa)
@@ -155,7 +171,13 @@ export default function App() {
     useAlertsStore.getState().setAlerts(alerts);
   }, [contracts, billingInvoices, properties, tenants]);
 
-  const handleLogin = (loggedInUser: { id: string; email: string; displayName: string; role: string; organizationId: string }) => {
+  const handleLogin = (loggedInUser: {
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
+    organizationId: string;
+  }) => {
     // Mapea el user del server (snake_case → camelCase) al shape local
     const localUser = {
       uid: loggedInUser.id,
@@ -172,7 +194,10 @@ export default function App() {
   const handleLogout = async () => {
     // Limpia cookie de sesión en el server
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
     } catch {
       // silent — igual limpiamos local
     }
@@ -183,13 +208,17 @@ export default function App() {
     // Sin esto, el siguiente user en el mismo browser ve el draft del
     // user anterior al hacer click en "+ Agregar Propiedad" (la app
     // restaura drafts viejos de localStorage sin filtrar por user).
-    try { localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft); } catch { /* silent */ }
+    try {
+      localStorage.removeItem(STORAGE_KEYS.wizardPropertyDraft);
+    } catch {
+      /* silent */
+    }
     // FIX: limpiar el store Zustand también. Sin esto, los datos del usuario
     // anterior quedan en memoria del browser, accesibles si el siguiente user
     // usa la misma sesión/equipo. Además, evita la confusión de ver "datos
     // viejos" después de un logout+login rápido.
     useAppStore.getState().reset();
-    showToast('Sesión finalizada');
+    showToast("Sesión finalizada");
   };
 
   /**
@@ -221,7 +250,7 @@ export default function App() {
         if (parsed?.uid) {
           // Hay user en localStorage pero la cookie puede haber expirado.
           // Intentamos revalidar con el server antes de dejarlo entrar.
-          fetch('/api/auth/me', { credentials: 'include' })
+          fetch("/api/auth/me", { credentials: "include" })
             .then(async (res) => {
               if (res.ok) {
                 const data = await res.json();
@@ -237,24 +266,33 @@ export default function App() {
                 localStorage.removeItem(STORAGE_KEYS.user);
               }
             })
-            .catch(() => { /* silent */ });
+            .catch(() => {
+              /* silent */
+            });
         }
-      } catch { /* silent */ }
+      } catch {
+        /* silent */
+      }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── CRUD handlers (Fase 2 — ahora delegan al store) ─────────────
   const handleAddProperty = (newProperty: any) => {
-    console.log('[App] handleAddProperty — newProperty.id:', newProperty.id, 'address:', newProperty.address);
+    console.log(
+      "[App] handleAddProperty — newProperty.id:",
+      newProperty.id,
+      "address:",
+      newProperty.address,
+    );
     const propertyWithId = {
       ...newProperty,
       id: newProperty.id ?? `prop-${Date.now()}`,
       createdAt: newProperty.createdAt ?? new Date().toISOString(),
       createdBy: newProperty.createdBy ?? user?.uid,
     };
-    console.log('[App] addProperty al store con id:', propertyWithId.id);
+    console.log("[App] addProperty al store con id:", propertyWithId.id);
     addProperty(propertyWithId);
-    showToast('Propiedad guardada');
+    showToast("Propiedad guardada");
 
     // BUG HISTÓRICO: este bloque creaba una SEGUNDA carpeta en Drive porque el
     // wizard ya crea la carpeta en POST /api/properties (paso 1). El endpoint
@@ -271,29 +309,46 @@ export default function App() {
     //   - el badge de "N inventarios" se vea correcto
     // Si el ID es local (prop-* fallback), el server responde 404 → lo ignoramos.
     void fetch(`/api/properties/${propertyWithId.id}`)
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : null))
       .then((fresh) => {
         if (!fresh) return;
         const patch: Record<string, any> = {};
-        if (fresh.inventory_count !== undefined) patch.inventoryCount = fresh.inventory_count;
-        if (fresh.inventory_pdf_url) patch.inventoryPdfUrl = fresh.inventory_pdf_url;
-        if (fresh.inventario_captacion_pdf_url || fresh.inventory_captacion_pdf_url) {
-          patch.inventoryCaptacionPdfUrl = fresh.inventario_captacion_pdf_url ?? fresh.inventory_captacion_pdf_url;
+        if (fresh.inventory_count !== undefined)
+          patch.inventoryCount = fresh.inventory_count;
+        if (fresh.inventory_pdf_url)
+          patch.inventoryPdfUrl = fresh.inventory_pdf_url;
+        if (
+          fresh.inventario_captacion_pdf_url ||
+          fresh.inventory_captacion_pdf_url
+        ) {
+          patch.inventoryCaptacionPdfUrl =
+            fresh.inventario_captacion_pdf_url ??
+            fresh.inventory_captacion_pdf_url;
         }
-        if (fresh.inventario_colocacion_pdf_url || fresh.inventory_colocacion_pdf_url) {
-          patch.inventoryColocacionPdfUrl = fresh.inventario_colocacion_pdf_url ?? fresh.inventory_colocacion_pdf_url;
+        if (
+          fresh.inventario_colocacion_pdf_url ||
+          fresh.inventory_colocacion_pdf_url
+        ) {
+          patch.inventoryColocacionPdfUrl =
+            fresh.inventario_colocacion_pdf_url ??
+            fresh.inventory_colocacion_pdf_url;
         }
         if (Object.keys(patch).length > 0) {
           updateProperty(propertyWithId.id, patch);
         }
       })
-      .catch(() => { /* silent — la UI no depende de este refresh */ });
+      .catch(() => {
+        /* silent — la UI no depende de este refresh */
+      });
   };
   const handleUpdateProperty = (id: string, updates: any) => {
     updateProperty(id, updates);
-    showToast('Propiedad actualizada');
+    showToast("Propiedad actualizada");
   };
-  const handleUpdateTenant = async (id: string, updates: any): Promise<boolean> => {
+  const handleUpdateTenant = async (
+    id: string,
+    updates: any,
+  ): Promise<boolean> => {
     // FIX Karpathy (jul-2026): antes era fire-and-forget con toast mentiroso
     // ("Inquilino actualizado" aparecía aunque el server hubiera devuelto 500).
     // Ahora esperamos el resultado real del store y mostramos el toast correcto.
@@ -302,9 +357,12 @@ export default function App() {
     // tenant) en vez del genérico "Inquilino actualizado".
     const ok = await updateTenant(id, updates);
     if (ok) {
-      showToast('Inquilino actualizado');
+      showToast("Inquilino actualizado");
     } else {
-      showToast('Error al actualizar el inquilino. Reintentá en unos segundos.', 'error');
+      showToast(
+        "Error al actualizar el inquilino. Reintentá en unos segundos.",
+        "error",
+      );
     }
     return ok;
   };
@@ -315,25 +373,25 @@ export default function App() {
       createdAt: newTenant.createdAt ?? new Date().toISOString(),
     };
     addTenant(tenantWithId);
-    showToast('Inquilino registrado');
+    showToast("Inquilino registrado");
   };
   const handleAddRecord = (record: any) => {
     const recordWithId = { ...record, id: record.id ?? `fin-${Date.now()}` };
     addFinancialRecord(recordWithId);
-    showToast('Registro financiero guardado');
+    showToast("Registro financiero guardado");
   };
   const handleDeleteTenant = async (id: string) => {
     await removeTenant(id);
-    showToast('Arrendatario eliminado');
+    showToast("Arrendatario eliminado");
   };
   const handleDeleteRecord = (id: string) => {
     removeFinancialRecord(id);
-    showToast('Registro eliminado');
+    showToast("Registro eliminado");
   };
   const handleUpdateRecord = (updatedRecord: any) => {
     const { id, ...data } = updatedRecord;
     updateFinancialRecord(id, data);
-    showToast('Registro actualizado');
+    showToast("Registro actualizado");
   };
   const handleCloseMonth = (propertyId: string, month: string) => {
     setClosedMonths((prev) => [...prev, `${propertyId}-${month}`]);
@@ -346,21 +404,26 @@ export default function App() {
 
   const handleStartInventoryEndFromContract = (c: Contract) => {
     const property = properties.find((p: any) => p.id === c.propertyId);
-    if (!property) { showToast('No se encontró la propiedad', 'error'); return; }
+    if (!property) {
+      showToast("No se encontró la propiedad", "error");
+      return;
+    }
     setInventoryModalProperty(property);
-    setInventoryPhase('final');
-    setActiveTab('properties');
+    setInventoryPhase("final");
+    setActiveTab("properties");
     void inventoryDB.getInventory(`${c.propertyId}:inicial`);
   };
 
-  const filteredProperties = properties.filter((p) =>
-    p.address?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.chip?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.folio?.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredProperties = properties.filter(
+    (p) =>
+      p.address?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.chip?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.folio?.toLowerCase().includes(searchQuery.toLowerCase()),
   );
-  const filteredTenants = tenants.filter((t) =>
-    t.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.documentId?.includes(searchQuery)
+  const filteredTenants = tenants.filter(
+    (t) =>
+      t.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      t.idNumber?.includes(searchQuery),
   );
 
   if (loading) return <LoadingScreen />;
@@ -375,15 +438,21 @@ export default function App() {
       activeTab={activeTab}
       onTabChange={setActiveTab}
       onLogout={handleLogout}
-      onRoleChange={(r) => { setRole(r); const u = { ...user, role: r }; setUser(u); localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(u)); showToast(`Rol cambiado a ${r}`); }}
+      onRoleChange={(r) => {
+        setRole(r);
+        const u = { ...user, role: r };
+        setUser(u);
+        localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(u));
+        showToast(`Rol cambiado a ${r}`);
+      }}
       toast={toast}
     >
-      <DriveStatusBanner onGoToIntegrations={() => setActiveTab('settings')} />
+      <DriveStatusBanner onGoToIntegrations={() => setActiveTab("settings")} />
       <AnimatePresence mode="wait">
-        {activeTab === 'dashboard' && (
+        {activeTab === "dashboard" && (
           <DashboardView
-            onNewCapture={() => setActiveTab('properties')}
-            onNavigateToAlerts={() => setActiveTab('alerts')}
+            onNewCapture={() => setActiveTab("properties")}
+            onNavigateToAlerts={() => setActiveTab("alerts")}
             properties={properties}
             tenants={tenants}
             financialRecords={financialRecords}
@@ -391,7 +460,7 @@ export default function App() {
             role={role}
           />
         )}
-        {activeTab === 'properties' && can(role, 'canAddProperty') && (
+        {activeTab === "properties" && can(role, "canAddProperty") && (
           <PropertiesView
             showToast={showToast}
             properties={filteredProperties}
@@ -401,7 +470,7 @@ export default function App() {
             role={role}
           />
         )}
-        {activeTab === 'tenants' && role === 'admin' && (
+        {activeTab === "tenants" && role === "admin" && (
           <TenantsView
             showToast={showToast}
             tenants={filteredTenants}
@@ -413,25 +482,27 @@ export default function App() {
             role={role}
           />
         )}
-        {activeTab === 'contracts' && (role === 'admin' || role === 'propietario') && (
-          <ContractsView
-            showToast={showToast}
-            properties={properties}
-            tenants={tenants}
-            role={role}
-            onStartInventoryEnd={handleStartInventoryEndFromContract}
-          />
-        )}
-        {activeTab === 'billing' && (role === 'admin' || role === 'propietario') && (
-          <BillingView
-            properties={properties}
-            contracts={contracts}
-            tenants={tenants}
-            userName={user?.displayName ?? 'agente'}
-            showToast={showToast}
-          />
-        )}
-        {activeTab === 'financial' && (
+        {activeTab === "contracts" &&
+          (role === "admin" || role === "propietario") && (
+            <ContractsView
+              showToast={showToast}
+              properties={properties}
+              tenants={tenants}
+              role={role}
+              onStartInventoryEnd={handleStartInventoryEndFromContract}
+            />
+          )}
+        {activeTab === "billing" &&
+          (role === "admin" || role === "propietario") && (
+            <BillingView
+              properties={properties}
+              contracts={contracts}
+              tenants={tenants}
+              userName={user?.displayName ?? "agente"}
+              showToast={showToast}
+            />
+          )}
+        {activeTab === "financial" && (
           <FinancialView
             showToast={showToast}
             financialRecords={financialRecords}
@@ -446,7 +517,7 @@ export default function App() {
             role={role}
           />
         )}
-        {activeTab === 'reports' && can(role, 'canViewReports') && (
+        {activeTab === "reports" && can(role, "canViewReports") && (
           <ReportsView
             showToast={showToast}
             financialRecords={financialRecords}
@@ -454,10 +525,10 @@ export default function App() {
             role={role}
           />
         )}
-        {activeTab === 'alerts' && can(role, 'canViewReports') && (
+        {activeTab === "alerts" && can(role, "canViewReports") && (
           <AlertsView showToast={showToast} />
         )}
-        {activeTab === 'settings' && can(role, 'canViewSettings') && (
+        {activeTab === "settings" && can(role, "canViewSettings") && (
           <SettingsView showToast={showToast} />
         )}
       </AnimatePresence>
@@ -469,12 +540,14 @@ export default function App() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 50 }}
           className={`fixed bottom-6 right-6 z-[9999] max-w-md p-4 rounded-lg shadow-2xl border ${
-            toast.type === 'success'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-              : 'bg-red-50 border-red-200 text-red-900'
+            toast.type === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-red-50 border-red-200 text-red-900"
           }`}
         >
-          <pre className="text-sm whitespace-pre-wrap font-sans m-0">{toast.message}</pre>
+          <pre className="text-sm whitespace-pre-wrap font-sans m-0">
+            {toast.message}
+          </pre>
         </motion.div>
       )}
     </AppShell>
