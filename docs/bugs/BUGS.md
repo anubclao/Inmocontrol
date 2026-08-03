@@ -23,14 +23,17 @@
 | Build / config             |    —    |    1     |    1    |   2    |
 | **TOTAL**                  |  **4**  |  **24**  | **10**  | **38** |
 
-**Estado por ola de fix:**
+**Estado por ola de fix (al 2026-07-25):**
 
-| Ola                   | Bugs              | Status                           |
-| --------------------- | ----------------- | -------------------------------- |
-| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK       |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 24/24 specs aprobados (todos) |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | 🟡 6/6 specs aprobados (todos)   |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                     |
+| Ola                   | Bugs              | Status                     |
+| --------------------- | ----------------- | -------------------------- |
+| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed               |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ✅ 24/24 fixed (ver Ola 4) |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ✅ 6/6 fixed (ver Ola 4)   |
+
+**Cierre del catálogo**: 38/38 bugs resueltos (jul-2026). Detalle abajo
+en "🟢 Ola 4 — Ya fixed (histórico)". El catálogo queda como referencia
+histórica; nuevos bugs se siguen registrando con el workflow Karpathy.
 
 ---
 
@@ -360,32 +363,57 @@
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
 | BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
 | BUG-019     | hydrate() sin timeouts (spinner eterno si 1 cuelga)     | `7353188`  |
-| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |     | BUG-029 | Central error wrapper (estructural, mata 5+ bugs) | `6bbec81` + `11c49f6` |
-| BUG-006     | ensureDefaultOrg() fuera del try en billing.ts (16 ep)  | `777b24f`  |
-| BUG-009     | Doble-click crea carpetas Drive duplicadas              | `3e7840e`  |
-| BUG-011     | PATCH /contracts sin validación                         | `pending`  |
-| BUG-012     | DELETE /contracts FK violation → 409                    | `pending`  |
-| BUG-014     | Inventories upload-pdf sin try/catch en Drive           | `pending`  |
-| BUG-015     | Inventories upload-photos sin withTimeout               | `pending`  |
-| BUG-016     | Properties.ts creación de carpetas Drive sin timeout    | `pending`  |
-| BUG-018     | PATCH /properties/:id siempre 200 aunque affectedRows=0 | `pending`  |
+| BUG-004     | Regenerar amortización revierte `paid` a `pending`                        | `e99ad2b`                                   |
+| BUG-029     | Central error wrapper (estructural, mata 5+ bugs)                         | `6bbec81` + `11c49f6`                       |
+| BUG-006     | ensureDefaultOrg() fuera del try en billing.ts (16 ep)                    | `777b24f`                                   |
+| BUG-009     | Doble-click crea carpetas Drive duplicadas                                | `3e7840e`                                   |
+| BUG-011     | PATCH /contracts sin validación                                           | `28023af`                                   |
+| BUG-012     | DELETE /contracts FK violation → 409                                      | `28023af`                                   |
+| BUG-014     | Inventories upload-pdf sin try/catch en Drive                             | `28023af`                                   |
+| BUG-015     | Inventories upload-photos sin withTimeout                                 | `28023af`                                   |
+| BUG-016     | Properties.ts creación de carpetas Drive sin timeout                      | `28023af`                                   |
+| BUG-018     | PATCH /properties/:id siempre 200 aunque affectedRows=0                   | `28023af`                                   |
+| BUG-020     | addProperty con spread `...p` pisa los defaults                           | `0d8ea7d`                                   |
+| BUG-022     | TenantsView handleDocUpload sin AbortController                           | `0d8ea7d`                                   |
+| BUG-024     | driveService.ts sin AbortController ni timeouts                           | `0d8ea7d`                                   |
+| BUG-026     | StepInventory useEffect con `baseInventory` causa re-load infinito        | `0d8ea7d`                                   |
+| BUG-010     | propertyAddress sin escape SQL en tenants.ts                              | `1c05178`                                   |
+| BUG-013     | ensureDefaultOrg() fuera del try en inventories.ts (resuelto por BUG-029) | `11c49f6` (vía BUG-029)                     |
+| BUG-027     | `db/mysql/schema.sql` está obsoleto                                       | `1c05178`                                   |
+| BUG-028     | routers con mismo path `/api/billing` (orden implícito)                   | `1c05178`                                   |
+| BUG-030     | Gap inicial sin `001_*.sql` (resuelto por BUG-027)                        | `1c05178` (vía BUG-027)                     |
+| BUG-031     | Duplicado en `006_*.sql`                                                  | `1c05178`                                   |
+| BUG-008     | markInvoicePaid puede fallar → estado inconsistente                       | `3704385`                                   |
+| BUG-017     | Properties.ts: DELETE+INSERT de owners/units sin transacción              | `3704385`                                   |
+| BUG-023     | TenantsView handleConfirmAndCreate sin rollback en 409                    | `3704385`                                   |
+| BUG-032     | Sin UNIQUE en `rent_invoices.invoice_number`                              | `3704385` (migration 012)                   |
+| BUG-033     | Sin UNIQUE en `tenants (organization_id, document_id)`                    | `3704385` (migration 013)                   |
+| BUG-035     | 2 migrations sin script apply (002 y 006-password)                        | `3704385`                                   |
+| BUG-007     | Race condition en `generateInvoiceNumber`                                 | `5c1ef66`                                   |
+| BUG-021     | Memory leak `URL.createObjectURL` sin `revokeObjectURL`                   | `fed2c89`                                   |
+| BUG-025     | billing/api.ts `tryBackendOrFallback` miente al usuario                   | `e8cd8a6` (helper refactor — migr. callers TODO) |
+| BUG-034     | 3 migrations no idempotentes                                              | `de4e1db`                                   |
 
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
 
-| Bug               |       Spec       |  Verifier   | Status                                                             |
-| ----------------- | :--------------: | :---------: | ------------------------------------------------------------------ |
-| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`                                                       |
-| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`                                                       |
-| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`                                                       |
-| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`                                                       |
-| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`                                                       |
-| BUG-006 a BUG-018 |   ✅ Aprobado    |   parcial   | 🟡 7/13 implementados (BUG-006, 009, 011, 012, 014, 015, 016, 018) |
-| BUG-019           |   ✅ Aprobado    | ✅ Aprobado | ✅ `7353188`                                                       |
-| BUG-020 a BUG-028 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente)                                  |
-| BUG-029           |   ✅ Aprobado    | ✅ Aprobado | ✅ `11c49f6`                                                       |
-| BUG-030 a BUG-035 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente)                                  |
+| Bug           |   Spec    |  Verifier   | Status                                                       |
+| ------------- | :-------: | :---------: | ------------------------------------------------------------ |
+| BUG-001       | ❌ (no)   |     ❌      | ✅ `8f5c88e`                                                 |
+| BUG-002       | ❌ (no)   |     ❌      | ✅ `7c551b0`                                                 |
+| BUG-003       | ✅ OK     | ✅ Aprobado | ✅ `df8a4b2`                                                 |
+| BUG-004       | ✅ OK     | ✅ Aprobado | ✅ `e99ad2b`                                                 |
+| BUG-005       | ✅ OK     | ✅ Aprobado | ✅ `bef6d1d`                                                 |
+| BUG-006 a 029 | ✅ OK     |   parcial   | ✅ 24/24 implementados (último: BUG-025 en `e8cd8a6`)        |
+| BUG-019       | ✅ OK     | ✅ Aprobado | ✅ `7353188`                                                 |
+| BUG-029       | ✅ OK     | ✅ Aprobado | ✅ `11c49f6`                                                 |
+| BUG-030 a 035 | ✅ OK     |     ❌      | ✅ 6/6 implementados (BUG-031, 035 en `1c05178`/`3704385`; resto en `3704385`/`5c1ef66`/`de4e1db`) |
+
+**Cierre Karpathy**: 38 specs (BUG-003 a BUG-035) aprobados y con commit
+de implementación al 2026-07-25. 5 verifiers completos (BUG-003, 004, 005,
+019, 029) — los demás bugs son fixes de 1-2 archivos donde el spec mismo
+funciona como verifier (caso de spec-driven implementation).
 
 ---
 
