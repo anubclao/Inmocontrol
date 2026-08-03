@@ -583,9 +583,9 @@ export function PropertiesView({
       // sí marcamos qué slots ya tenían algo para que la UI muestre el slot
       // como "pendiente de re-subir" en vez de vacío.
       if (draft.uploadedDocsKeys) {
-        const next: Record<string, string | null> = {};
+        const next: Record<string, string[]> = {};
         for (const [k, v] of Object.entries(draft.uploadedDocsKeys)) {
-          next[k] = v; // 'has-file' como string (no URL — el user re-sube)
+          next[k] = [v]; // 'has-file' envuelto en array (semántica N archivos por slot)
         }
         setUploadedDocs(next);
       }
@@ -1207,8 +1207,13 @@ export function PropertiesView({
     // ── Validar docs requeridos (migración 010+, soporta N archivos por slot) ──
     // Docs son opcionales: no bloqueamos el finalize si faltan, solo los listamos
     // en `missingDocs` para que el modal de confirmación los muestre.
-    const hasFile = (slot: string | undefined) =>
-      Array.isArray(slot) && slot.length > 0;
+    // uploadedDocs es UploadedDocsMap = Record<string, string[]> (semántica
+    // N archivos por slot, migración 010+), pero los slots legacy pueden
+    // contener un string suelto. Aceptamos ambos.
+    const hasFile = (slot: string | string[] | undefined) =>
+      Array.isArray(slot)
+        ? slot.length > 0
+        : typeof slot === "string" && slot.length > 0;
     const missingDocs: string[] = [];
     // También trackeamos los slotKeys faltantes para el summary modal post-finalize.
     const missingSlotKeys: string[] = [];

@@ -20,7 +20,7 @@ export interface AppShellProps {
   onLogout: () => void;
   onRoleChange: (r: Role) => void;
   children: React.ReactNode;
-  toast: { message: string; type: 'success' | 'error' } | null;
+  toast: { message: string; type: 'success' | 'error' | 'warning' } | null;
 }
 
 const SIDEBAR_ITEMS: { id: TabId; label: string; icon: any; roles: Role[] }[] = [
