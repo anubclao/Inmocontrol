@@ -903,15 +903,45 @@ async function generateInvoiceNumber(
   propertyId: string,
   period: string,
 ): Promise<string> {
-  const [rows] = await pool.query(
-    `SELECT COUNT(*) AS n FROM rent_invoices
-     WHERE organization_id = ? AND property_id = ? AND period = ?`,
-    [orgId, propertyId, period],
-  );
-  const n = Number((rows as any[])[0]?.n ?? 0) + 1;
-  // YYYY-MM → YYYYMM (sin guión)
+  // BUG-007: el patrón "SELECT COUNT(*) + 1" no es atómico. Bajo
+  // concurrencia, dos POSTs simultáneos al mismo (property, period) leen
+  // el mismo `n` y generan el mismo `invoice_number`. Defensa en
+  // profundidad: UNIQUE constraint en (org, prop, period, invoice_number)
+  // (migration 012) + este loop que verifica que el candidato no exista
+  // antes de devolverlo.
+  //
+  // Si por algún motivo aparece un duplicado (e.g. la UNIQUE no se aplicó
+  // o la fila se insertó manualmente), el loop prueba con n+1, n+2, etc.
+  // hasta encontrar un número libre. Después de 5 intentos, falla.
   const periodCompact = period.replace("-", "");
-  return `CC-${periodCompact}-${String(n).padStart(3, "0")}`;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    // 1. Contar facturas existentes para ESTE property+period (ignora NULLs)
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS n FROM rent_invoices
+       WHERE organization_id = ? AND property_id = ? AND period = ?
+         AND invoice_number IS NOT NULL`,
+      [orgId, propertyId, period],
+    );
+    const n = Number((rows as any[])[0]?.n ?? 0) + attempt;
+    const candidate = `CC-${periodCompact}-${String(n).padStart(3, "0")}`;
+
+    // 2. Verificar que `candidate` no exista (defensa contra gaps en la serie
+    //    o duplicados si la UNIQUE constraint no se aplicó por algún motivo).
+    const [existing] = await pool.query(
+      `SELECT 1 FROM rent_invoices
+       WHERE organization_id = ? AND property_id = ? AND period = ?
+         AND invoice_number = ?
+       LIMIT 1`,
+      [orgId, propertyId, period, candidate],
+    );
+    if ((existing as any[]).length === 0) {
+      return candidate;
+    }
+    // Si existe, otro POST ganó la carrera. Probar con n+1.
+  }
+  throw new Error(
+    `generateInvoiceNumber: 5 intentos agotados para ${orgId}/${propertyId}/${period}. Posible drift en la serie — revisá manualmente.`,
+  );
 }
 
 function rowToInvoice(r: any): RentInvoice {
@@ -1113,15 +1143,44 @@ router.post("/invoices/send", async (req, res) => {
     let invoiceNumber = r.invoice_number as string | null;
     if (!invoiceNumber) {
       invoiceNumber = await generateInvoiceNumber(orgId, propertyId, period);
-      await pool.query(
-        `UPDATE rent_invoices
-         SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
-           WHEN status = 'paid' THEN 'paid'  -- si ya estaba pagado (caso edge), no bajamos a pending
-           ELSE 'pending'
-         END
-         WHERE contract_id = ? AND period = ?`,
-        [invoiceNumber, contractId, period],
-      );
+      // BUG-007: el UNIQUE constraint en (org, property, period, invoice_number)
+      // puede tirar ER_DUP_ENTRY si dos POSTs simultáneos generaron el mismo
+      // número (el loop de generateInvoiceNumber no es perfecto bajo race
+      // extremo). Si pasa, retry UNA vez con un número nuevo.
+      try {
+        await pool.query(
+          `UPDATE rent_invoices
+           SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
+             WHEN status = 'paid' THEN 'paid'  -- si ya estaba pagado (caso edge), no bajamos a pending
+             ELSE 'pending'
+           END
+           WHERE contract_id = ? AND period = ?`,
+          [invoiceNumber, contractId, period],
+        );
+      } catch (err: any) {
+        if (
+          err?.code === "ER_DUP_ENTRY" &&
+          err?.message?.includes("uniq_invoice_org_prop_period_number")
+        ) {
+          // Re-generar y retry una vez
+          invoiceNumber = await generateInvoiceNumber(
+            orgId,
+            propertyId,
+            period,
+          );
+          await pool.query(
+            `UPDATE rent_invoices
+             SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
+               WHEN status = 'paid' THEN 'paid'
+               ELSE 'pending'
+             END
+             WHERE contract_id = ? AND period = ?`,
+            [invoiceNumber, contractId, period],
+          );
+        } else {
+          throw err;
+        }
+      }
     } else {
       // Ya tenía invoice_number (re-envío): solo actualizar sent_at si es null
       await pool.query(

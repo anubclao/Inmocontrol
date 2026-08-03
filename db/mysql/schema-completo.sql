@@ -535,9 +535,11 @@ CREATE TABLE IF NOT EXISTS rent_invoices (
   updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uniq_invoice_contract_period (contract_id, period),
-  -- BUG-032: UNIQUE constraint evita duplicar invoice_number bajo concurrencia.
+  -- BUG-007/032: UNIQUE compuesto (org, property, period, invoice_number)
+  -- permite que cada property tenga su propio contador por mes pero
+  -- rechaza duplicados dentro del mismo (org, property, period).
   -- Migration 012 aplica lo mismo en DBs existentes.
-  UNIQUE KEY uniq_invoice_number (invoice_number),
+  UNIQUE KEY uniq_invoice_org_prop_period_number (organization_id, property_id, period, invoice_number),
   KEY invoices_org_idx (organization_id),
   KEY invoices_property_period_idx (property_id, period),
   KEY invoices_invoice_number_idx (invoice_number),

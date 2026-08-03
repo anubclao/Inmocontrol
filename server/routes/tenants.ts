@@ -108,11 +108,9 @@ router.post("/", async (req, res) => {
       };
 
     if (!propertyId || !name || !idNumber) {
-      res
-        .status(400)
-        .json({
-          error: "Faltan campos requeridos: propertyId, name, idNumber",
-        });
+      res.status(400).json({
+        error: "Faltan campos requeridos: propertyId, name, idNumber",
+      });
       return;
     }
 
@@ -631,11 +629,9 @@ router.post("/:id/link-drive-folder", async (req, res) => {
       return;
     }
     if (meta.data.mimeType !== "application/vnd.google-apps.folder") {
-      res
-        .status(400)
-        .json({
-          error: `El ID apunta a un archivo (${meta.data.name}), no a una carpeta`,
-        });
+      res.status(400).json({
+        error: `El ID apunta a un archivo (${meta.data.name}), no a una carpeta`,
+      });
       return;
     }
 

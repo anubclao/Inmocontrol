@@ -359,13 +359,11 @@ router.post("/", async (req, res) => {
         "[POST /api/properties] Error resolviendo orgId:",
         err.message,
       );
-      res
-        .status(500)
-        .json({
-          error:
-            "Error resolviendo organización por defecto: " +
-            (err.message ?? String(err)),
-        });
+      res.status(500).json({
+        error:
+          "Error resolviendo organización por defecto: " +
+          (err.message ?? String(err)),
+      });
       return;
     }
 
@@ -473,9 +471,10 @@ router.post("/", async (req, res) => {
           // Capturar el primer owner (si hay) para usarlo como "primer owner" legacy
           // al parsear documentos con keys legacy.
           const ownerIds: string[] = [];
-          await conn.query(`DELETE FROM property_owners WHERE property_id = ?`, [
-            propertyId,
-          ]);
+          await conn.query(
+            `DELETE FROM property_owners WHERE property_id = ?`,
+            [propertyId],
+          );
           for (let i = 0; i < owners.length; i++) {
             const o = owners[i] ?? {};
             const ownerId =
@@ -561,7 +560,8 @@ router.post("/", async (req, res) => {
               typeof u.id === "string" && u.id && !u.id.startsWith("wizard-")
                 ? u.id
                 : crypto.randomUUID();
-            const folioMatricula = u.folioMatricula ?? u.folio_matricula ?? null;
+            const folioMatricula =
+              u.folioMatricula ?? u.folio_matricula ?? null;
             const areaM2 = u.areaM2 ?? u.area_m2 ?? null;
             const position = Number(u.position) || i + 1;
             await conn.query(

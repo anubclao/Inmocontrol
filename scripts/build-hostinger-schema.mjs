@@ -16,11 +16,11 @@
 // no toca datos. Para resetear en Hostinger basta con `DROP DATABASE` y
 // rerun este script.
 
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
-const basePath = path.resolve('db/mysql/schema-completo.sql');
-const outPath  = path.resolve('db/mysql/schema-hostinger.sql');
+const basePath = path.resolve("db/mysql/schema-completo.sql");
+const outPath = path.resolve("db/mysql/schema-hostinger.sql");
 
 // Lo que agregamos por encima del schema base: tabla property_charges (fresh).
 // NO incluye el INSERT del backfill porque este script corre contra una DB
@@ -109,17 +109,17 @@ const header = `-- =============================================================
 -- ============================================================================
 `;
 
-const base = fs.readFileSync(basePath, 'utf8');
+const base = fs.readFileSync(basePath, "utf8");
 
 // Removemos el header original del schema-completo.sql para evitar duplicar
 // bloques de comentarios. El primer CREATE TABLE marca el inicio del DDL.
-const ddlStart = base.indexOf('CREATE TABLE IF NOT EXISTS organizations');
+const ddlStart = base.indexOf("CREATE TABLE IF NOT EXISTS organizations");
 
 const out =
   header +
-  '\n' +
-  base.slice(ddlStart) +  // solo DDL + checks (omite el header viejo)
-  '\n' +
+  "\n" +
+  base.slice(ddlStart) + // solo DDL + checks (omite el header viejo)
+  "\n" +
   extras;
 
 fs.writeFileSync(outPath, out);

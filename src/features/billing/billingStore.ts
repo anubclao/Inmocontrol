@@ -12,8 +12,8 @@
  * El log de acciones es APPEND-ONLY: nunca se borran ni modifican entries.
  */
 
-import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   AmortizationRow,
   BillingPolicy,
@@ -24,8 +24,8 @@ import type {
   PropertyDiscount,
   RentIncrease,
   RentInvoice,
-} from './types';
-import { chargeToDiscount, genId } from './types';
+} from "./types";
+import { chargeToDiscount, genId } from "./types";
 
 interface BillingState {
   /** BillingPolicy indexada por propertyId. */
@@ -61,20 +61,29 @@ interface BillingState {
   /**
    * @deprecated Mantener por compat. Los cargos nuevos van a `addCharge`.
    */
-  addDiscount: (propertyId: string, discount: Omit<PropertyDiscount, 'id' | 'recordedAt'>) => void;
+  addDiscount: (
+    propertyId: string,
+    discount: Omit<PropertyDiscount, "id" | "recordedAt">,
+  ) => void;
   /**
    * @deprecated Mantener por compat. Para cargos nuevos usar `getCharges`.
    */
   getDiscounts: (propertyId: string) => PropertyDiscount[];
 
   /** Registra una novedad de cargo en la propiedad. */
-  addCharge: (propertyId: string, charge: Omit<PropertyCharge, 'id' | 'recordedAt'>) => void;
+  addCharge: (
+    propertyId: string,
+    charge: Omit<PropertyCharge, "id" | "recordedAt">,
+  ) => void;
   /** Devuelve todas las novedades (cargo) de la propiedad. */
   getCharges: (propertyId: string) => PropertyCharge[];
   /** Elimina una novedad por id. */
   removeCharge: (propertyId: string, chargeId: string) => void;
 
-  addIncrease: (propertyId: string, increase: Omit<RentIncrease, 'id' | 'recordedAt'>) => void;
+  addIncrease: (
+    propertyId: string,
+    increase: Omit<RentIncrease, "id" | "recordedAt">,
+  ) => void;
   getIncreases: (propertyId: string) => RentIncrease[];
 
   setInvoices: (propertyId: string, invoices: RentInvoice[]) => void;
@@ -93,7 +102,7 @@ interface BillingState {
     type: PropertyActionType,
     description: string,
     actorName: string,
-    payload?: Record<string, any>
+    payload?: Record<string, any>,
   ) => PropertyAction;
   getActions: (propertyId: string) => PropertyAction[];
 
@@ -117,12 +126,16 @@ export const useBillingStore = create<BillingState>()(
       ...initialState,
 
       setBillingPolicy: (propertyId, policy) =>
-        set((s) => ({ billingPolicies: { ...s.billingPolicies, [propertyId]: policy } })),
+        set((s) => ({
+          billingPolicies: { ...s.billingPolicies, [propertyId]: policy },
+        })),
 
       getBillingPolicy: (propertyId) => get().billingPolicies[propertyId],
 
       setAmortization: (contractId, rows) =>
-        set((s) => ({ amortization: { ...s.amortization, [contractId]: rows } })),
+        set((s) => ({
+          amortization: { ...s.amortization, [contractId]: rows },
+        })),
 
       getAmortization: (contractId) => get().amortization[contractId] ?? [],
 
@@ -138,12 +151,15 @@ export const useBillingStore = create<BillingState>()(
         }),
 
       addDiscount: (propertyId, discount) => {
-        const id = genId('disc-');
+        const id = genId("disc-");
         const recordedAt = new Date().toISOString();
         set((s) => ({
           discounts: {
             ...s.discounts,
-            [propertyId]: [...(s.discounts[propertyId] ?? []), { id, recordedAt, ...discount }],
+            [propertyId]: [
+              ...(s.discounts[propertyId] ?? []),
+              { id, recordedAt, ...discount },
+            ],
           },
         }));
       },
@@ -151,12 +167,15 @@ export const useBillingStore = create<BillingState>()(
       getDiscounts: (propertyId) => get().discounts[propertyId] ?? [],
 
       addCharge: (propertyId, charge) => {
-        const id = genId('chg-');
+        const id = genId("chg-");
         const recordedAt = new Date().toISOString();
         set((s) => ({
           charges: {
             ...s.charges,
-            [propertyId]: [...(s.charges[propertyId] ?? []), { id, recordedAt, ...charge }],
+            [propertyId]: [
+              ...(s.charges[propertyId] ?? []),
+              { id, recordedAt, ...charge },
+            ],
           },
         }));
       },
@@ -167,18 +186,23 @@ export const useBillingStore = create<BillingState>()(
         set((s) => ({
           charges: {
             ...s.charges,
-            [propertyId]: (s.charges[propertyId] ?? []).filter((c) => c.id !== chargeId),
+            [propertyId]: (s.charges[propertyId] ?? []).filter(
+              (c) => c.id !== chargeId,
+            ),
           },
         }));
       },
 
       addIncrease: (propertyId, increase) => {
-        const id = genId('inc-');
+        const id = genId("inc-");
         const recordedAt = new Date().toISOString();
         set((s) => ({
           increases: {
             ...s.increases,
-            [propertyId]: [...(s.increases[propertyId] ?? []), { id, recordedAt, ...increase }],
+            [propertyId]: [
+              ...(s.increases[propertyId] ?? []),
+              { id, recordedAt, ...increase },
+            ],
           },
         }));
       },
@@ -222,7 +246,9 @@ export const useBillingStore = create<BillingState>()(
         set((s) => ({
           payouts: {
             ...s.payouts,
-            [propertyId]: (s.payouts[propertyId] ?? []).filter((p) => p.id !== payoutId),
+            [propertyId]: (s.payouts[propertyId] ?? []).filter(
+              (p) => p.id !== payoutId,
+            ),
           },
         })),
 
@@ -230,7 +256,7 @@ export const useBillingStore = create<BillingState>()(
 
       recordAction: (propertyId, type, description, actorName, payload) => {
         const action: PropertyAction = {
-          id: genId('act-'),
+          id: genId("act-"),
           propertyId,
           type,
           description,
@@ -252,18 +278,40 @@ export const useBillingStore = create<BillingState>()(
       reset: () => set(initialState),
     }),
     {
-      name: 'inmocontrol:billing:v1',
+      name: "inmocontrol:billing:v1",
       storage: createJSONStorage(() => localStorage),
     },
   ),
 );
 
 // Selectores finos
-export const selectBillingPolicyById = (s: BillingState, propertyId: string) => s.billingPolicies[propertyId];
-export const selectAmortizationByContractId = (s: BillingState, contractId: string) => s.amortization[contractId] ?? [];
-export const selectDiscountsByPropertyId = (s: BillingState, propertyId: string) => s.discounts[propertyId] ?? [];
-export const selectIncreasesByPropertyId = (s: BillingState, propertyId: string) => s.increases[propertyId] ?? [];
-export const selectInvoicesByPropertyId = (s: BillingState, propertyId: string) => s.invoices[propertyId] ?? [];
-export const selectPayoutsByPropertyId = (s: BillingState, propertyId: string) => s.payouts[propertyId] ?? [];
-export const selectActionsByPropertyId = (s: BillingState, propertyId: string) => s.actions[propertyId] ?? [];
-export const selectChargesByPropertyId = (s: BillingState, propertyId: string) => s.charges[propertyId] ?? [];
+export const selectBillingPolicyById = (s: BillingState, propertyId: string) =>
+  s.billingPolicies[propertyId];
+export const selectAmortizationByContractId = (
+  s: BillingState,
+  contractId: string,
+) => s.amortization[contractId] ?? [];
+export const selectDiscountsByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.discounts[propertyId] ?? [];
+export const selectIncreasesByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.increases[propertyId] ?? [];
+export const selectInvoicesByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.invoices[propertyId] ?? [];
+export const selectPayoutsByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.payouts[propertyId] ?? [];
+export const selectActionsByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.actions[propertyId] ?? [];
+export const selectChargesByPropertyId = (
+  s: BillingState,
+  propertyId: string,
+) => s.charges[propertyId] ?? [];

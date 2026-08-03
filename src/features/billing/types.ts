@@ -19,31 +19,31 @@
 
 /** Bancos principales de Colombia. Se usa como selector al parametrizar. */
 export const COLOMBIAN_BANKS = [
-  'Bancolombia',
-  'Banco de Bogotá',
-  'Davivienda',
-  'BBVA Colombia',
-  'Banco de Occidente',
-  'Banco Popular',
-  'Banco Caja Social',
-  'Banco Agrario',
-  'Banco AV Villas',
-  'Banco Falabella',
-  'Banco Pichincha',
-  'Banco GNB Sudameris',
-  'Banco Itaú',
-  'Banco Serfinanza',
-  'Banco W',
-  'Banco Coomeva',
-  'Banco ProCredit',
-  'Banco Finandina',
-  'Banco Mibanco',
-  'Banco Santander de Negocios',
-  'Citibank Colombia',
-  'Banco de Comercio Exterior (Bancóldex)',
-  'Nequi',
-  'Daviplata',
-  'Bancolombia A La Mano',
+  "Bancolombia",
+  "Banco de Bogotá",
+  "Davivienda",
+  "BBVA Colombia",
+  "Banco de Occidente",
+  "Banco Popular",
+  "Banco Caja Social",
+  "Banco Agrario",
+  "Banco AV Villas",
+  "Banco Falabella",
+  "Banco Pichincha",
+  "Banco GNB Sudameris",
+  "Banco Itaú",
+  "Banco Serfinanza",
+  "Banco W",
+  "Banco Coomeva",
+  "Banco ProCredit",
+  "Banco Finandina",
+  "Banco Mibanco",
+  "Banco Santander de Negocios",
+  "Citibank Colombia",
+  "Banco de Comercio Exterior (Bancóldex)",
+  "Nequi",
+  "Daviplata",
+  "Bancolombia A La Mano",
 ] as const;
 
 export type ColombianBank = (typeof COLOMBIAN_BANKS)[number];
@@ -52,10 +52,10 @@ export type ColombianBank = (typeof COLOMBIAN_BANKS)[number];
 export interface BankAccount {
   id: string;
   bank: ColombianBank | string;
-  accountType: 'savings' | 'checking';
-  accountNumber: string;          // últimos 4 dígitos o completo, depende del agente
-  holderName: string;              // titular de la cuenta
-  holderIdNumber: string;          // cédula del titular
+  accountType: "savings" | "checking";
+  accountNumber: string; // últimos 4 dígitos o completo, depende del agente
+  holderName: string; // titular de la cuenta
+  holderIdNumber: string; // cédula del titular
   /** Si hay varias cuentas, el agente puede decidir cuál mostrar primero. */
   isPrimary?: boolean;
   notes?: string;
@@ -64,15 +64,15 @@ export interface BankAccount {
 // ─── Póliza (seguro de arrendamiento) ──────────────────────────────────
 
 export interface PolicyInfo {
-  insurer: string;                 // aseguradora (Sura, Bolívar, Mapfre, etc.)
+  insurer: string; // aseguradora (Sura, Bolívar, Mapfre, etc.)
   policyNumber: string;
-  startDate: string;               // ISO date
+  startDate: string; // ISO date
   endDate: string;
-  premiumAmount: number;           // valor de la prima
+  premiumAmount: number; // valor de la prima
   /** URL/dataURL del PDF de aprobación subido por el agente. */
   approvalPdfDataUrl?: string;
-  approvedAt: string;              // ISO timestamp
-  approvedBy: string;              // nombre del agente
+  approvedAt: string; // ISO timestamp
+  approvedBy: string; // nombre del agente
   notes?: string;
 }
 
@@ -87,22 +87,22 @@ export interface BillingPolicy {
   propertyId: string;
 
   // ─── Canon y administración base ───────────────────────
-  rentAmount: number;               // canon mensual en COP
-  adminFee: number;                // cuota de administración en COP
+  rentAmount: number; // canon mensual en COP
+  adminFee: number; // cuota de administración en COP
 
   // ─── Reglas de mora (descuentos al inquilino si paga tarde) ──
   /** % de mora si paga entre día 11 y 20 del mes. Default 5. */
-  lateFeeMidPct: number;            // ej: 5
+  lateFeeMidPct: number; // ej: 5
   /** % de mora si paga entre día 21 y 30 del mes. Default 10. */
-  lateFeeLatePct: number;           // ej: 10
+  lateFeeLatePct: number; // ej: 10
   /** Día límite para pago "sin mora". Default 10. */
-  graceDay: number;                 // ej: 10
+  graceDay: number; // ej: 10
 
   // ─── Reglas de incremento anual ──────────────────────────
   /** Si se aplica IPC anual al canon. Default true. */
   applyAnnualIpc: boolean;
   /** % de IPC esperado (referencial; el real se toma del DANE). Default 0. */
-  expectedIpcPct: number;           // ej: 5
+  expectedIpcPct: number; // ej: 5
   /** Si se aplica el mismo IPC a la administración. Default true. */
   applyIpcToAdmin: boolean;
 
@@ -111,7 +111,7 @@ export interface BillingPolicy {
   allowAdminChanges: boolean;
 
   // ─── Datos bancarios para el pago ──────────────────────
-  primaryBankAccountId?: string;   // ref a BankAccount.id
+  primaryBankAccountId?: string; // ref a BankAccount.id
   bankAccounts: BankAccount[];
 
   // ─── Póliza (seguro) ────────────────────────────────────
@@ -120,7 +120,7 @@ export interface BillingPolicy {
   // ─── Metadatos ─────────────────────────────────────────
   createdAt: string;
   updatedAt: string;
-  createdBy: string;                // nombre del agente
+  createdBy: string; // nombre del agente
 }
 
 // ─── Tabla de amortización ────────────────────────────────────────────
@@ -141,10 +141,10 @@ export interface AmortizationRow {
   dueDate: string;
 
   // ─── Composición del cobro ──────────────────────────────
-  baseRent: number;                 // canon base del mes
-  baseAdmin: number;                // administración base del mes
-  adminAdjustment: number;          // + si hay cambio de administración en este mes
-  ipcAdjustment: number;            // + si el IPC anual aplica este mes
+  baseRent: number; // canon base del mes
+  baseAdmin: number; // administración base del mes
+  adminAdjustment: number; // + si hay cambio de administración en este mes
+  ipcAdjustment: number; // + si el IPC anual aplica este mes
   /** Total sin mora (lo que paga si llega a tiempo). */
   subtotal: number;
 
@@ -166,9 +166,9 @@ export interface AmortizationRow {
   totalLate: number;
 
   // ─── Estado ─────────────────────────────────────────────
-  status: 'pending' | 'partial' | 'paid' | 'overdue';
-  paidAt?: string;                  // ISO timestamp del pago
-  paidAmount?: number;              // monto pagado
+  status: "pending" | "partial" | "paid" | "overdue";
+  paidAt?: string; // ISO timestamp del pago
+  paidAmount?: number; // monto pagado
 }
 
 // ─── Novedades de cargos a la propiedad (unificado) ────────────────────
@@ -182,35 +182,35 @@ export interface AmortizationRow {
  * el inquilino debe asumir. El resto coincide con `DiscountType` viejo.
  */
 export type ChargeType =
-  | 'public_services'      // pago de servicios públicos
-  | 'maintenance'          // arreglos locativos / mantenimiento general
-  | 'repair'               // reparación imputable al inquilino (daño)
-  | 'tax'                  // impuestos (predial, etc.)
-  | 'insurance'            // póliza de seguro
-  | 'commission'           // comisión adicional / ajuste
-  | 'parking'              // parqueo adicional
-  | 'other';
+  | "public_services" // pago de servicios públicos
+  | "maintenance" // arreglos locativos / mantenimiento general
+  | "repair" // reparación imputable al inquilino (daño)
+  | "tax" // impuestos (predial, etc.)
+  | "insurance" // póliza de seguro
+  | "commission" // comisión adicional / ajuste
+  | "parking" // parqueo adicional
+  | "other";
 
 /** Etiqueta legible para el tipo de cargo. */
 export const CHARGE_TYPE_LABELS: Record<ChargeType, string> = {
-  public_services: 'Servicios públicos',
-  maintenance:     'Mantenimiento',
-  repair:          'Reparación (cargo al inquilino)',
-  tax:             'Impuestos',
-  insurance:       'Póliza / seguro',
-  commission:      'Comisión agencia',
-  parking:         'Parqueo adicional',
-  other:           'Otro',
+  public_services: "Servicios públicos",
+  maintenance: "Mantenimiento",
+  repair: "Reparación (cargo al inquilino)",
+  tax: "Impuestos",
+  insurance: "Póliza / seguro",
+  commission: "Comisión agencia",
+  parking: "Parqueo adicional",
+  other: "Otro",
 };
 
 /** A quién se le imputa el cargo. Define en qué documentos aparece. */
-export type ChargedTo = 'owner' | 'tenant' | 'both';
+export type ChargedTo = "owner" | "tenant" | "both";
 
 /** Etiqueta legible para el destinatario del cargo. */
 export const CHARGED_TO_LABELS: Record<ChargedTo, string> = {
-  owner:  'Propietario (descuenta del estado de cuenta)',
-  tenant: 'Inquilino (se suma a la cuenta de cobro)',
-  both:   'Ambos (aparece en los dos documentos)',
+  owner: "Propietario (descuenta del estado de cuenta)",
+  tenant: "Inquilino (se suma a la cuenta de cobro)",
+  both: "Ambos (aparece en los dos documentos)",
 };
 
 /**
@@ -226,16 +226,16 @@ export const CHARGED_TO_LABELS: Record<ChargedTo, string> = {
  */
 export function defaultChargedToFor(type: ChargeType): ChargedTo {
   switch (type) {
-    case 'public_services':
-    case 'maintenance':
-    case 'tax':
-    case 'insurance':
-    case 'commission':
-    case 'other':
-      return 'owner';
-    case 'repair':
-    case 'parking':
-      return 'tenant';
+    case "public_services":
+    case "maintenance":
+    case "tax":
+    case "insurance":
+    case "commission":
+    case "other":
+      return "owner";
+    case "repair":
+    case "parking":
+      return "tenant";
   }
 }
 
@@ -250,10 +250,10 @@ export function defaultChargedToFor(type: ChargeType): ChargedTo {
 export interface PropertyCharge {
   id: string;
   propertyId: string;
-  period: string;                   // 'YYYY-MM'
+  period: string; // 'YYYY-MM'
   type: ChargeType;
   description: string;
-  amount: number;                   // COP, sin decimales
+  amount: number; // COP, sin decimales
   chargedTo: ChargedTo;
   /**
    * Si true y `chargedTo !== 'owner'`, el monto entra al subtotal de la
@@ -261,9 +261,9 @@ export interface PropertyCharge {
    * CC (útil para periodos ya cerrados).
    */
   appliesToInvoice: boolean;
-  attachmentUrl?: string;           // opcional: URL del recibo/factura
-  recordedAt: string;               // ISO timestamp
-  recordedBy: string;               // nombre del agente
+  attachmentUrl?: string; // opcional: URL del recibo/factura
+  recordedAt: string; // ISO timestamp
+  recordedBy: string; // nombre del agente
 }
 
 // ─── Descuentos al propietario (LEGACY, conservado por compat) ────────
@@ -285,10 +285,10 @@ export interface PropertyDiscount {
   type: DiscountType;
   description: string;
   amount: number;
-  monthPeriod: string;              // 'YYYY-MM' — el mes al que aplica
-  attachmentUrl?: string;          // opcional: dataURL del recibo
-  recordedAt: string;               // ISO timestamp
-  recordedBy: string;               // nombre del agente
+  monthPeriod: string; // 'YYYY-MM' — el mes al que aplica
+  attachmentUrl?: string; // opcional: dataURL del recibo
+  recordedAt: string; // ISO timestamp
+  recordedBy: string; // nombre del agente
 }
 
 /**
@@ -317,7 +317,7 @@ export interface RentIncrease {
   id: string;
   propertyId: string;
   contractId: string;
-  type: 'admin_change' | 'ipc_annual';
+  type: "admin_change" | "ipc_annual";
   description: string;
   /** Si es cambio de administración: el nuevo valor. Si es IPC: el %. */
   amount: number;
@@ -332,10 +332,10 @@ export interface RentIncrease {
 /** Estado de cuenta del propietario para una propiedad, en un período. */
 export interface AccountStatement {
   propertyId: string;
-  period: string;                   // 'YYYY-MM'
+  period: string; // 'YYYY-MM'
 
   /** Ingresos del propietario en el mes. */
-  grossIncome: number;              // canon + admin cobrados al inquilino
+  grossIncome: number; // canon + admin cobrados al inquilino
   /** Descuentos aplicados (cargos chargedTo='owner' o 'both' del mes). */
   totalDiscounts: number;
   /** Neto a pagar al propietario (= grossIncome - totalDiscounts). */
@@ -405,13 +405,13 @@ export interface OwnerPayout {
  */
 export interface OwnerStatement {
   propertyId: string;
-  period: string;                   // 'YYYY-MM'
+  period: string; // 'YYYY-MM'
 
   // ─── Ingresos del mes (cargos al inquilino, pagados) ──
-  grossRent: number;                // canon del mes
-  grossAdmin: number;               // cuota de administración del mes
-  grossLateFee: number;             // mora cobrada al inquilino
-  totalGrossIncome: number;         // = grossRent + grossAdmin + grossLateFee
+  grossRent: number; // canon del mes
+  grossAdmin: number; // cuota de administración del mes
+  grossLateFee: number; // mora cobrada al inquilino
+  totalGrossIncome: number; // = grossRent + grossAdmin + grossLateFee
 
   // ─── Descuentos del mes (cargos chargedTo IN ('owner','both')) ──
   totalDiscounts: number;
@@ -494,14 +494,14 @@ export interface RentInvoice {
   invoiceNumber?: string;
   propertyId: string;
   contractId: string;
-  period: string;                   // 'YYYY-MM'
+  period: string; // 'YYYY-MM'
   dueDate: string;
   subtotal: number;
   totalEarly: number;
   totalMid: number;
   totalLate: number;
-  status: 'pending' | 'paid' | 'overdue' | 'partial';
-  sentAt?: string;                  // cuándo se envió al inquilino
+  status: "pending" | "paid" | "overdue" | "partial";
+  sentAt?: string; // cuándo se envió al inquilino
   paidAt?: string;
   paidAmount?: number;
   /** Link de pago (PSE, Nequi, etc.) — opcional. */
@@ -514,28 +514,28 @@ export interface RentInvoice {
 
 /** Tipos de acciones que quedan registradas en el histórico de un inmueble. */
 export type PropertyActionType =
-  | 'property_created'
-  | 'property_archived'
-  | 'property_restored'
-  | 'property_owner_changed'
-  | 'documents_uploaded'
-  | 'mandato_signed'
-  | 'inventory_initial_signed'
-  | 'inventory_final_signed'
-  | 'contract_created'
-  | 'contract_signed'
-  | 'policy_approved'
-  | 'tenant_assigned'
-  | 'tenant_changed'
-  | 'payment_received'
-  | 'discount_registered'
-  | 'increase_registered'
-  | 'invoice_sent'
-  | 'invoice_paid'
-  | 'billing_policy_updated'
-  | 'bank_account_added'
-  | 'property_returned'             // restitución
-  | 'note_added';
+  | "property_created"
+  | "property_archived"
+  | "property_restored"
+  | "property_owner_changed"
+  | "documents_uploaded"
+  | "mandato_signed"
+  | "inventory_initial_signed"
+  | "inventory_final_signed"
+  | "contract_created"
+  | "contract_signed"
+  | "policy_approved"
+  | "tenant_assigned"
+  | "tenant_changed"
+  | "payment_received"
+  | "discount_registered"
+  | "increase_registered"
+  | "invoice_sent"
+  | "invoice_paid"
+  | "billing_policy_updated"
+  | "bank_account_added"
+  | "property_returned" // restitución
+  | "note_added";
 
 /** Una entrada del histórico de un inmueble. Append-only. */
 export interface PropertyAction {
@@ -549,12 +549,12 @@ export interface PropertyAction {
   /** Quién hizo la acción. */
   actorName: string;
   /** Cuándo. */
-  occurredAt: string;               // ISO timestamp
+  occurredAt: string; // ISO timestamp
 }
 
 // Re-export del tipo Contract del módulo de contratos, para que el módulo
 // de billing sea autocontenido al importarlo.
-export type { Contract } from '../contracts/contractTypes';
+export type { Contract } from "../contracts/contractTypes";
 
 // ─── Helpers de tipos ──────────────────────────────────────────────────
 
@@ -563,7 +563,8 @@ export type { Contract } from '../contracts/contractTypes';
 export function monthsBetween(startISO: string, endISO: string): number {
   const a = new Date(startISO);
   const b = new Date(endISO);
-  const diff = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  const diff =
+    (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
   return Math.max(1, diff);
 }
 
@@ -574,12 +575,12 @@ export function toPeriod(dateISO: string): string {
 
 /** Avanza un mes en formato 'YYYY-MM'. */
 export function addMonth(period: string, n = 1): string {
-  const [y, m] = period.split('-').map(Number);
+  const [y, m] = period.split("-").map(Number);
   const d = new Date(y, m - 1 + n, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 /** Genera un id simple (timestamp + random). */
-export function genId(prefix = ''): string {
+export function genId(prefix = ""): string {
   return `${prefix}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
