@@ -37,6 +37,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-1: Filas con `status='paid'` o `status='partial'` NO se pisan
 
 **Pasos:**
+
 1. Seleccionar un contrato activo con al menos 1 mes pagado.
 2. En phpMyAdmin, ejecutar:
    ```sql
@@ -61,6 +62,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-2: Filas con `status='pending'` se actualizan normalmente
 
 **Pasos:**
+
 1. En phpMyAdmin, seleccionar un contrato activo y modificar la policy (subir `lateFeeMidPct` de 5% a 7%):
    ```sql
    UPDATE billing_policies
@@ -85,6 +87,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-3: Si la cantidad de meses cambia, las filas que exceden se mantienen
 
 **Pasos:**
+
 1. En phpMyAdmin, contar filas de un contrato:
    ```sql
    SELECT COUNT(*) FROM amortization_rows WHERE contract_id = 'X';
@@ -105,6 +108,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-4: La respuesta del endpoint sigue siendo la misma
 
 **Pasos:**
+
 1. Hacer un POST manual a `/api/billing/amortization/generate` con un body válido.
 2. **Verificar**: el response es 200 con un array de `AmortizationRow` (mismo shape que antes).
 3. **Verificar**: el status code es 200, no 500 ni 400.
@@ -116,6 +120,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### AC-5: Logging del cambio
 
 **Pasos:**
+
 1. Con un contrato que tenga 1 mes pagado, regenerar amortización.
 2. En el server logs (Hostinger → "Registros de tiempo de ejecución" en hPanel), buscar el log:
    ```
@@ -132,6 +137,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### EC-1: Regenerar sin pagos registrados
 
 **Pasos:**
+
 1. En phpMyAdmin, crear un contrato nuevo (o usar uno sin pagos).
 2. Regenerar amortización.
 3. **Verificar**: todas las filas se crean con `status='pending'`.
@@ -144,6 +150,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### EC-2: Regenerar con 1 pago parcial + cambio de subtotal
 
 **Pasos:**
+
 1. Marcar 1 mes como `partial` con `paidAmount = 500000` y `total = 1500000`.
 2. Cambiar la policy (subir canon → `total` sube a 1700000).
 3. Regenerar.
@@ -158,6 +165,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### EC-3: Cambiar el rango de fechas del contrato
 
 **Pasos:**
+
 1. Anotar el `endDate` actual del contrato en phpMyAdmin.
 2. Acortarlo (restar 60 días).
 3. Regenerar.
@@ -171,6 +179,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### EC-4: Aumentos (rent_increases) con `effective_from` en el pasado
 
 **Pasos:**
+
 1. En phpMyAdmin, insertar un aumento:
    ```sql
    INSERT INTO rent_increases (id, contract_id, type, description, amount, effective_from, recorded_at, recorded_by)
@@ -188,6 +197,7 @@ Write-Host "Status: $($h.StatusCode)"
 ### EC-5: Regenerar varias veces seguidas
 
 **Pasos:**
+
 1. Regenerar 3 veces seguidas (mismo contrato, misma policy).
 2. **Verificar**: no hay error de duplicado ni nada raro.
 3. **Verificar**: el conteo de filas se mantiene estable.
@@ -199,12 +209,12 @@ Write-Host "Status: $($h.StatusCode)"
 
 ## Resumen
 
-| Tipo | Cantidad |
-|------|----------|
-| Pre-checks | 1 (PRE-1) |
+| Tipo                | Cantidad        |
+| ------------------- | --------------- |
+| Pre-checks          | 1 (PRE-1)       |
 | Acceptance Criteria | 5 (AC-1 a AC-5) |
-| Edge Cases | 5 (EC-1 a EC-5) |
-| **Total checks** | **11** |
+| Edge Cases          | 5 (EC-1 a EC-5) |
+| **Total checks**    | **11**          |
 
 ---
 

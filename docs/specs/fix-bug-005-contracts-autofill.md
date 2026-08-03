@@ -24,7 +24,9 @@ useEffect(() => {
   if (contract) return; // edición: no tocar
   if (!form.propertyId) return; // sin propiedad seleccionada
   if (form.rentAmount > 0 || form.adminFee > 0) return; // ya tiene valores
-  const t = tenants.find((x: any) => x.propertyId === form.propertyId && x.status === 'Activo');
+  const t = tenants.find(
+    (x: any) => x.propertyId === form.propertyId && x.status === "Activo",
+  );
   if (!t) return;
   setForm((f) => ({
     ...f,
@@ -48,6 +50,7 @@ El `useEffect` corre UNA SOLA VEZ al mount del componente. Si el modal abre ante
 ## 3. Acceptance Criteria
 
 ### AC-1: El useEffect se re-dispara cuando `tenants` o `properties` cambian
+
 - **Deps del useEffect**: `[form.propertyId, tenants, properties, contract]`.
 - El efecto se ejecuta:
   - Al mount del componente
@@ -57,39 +60,47 @@ El `useEffect` corre UNA SOLA VEZ al mount del componente. Si el modal abre ante
   - **NO** se ejecuta cuando `form.rentAmount` o `form.adminFee` cambian (eso es feedback del user, no trigger de re-fill)
 
 ### AC-2: Regla "no override" preservada
+
 - Si `form.rentAmount > 0` o `form.adminFee > 0` ANTES del re-disparo, NO sobrescribir.
 - Esta regla aplica también cuando el efecto se re-dispara por hidratación tardía (no es excusa para pisar valores del user).
 
 ### AC-3: Modo edición (contract presente) NO se ve afectado
+
 - Si `contract` está presente (caso edición), el efecto retorna inmediatamente sin tocar nada.
 - El comportamiento actual ya está bien para este caso, solo se preserva.
 
 ### AC-4: setForm con función updater
+
 - Usar `setForm((f) => ({ ...f, ... }))` en vez de `setForm({ ...form, ... })` para evitar closure stale.
 - Garantiza que si el efecto se dispara 2 veces en rápida sucesión (ej. tenants llega, properties llega, ambos triggers), la segunda llamada vea el state actualizado por la primera.
 
 ### AC-5: Eliminación del `eslint-disable-next-line`
+
 - Quitar el `// eslint-disable-next-line react-hooks/exhaustive-deps` porque las deps ahora son correctas.
 - Si el linter se queja por alguna razón, documentar en un comentario por qué.
 
 ## 4. Edge Cases
 
 ### EC-1: Hidratación tardía
+
 - **Pasos**: hacer refresh de la página con un tenant recién creado en MySQL.
 - **Esperado**: el modal abre con `rentAmount=0, adminFee=0` momentáneamente. Cuando `appStore.hydrate()` termina (1-2s), el modal se actualiza SOLO si la regla "no override" no se disparó (es decir, el user no tocó los campos).
 - **Esperado v2**: si el user YA tocó los campos antes de que llegue la hidratación, no se pisan sus valores.
 
 ### EC-2: Cambio de propiedad
+
 - **Pasos**: en el modal, cambiar el dropdown de propiedad.
 - **Esperado**: si la nueva propiedad tiene tenant activo, se re-rellena `rentAmount`, `adminFee`, `tenantId`.
 - **Esperado v2**: si la nueva propiedad NO tiene tenant activo, los campos quedan vacíos (no se pisa con datos de la propiedad anterior).
 
 ### EC-3: Cambio de tenant
+
 - **Pasos**: en el modal, cambiar el dropdown de tenant.
 - **Esperado**: el handler `onTenantChange` (existente) actualiza `rentAmount` y `adminFee` respetando "no override".
 - **Este AC no cambia el comportamiento existente**, solo documenta que el handler separado sigue funcionando.
 
 ### EC-4: Edición de contrato existente
+
 - **Pasos**: abrir modal con un contract existente.
 - **Esperado**: el useEffect retorna inmediatamente por `if (contract) return;`.
 - **Esperado v2**: los valores del contract (incluso si son 0 por legacy) NO se pisan con datos del tenant activo.
@@ -104,7 +115,9 @@ useEffect(() => {
   if (contract) return;
   if (!form.propertyId) return;
   if (form.rentAmount > 0 || form.adminFee > 0) return;
-  const t = tenants.find((x: any) => x.propertyId === form.propertyId && x.status === 'Activo');
+  const t = tenants.find(
+    (x: any) => x.propertyId === form.propertyId && x.status === "Activo",
+  );
   if (!t) return;
   setForm((f) => ({
     ...f,
@@ -124,8 +137,10 @@ useEffect(() => {
   if (contract) return;
   if (!form.propertyId) return;
   setForm((f) => {
-    if (f.rentAmount > 0 || f.adminFee > 0) return f;  // no override
-    const t = tenants.find((x: any) => x.propertyId === f.propertyId && x.status === 'Activo');
+    if (f.rentAmount > 0 || f.adminFee > 0) return f; // no override
+    const t = tenants.find(
+      (x: any) => x.propertyId === f.propertyId && x.status === "Activo",
+    );
     if (!t) return f;
     return {
       ...f,
@@ -144,10 +159,10 @@ useEffect(() => {
 
 Este fix no tiene toasts nuevos. Los toasts existentes del flujo de contratos se preservan:
 
-| Trigger | Copy (existente) |
-|---|---|
-| Save OK | `✓ Contrato guardado` |
-| Save error | `Error al guardar el contrato: ${err.message}` |
+| Trigger           | Copy (existente)                                  |
+| ----------------- | ------------------------------------------------- |
+| Save OK           | `✓ Contrato guardado`                             |
+| Save error        | `Error al guardar el contrato: ${err.message}`    |
 | Validación inline | `El canon debe ser mayor a 0` (alert del browser) |
 
 ## 7. Out of Scope

@@ -32,11 +32,11 @@ Y `generateAmortization(contract, policy, increases)` (en `utils/financial/calcu
 
 ### Resultado
 
-| Escenario | Comportamiento actual | Comportamiento esperado |
-|---|---|---|
-| Regenerar sin pagos | OK (todo sigue pending) | Igual |
-| Regenerar con 1 mes pagado | **Mes pagado vuelve a pending** | Mes pagado sigue `paid`, valores monetarios se actualizan |
-| Regenerar con 1 mes pago parcial | **Mes parcial vuelve a pending** | Mes parcial sigue `partial`, `paid_amount` se preserva |
+| Escenario                            | Comportamiento actual                                     | Comportamiento esperado                                                |
+| ------------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Regenerar sin pagos                  | OK (todo sigue pending)                                   | Igual                                                                  |
+| Regenerar con 1 mes pagado           | **Mes pagado vuelve a pending**                           | Mes pagado sigue `paid`, valores monetarios se actualizan              |
+| Regenerar con 1 mes pago parcial     | **Mes parcial vuelve a pending**                          | Mes parcial sigue `partial`, `paid_amount` se preserva                 |
 | Regenerar agregando un aumento (IPC) | Meses futuros actualizan OK; meses pagados **se pierden** | Meses futuros actualizan; meses pagados preservan status y paid_amount |
 
 ### Por qué rompe financieramente
@@ -52,25 +52,30 @@ Y `generateAmortization(contract, policy, increases)` (en `utils/financial/calcu
 ## 3. Acceptance Criteria
 
 ### AC-1: Filas con `status='paid'` o `status='partial'` NO se pisan
+
 - El `ON DUPLICATE KEY UPDATE` **NO incluye** `status`, `paid_at`, `paid_amount`.
 - Solo se actualizan los campos monetarios: `total`, `total_early`, `total_mid`, `total_late`, `subtotal`, `base_rent`, `base_admin`, `admin_adjustment`, `ipc_adjustment`, `late_fee_amount`, `applied_late_fee_pct`.
 - **Excepción**: si la policy cambió de `lateFeeMidPct` 5% a 7%, la mora se recalcula, pero la fila pagada sigue con el `late_fee_amount` que tenía al momento del pago. Esto es aceptable porque el status no cambia.
 
 ### AC-2: Filas con `status='pending'` o `status='overdue'` se actualizan normalmente
+
 - Se reemplazan los valores monetarios con los nuevos.
 - El status sigue siendo `pending` (que es lo que devuelve `generateAmortization`).
 - **No se rompe el flujo de regenerar amortización**: sigue funcionando como antes para filas pendientes.
 
 ### AC-3: Si la policy o el contrato cambió tanto que la cantidad de meses es distinta
+
 - Si la nueva amortización tiene MENOS meses (ej. el contrato se acortó), las filas que exceden no se tocan (siguen en MySQL con sus valores viejos).
 - Si la nueva amortización tiene MÁS meses, se INSERTAN las nuevas filas (no hay conflicto de PK).
 - **Decisión a tomar**: ¿queremos DELETAR las filas que exceden? Por ahora, no (preservar histórico). Documentado en EC-3.
 
 ### AC-4: La respuesta del endpoint sigue siendo la misma
+
 - Devuelve `res.json(rows)` con las filas generadas.
 - No cambia la shape ni el status code.
 
 ### AC-5: Logging del cambio
+
 - Cuando se regenera amortización con pagos existentes, loggear WARNING en el server:
   ```
   [amortization/generate] Regenerando con N pagos existentes preservados.
@@ -80,24 +85,30 @@ Y `generateAmortization(contract, policy, increases)` (en `utils/financial/calcu
 ## 4. Edge Cases
 
 ### EC-1: Regenerar sin pagos registrados
+
 - **Esperado**: comportamiento normal, todas las filas siguen `pending`.
 
 ### EC-2: Regenerar con 1 pago parcial + cambio de policy que afecta el subtotal
+
 - **Esperado**: la fila parcial mantiene `status='partial'`, `paid_amount=X` (NO se recalcula). El subtotal se actualiza al nuevo valor. La UI muestra "Restante: total - paid_amount" con el nuevo total.
 
 ### EC-3: Cambiar el rango de fechas del contrato (startDate o endDate)
+
 - **Esperado**: filas fuera del nuevo rango se mantienen en MySQL (no se borran). Filas dentro del rango se actualizan.
 - **Decisión a tomar**: ¿queremos DELETE de las que exceden? **Por ahora NO** — preservamos histórico. Si se necesita, se agrega en un fix futuro.
 
 ### EC-4: Cambiar el contractId (cambiar de contrato)
+
 - **Esperado**: este caso no debería pasar porque la amortización se regenera siempre para el MISMO contractId. Si pasa (raro), el endpoint responde 200 con las nuevas filas, y las viejas quedan huérfanas.
 - **No es bug de este fix**, es un caso de borde que requiere DELETE manual.
 
 ### EC-5: Aumentos (rent_increases) con `effective_from` en el pasado
+
 - **Esperado**: si hay un aumento con `effective_from` antes de un mes ya pagado, ese mes sigue con sus valores viejos (no se recalcula con el nuevo canon).
 - Esto es consistente con AC-1: filas pagadas no se tocan.
 
 ### EC-6: Backend no tiene el contrato en MySQL
+
 - **Esperado**: `generateAmortization` falla con error claro. La respuesta es 500 con mensaje del error.
 - (Esto no cambia con el fix, es solo documentación.)
 
@@ -128,14 +139,29 @@ for (const row of rows) {
        total_early  = VALUES(total_early),
        total_mid    = VALUES(total_mid),
        total_late   = VALUES(total_late),
-       status       = VALUES(status)`,  // ← BUG
+       status       = VALUES(status)`, // ← BUG
     [
-      row.id, orgId, row.propertyId, row.contractId,
-      row.monthNumber, row.periodStart, row.periodEnd, row.dueDate,
-      row.baseRent, row.baseAdmin, row.adminAdjustment, row.ipcAdjustment,
-      row.subtotal, row.appliedLateFeePct, row.lateFeeAmount,
-      row.total, row.totalEarly, row.totalMid, row.totalLate, row.status,
-    ]
+      row.id,
+      orgId,
+      row.propertyId,
+      row.contractId,
+      row.monthNumber,
+      row.periodStart,
+      row.periodEnd,
+      row.dueDate,
+      row.baseRent,
+      row.baseAdmin,
+      row.adminAdjustment,
+      row.ipcAdjustment,
+      row.subtotal,
+      row.appliedLateFeePct,
+      row.lateFeeAmount,
+      row.total,
+      row.totalEarly,
+      row.totalMid,
+      row.totalLate,
+      row.status,
+    ],
   );
 }
 ```
@@ -146,11 +172,13 @@ for (const row of rows) {
 // Contar pagos existentes antes (para logging)
 const [paidRowsBefore] = await pool.query(
   `SELECT COUNT(*) as paid_count FROM amortization_rows WHERE contract_id = ? AND status IN ('paid', 'partial')`,
-  [contract.id]
+  [contract.id],
 );
 const paidCount = (paidRowsBefore as any[])[0]?.paid_count ?? 0;
 if (paidCount > 0) {
-  console.warn(`[amortization/generate] Regenerando con ${paidCount} pagos existentes preservados.`);
+  console.warn(
+    `[amortization/generate] Regenerando con ${paidCount} pagos existentes preservados.`,
+  );
 }
 
 for (const row of rows) {
@@ -178,12 +206,27 @@ for (const row of rows) {
        -- NO se incluye status, paid_at, paid_amount
        -- Filas pagadas/parciales preservan su estado`,
     [
-      row.id, orgId, row.propertyId, row.contractId,
-      row.monthNumber, row.periodStart, row.periodEnd, row.dueDate,
-      row.baseRent, row.baseAdmin, row.adminAdjustment, row.ipcAdjustment,
-      row.subtotal, row.appliedLateFeePct, row.lateFeeAmount,
-      row.total, row.totalEarly, row.totalMid, row.totalLate, row.status,
-    ]
+      row.id,
+      orgId,
+      row.propertyId,
+      row.contractId,
+      row.monthNumber,
+      row.periodStart,
+      row.periodEnd,
+      row.dueDate,
+      row.baseRent,
+      row.baseAdmin,
+      row.adminAdjustment,
+      row.ipcAdjustment,
+      row.subtotal,
+      row.appliedLateFeePct,
+      row.lateFeeAmount,
+      row.total,
+      row.totalEarly,
+      row.totalMid,
+      row.totalLate,
+      row.status,
+    ],
   );
 }
 ```
@@ -192,8 +235,8 @@ for (const row of rows) {
 
 Este fix es server-side, no agrega toasts. Pero el frontend puede agregar un toast informativo al regenerar:
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
+| Trigger                        | Tipo            | Copy exacto                                         |
+| ------------------------------ | --------------- | --------------------------------------------------- |
 | Regenerar con pagos existentes | info (opcional) | `Amortización regenerada. N pago(s) preservado(s).` |
 
 > **Decisión a tomar**: ¿agregamos este toast al cliente? Por ahora **fuera de scope** del fix server, queda como nice-to-have.
