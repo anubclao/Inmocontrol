@@ -25,11 +25,11 @@
 
 **Estado por ola de fix:**
 
-| Ola                   | Bugs              | Status                        |
-| --------------------- | ----------------- | ----------------------------- |
+| Ola                   | Bugs              | Status                                                    |
+| --------------------- | ----------------- | --------------------------------------------------------- |
 | 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | 🟡 3/5 fixed (005 en próximo commit), 3/5 specs aprobados |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ⏳ Pendiente                  |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                  |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ⏳ Pendiente                                              |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                                              |
 
 ---
 
@@ -343,34 +343,34 @@
 
 ## 🟢 Ola 4 — Ya fixed (histórico)
 
-| ID          | Bug                                                    | Fix commit |
-| ----------- | ------------------------------------------------------ | ---------- |
-| (linter-1)  | `t.documentId` no existe en Tenant                     | `77fee39`  |
-| BUG-001     | CORS no permite PATCH en prod                          | `8f5c88e`  |
-| BUG-002     | `commission_percentage` (typo) → `commission_pct`        | `7c551b0`  |
-| (linter-2)  | LoginScreen sin import React                           | `77fee39`  |
-| (linter-3)  | `alert.entity.category` (debería ser alert.category)   | `77fee39`  |
-| (linter-4)  | `Card` no acepta `key` prop                            | `77fee39`  |
-| (linter-5)  | `RuleRow`/`ChannelConfigRow`/`LogRow` no aceptan `key` | `77fee39`  |
-| (linter-6)  | `TenantsView` Card key prop error                      | `77fee39`  |
-| (formato-1) | `??` roto en AGENTS.md sección Karpathy                | `b860d26`  |
-| (formato-2) | `id; name;` (semicolons en object types, inválido TS)  | `53f8753`  |
-| (formato-3) | Single quotes → double quotes (AlertsView)             | `d008bb6`  |
+| ID          | Bug                                                     | Fix commit |
+| ----------- | ------------------------------------------------------- | ---------- |
+| (linter-1)  | `t.documentId` no existe en Tenant                      | `77fee39`  |
+| BUG-001     | CORS no permite PATCH en prod                           | `8f5c88e`  |
+| BUG-002     | `commission_percentage` (typo) → `commission_pct`       | `7c551b0`  |
+| (linter-2)  | LoginScreen sin import React                            | `77fee39`  |
+| (linter-3)  | `alert.entity.category` (debería ser alert.category)    | `77fee39`  |
+| (linter-4)  | `Card` no acepta `key` prop                             | `77fee39`  |
+| (linter-5)  | `RuleRow`/`ChannelConfigRow`/`LogRow` no aceptan `key`  | `77fee39`  |
+| (linter-6)  | `TenantsView` Card key prop error                       | `77fee39`  |
+| (formato-1) | `??` roto en AGENTS.md sección Karpathy                 | `b860d26`  |
+| (formato-2) | `id; name;` (semicolons en object types, inválido TS)   | `53f8753`  |
+| (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
 
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
 
-| Bug               |       Spec       | Verifier | Status |
-| ----------------- | :--------------: | :------: | ------ |
-| BUG-001           | ❌ (no necesita) |    ❌    | ✅ `8f5c88e` |
-| BUG-002           | ❌ (no necesita) |    ❌    | ✅ `7c551b0` |
-| BUG-003           |  ✅ Aprobado     | ✅ Aprobado | ⏳ (siguiente) |
-| BUG-004           |  ✅ Aprobado     | ✅ Aprobado | ⏳ |
-| BUG-005           |  ✅ Aprobado     | ✅ Aprobado | ✅ (próximo commit) |
-| BUG-006 a BUG-029 |        ❌        |    ❌    | ⏳     |
-| BUG-030 a BUG-035 |        ❌        |    ❌    | ⏳     |
+| Bug               |       Spec       |  Verifier   | Status              |
+| ----------------- | :--------------: | :---------: | ------------------- |
+| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`        |
+| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`        |
+| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente)      |
+| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ⏳                  |
+| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ (próximo commit) |
+| BUG-006 a BUG-029 |        ❌        |     ❌      | ⏳                  |
+| BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳                  |
 
 ---
 
