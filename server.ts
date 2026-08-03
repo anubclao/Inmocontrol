@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
+import { errorHandler } from "./lib/errorHandler";
 import { fileURLToPath } from "url";
 
 import entitiesRouter from "./server/routes/entities.js";
@@ -150,19 +151,9 @@ async function startServer() {
     },
   );
 
-  // Fallback: cualquier otro error no manejado
-  app.use(
-    (
-      err: any,
-      _req: express.Request,
-      res: express.Response,
-      _next: express.NextFunction,
-    ) => {
-      console.error("[server] Unhandled error:", err);
-      if (!res.headersSent)
-        res.status(500).json({ error: err.message ?? "Internal server error" });
-    },
-  );
+  // Middleware central de errores (BUG-029 fix).
+  // Captura cualquier error de next(err) o asyncHandler, devuelve JSON consistente.
+  app.use(errorHandler);
 
   app.listen(PORT, HOST, () => {
     console.log(
