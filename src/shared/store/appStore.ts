@@ -1,9 +1,10 @@
-import { create } from 'zustand';
-import type { Property, Tenant } from '../../types';
-import type { FinancialRecord } from './types';
-import { useContractStore } from '../../features/contracts/contractStore';
-import { mapServerContract } from '../../features/contracts/contractApi';
-import { useBillingStore } from '../../features/billing/billingStore';
+import { create } from "zustand";
+import type { Property, Tenant } from "../../types";
+import type { FinancialRecord } from "./types";
+import { useContractStore } from "../../features/contracts/contractStore";
+import { mapServerContract } from "../../features/contracts/contractApi";
+import { useBillingStore } from "../../features/billing/billingStore";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout";
 
 /**
  * Store global de InmoControl.
@@ -22,11 +23,22 @@ interface AppState {
 
   // Bootstrap: cargar todo desde MySQL
   hydrate: () => Promise<void>;
+  /** `true` si el último `hydrate()` terminó con al menos un endpoint fallido
+   *  (timeout, 5xx, red caída). Lo consume la App shell para mostrar un toast
+   *  "Algunos datos no pudieron cargarse". Se resetea al volver a hidratar. */
+  hydrationPartial: boolean;
 
   // Properties
-  addProperty: (p: Partial<Property> & { id?: string }) => Promise<Property | null>;
+  addProperty: (
+    p: Partial<Property> & { id?: string },
+  ) => Promise<Property | null>;
   updateProperty: (id: string, patch: Partial<Property>) => Promise<void>;
-  removeProperty: (id: string) => Promise<{ ok: true; driveCleanupStatus: string } | { ok: false; error: string; hasInventories?: boolean }>;
+  removeProperty: (
+    id: string,
+  ) => Promise<
+    | { ok: true; driveCleanupStatus: string }
+    | { ok: false; error: string; hasInventories?: boolean }
+  >;
 
   // Tenants
   addTenant: (t: Partial<Tenant> & { id?: string }) => Promise<Tenant | null>;
@@ -38,8 +50,13 @@ interface AppState {
   removeTenant: (id: string) => Promise<void>;
 
   // Financial
-  addFinancialRecord: (r: Partial<FinancialRecord> & { id?: string }) => Promise<FinancialRecord | null>;
-  updateFinancialRecord: (id: string, patch: Partial<FinancialRecord>) => Promise<void>;
+  addFinancialRecord: (
+    r: Partial<FinancialRecord> & { id?: string },
+  ) => Promise<FinancialRecord | null>;
+  updateFinancialRecord: (
+    id: string,
+    patch: Partial<FinancialRecord>,
+  ) => Promise<void>;
   removeFinancialRecord: (id: string) => Promise<void>;
 
   reset: () => void;
@@ -51,14 +68,30 @@ const initialState = {
   financialRecords: [],
   loading: false,
   error: null,
+  hydrationPartial: false,
 };
 
-const apiCall = async <T = any>(method: string, path: string, body?: any): Promise<T> => {
-  const res = await fetch(path, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+// `apiCall` con timeout configurable (BUG-019).
+// Default 15s — si un endpoint se cuelga (Drive, MySQL saturado, red caída),
+// la promise se aborta vía AbortController y rechaza con TimeoutError.
+// Antes (sin timeout): un solo endpoint colgado dejaba la app con spinner
+// infinito para siempre, porque Promise.all espera a TODAS las promises.
+const DEFAULT_API_TIMEOUT_MS = 15_000;
+const apiCall = async <T = any>(
+  method: string,
+  path: string,
+  body?: any,
+  timeoutMs: number = DEFAULT_API_TIMEOUT_MS,
+): Promise<T> => {
+  const res = await fetchWithTimeout(
+    path,
+    {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs,
+  );
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
   return data;
@@ -68,58 +101,105 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ...initialState,
 
   hydrate: async () => {
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, hydrationPartial: false });
+    // BUG-019: usar Promise.allSettled en vez de Promise.all.
+    // Si UNO solo de los 5 endpoints falla (timeout, 5xx, red caída), los
+    // otros 4 siguen y la app carga con datos parciales. Antes, un solo
+    // endpoint colgado dejaba la app con spinner eterno (browser esperando
+    // hasta 5min, cuando el fetch interno decide cortar).
+    const results = await Promise.allSettled([
+      apiCall("GET", "/api/properties"),
+      apiCall("GET", "/api/tenants"),
+      apiCall("GET", "/api/financial-records"),
+      // Cargamos contratos desde MySQL para que Zustand refleje el estado
+      // canónico del server. Sin esto, contratos viejos huérfanos en
+      // localStorage seguían apareciendo aunque MySQL estuviera limpio.
+      apiCall("GET", "/api/entities/contracts"),
+      // Amortización desde MySQL: usamos la lista TOTAL del org para
+      // sincronizar el cache local. Cualquier entrada que apunte a un
+      // contratoId que ya no exista en MySQL se descarta.
+      apiCall("GET", "/api/billing/amortization"),
+    ]);
+
+    // Extraer valores (null si rejected) y contar fallos.
+    const [propsRes, tenantsRes, finRes, contractsRes, amortRes] = results.map(
+      (r) => (r.status === "fulfilled" ? r.value : null),
+    );
+    const failedCount = results.filter((r) => r.status === "rejected").length;
+    if (failedCount > 0) {
+      // Log de los motivos para debugging en consola (no rompe UX).
+      const labels = [
+        "properties",
+        "tenants",
+        "financial-records",
+        "contracts",
+        "amortization",
+      ];
+      results.forEach((r, i) => {
+        if (r.status === "rejected") {
+          console.warn(
+            `[hydrate] ${labels[i]} falló: ${(r as PromiseRejectedResult).reason?.message ?? r.reason}`,
+          );
+        }
+      });
+      console.warn(
+        `[hydrate] ${failedCount}/5 endpoints fallaron — la app cargará con datos parciales.`,
+      );
+      set({ hydrationPartial: true });
+    }
+
     try {
-      const [propsRes, tenantsRes, finRes, contractsRes, amortRes] = await Promise.all([
-        apiCall('GET', '/api/properties'),
-        apiCall('GET', '/api/tenants'),
-        apiCall('GET', '/api/financial-records'),
-        // Cargamos contratos desde MySQL para que Zustand refleje el estado
-        // canónico del server. Sin esto, contratos viejos huérfanos en
-        // localStorage seguían apareciendo aunque MySQL estuviera limpio.
-        apiCall('GET', '/api/entities/contracts'),
-        // Amortización desde MySQL: usamos la lista TOTAL del org para
-        // sincronizar el cache local. Cualquier entrada que apunte a un
-        // contratoId que ya no exista en MySQL se descarta.
-        apiCall('GET', '/api/billing/amortization'),
-      ]);
-
       // Mapear campos del backend (snake_case) al frontend (camelCase)
-      const properties = (propsRes.properties ?? []).map((p: any) => ({
-        id: p.id,
-        address: p.address,
-        chip: p.chip,
-        folio: p.folio,
-        owner: p.owner_name,
-        ownerName: p.owner_name,
-        ownerIdNumber: p.owner_id_number,
-        ownerPhone: p.owner_phone,
-        ownerEmail: p.owner_email,
-        // FIX: server puede devolver 'available'/'rented'/'maintenance' pero la UI
-        // espera 'Pendiente'/'Activo'/'Arrendado'/'Inactivo'. Mapeamos en el mapper.
-        status: p.status === 'available' ? 'Pendiente'
-              : p.status === 'rented' ? 'Arrendado'
-              : p.status === 'maintenance' ? 'Inactivo'
-              : p.status,
-        propertyType: p.property_type,
-        driveFolderId: p.drive_folder_id,
-        driveFolderPath: p.drive_folder_path,
-        inventoryPdfUrl: p.inventory_pdf_url,
-        inventoryCaptacionPdfUrl: p.inventario_captacion_pdf_url ?? p.inventory_captacion_pdf_url ?? null,
-        inventoryColocacionPdfUrl: p.inventario_colocacion_pdf_url ?? p.inventory_colocacion_pdf_url ?? null,
-        mandatePdfUrl: p.mandato_pdf_url,
-        mandateSignedAt: p.mandato_signed_at,
-        createdAt: p.created_at,
-        inventoryCount: p.inventory_count ?? 0,
-        // FIX CRÍTICO: documents era ignorado por el mapper → la card mostraba
-        // "Lo que falta: todos" aunque los docs estuvieran en property_documents.
-        documents: p.documents ?? {},
-        // Migración 010+ — N propietarios y N unidades adicionales
-        owners: p.owners ?? [],
-        units: p.units ?? [],
-      }));
+      // BUG-019: si el endpoint falló (propsRes es null), el fallback `?? {}` evita
+      // que explote el `.map`. La UI mostrará "0 propiedades" — el toast de
+      // carga parcial le avisa al user.
+      const properties = ((propsRes as any)?.properties ?? []).map(
+        (p: any) => ({
+          id: p.id,
+          address: p.address,
+          chip: p.chip,
+          folio: p.folio,
+          owner: p.owner_name,
+          ownerName: p.owner_name,
+          ownerIdNumber: p.owner_id_number,
+          ownerPhone: p.owner_phone,
+          ownerEmail: p.owner_email,
+          // FIX: server puede devolver 'available'/'rented'/'maintenance' pero la UI
+          // espera 'Pendiente'/'Activo'/'Arrendado'/'Inactivo'. Mapeamos en el mapper.
+          status:
+            p.status === "available"
+              ? "Pendiente"
+              : p.status === "rented"
+                ? "Arrendado"
+                : p.status === "maintenance"
+                  ? "Inactivo"
+                  : p.status,
+          propertyType: p.property_type,
+          driveFolderId: p.drive_folder_id,
+          driveFolderPath: p.drive_folder_path,
+          inventoryPdfUrl: p.inventory_pdf_url,
+          inventoryCaptacionPdfUrl:
+            p.inventario_captacion_pdf_url ??
+            p.inventory_captacion_pdf_url ??
+            null,
+          inventoryColocacionPdfUrl:
+            p.inventario_colocacion_pdf_url ??
+            p.inventory_colocacion_pdf_url ??
+            null,
+          mandatePdfUrl: p.mandato_pdf_url,
+          mandateSignedAt: p.mandato_signed_at,
+          createdAt: p.created_at,
+          inventoryCount: p.inventory_count ?? 0,
+          // FIX CRÍTICO: documents era ignorado por el mapper → la card mostraba
+          // "Lo que falta: todos" aunque los docs estuvieran en property_documents.
+          documents: p.documents ?? {},
+          // Migración 010+ — N propietarios y N unidades adicionales
+          owners: p.owners ?? [],
+          units: p.units ?? [],
+        }),
+      );
 
-      const tenants = (tenantsRes.tenants ?? []).map((t: any) => ({
+      const tenants = ((tenantsRes as any)?.tenants ?? []).map((t: any) => ({
         id: t.id,
         propertyId: t.property_id,
         name: t.name,
@@ -137,7 +217,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({
         properties,
         tenants,
-        financialRecords: finRes.records ?? [],
+        // BUG-019: si el endpoint de financial-records falló, no pisamos los
+        // records existentes con undefined. Mantenemos lo que ya estaba (cache
+        // local puede tener algo útil) o [] si no había nada.
+        financialRecords:
+          (finRes as any)?.records ?? get().financialRecords ?? [],
         loading: false,
       });
 
@@ -154,7 +238,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         serverContractIds = new Set(serverContracts.map((c: any) => c.id));
       } catch (contractsErr: any) {
         console.warn(
-          '[store] No se pudieron sincronizar contratos desde MySQL:',
+          "[store] No se pudieron sincronizar contratos desde MySQL:",
           contractsErr?.message ?? contractsErr,
         );
       }
@@ -179,11 +263,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         if (serverContractIds.size === 0) {
           // Caso limpieza total: MySQL no tiene contratos → no debería haber
           // amortización, recibos, ni nada de billing cacheado.
-          if (Object.keys(localBilling.amortization).length > 0
-              || Object.keys(localBilling.invoices).length > 0
-              || Object.keys(localBilling.billingPolicies).length > 0) {
+          if (
+            Object.keys(localBilling.amortization).length > 0 ||
+            Object.keys(localBilling.invoices).length > 0 ||
+            Object.keys(localBilling.billingPolicies).length > 0
+          ) {
             console.warn(
-              '[hydrate] MySQL sin contratos pero cache local tiene billing. Limpiando.',
+              "[hydrate] MySQL sin contratos pero cache local tiene billing. Limpiando.",
             );
             useBillingStore.setState({
               amortization: {},
@@ -208,25 +294,28 @@ export const useAppStore = create<AppState>()((set, get) => ({
               cleaned[cid] = rows;
             }
           }
-          const droppedCount = Object.keys(localBilling.amortization).length
-            - Object.keys(cleaned).length;
+          const droppedCount =
+            Object.keys(localBilling.amortization).length -
+            Object.keys(cleaned).length;
           if (droppedCount > 0) {
             console.info(
               `[hydrate] Amortización sincronizada: ${Object.keys(cleaned).length} contratos con datos, ` +
-              `${droppedCount} contrato(s) huérfano(s) descartados del cache local.`,
+                `${droppedCount} contrato(s) huérfano(s) descartados del cache local.`,
             );
           }
           useBillingStore.setState({ amortization: cleaned });
         }
       } catch (billingErr: any) {
         console.warn(
-          '[hydrate] No se pudo sincronizar amortización desde MySQL:',
+          "[hydrate] No se pudo sincronizar amortización desde MySQL:",
           billingErr?.message ?? billingErr,
         );
       }
     } catch (err: any) {
-      console.error('[store] hydrate failed:', err);
-      set({ error: err.message, loading: false });
+      // Con Promise.allSettled ya no se cae acá por una promise individual,
+      // pero sí puede explotar un error de mapeo o un null deref inesperado.
+      console.error("[store] hydrate failed:", err);
+      set({ error: err?.message ?? "Error desconocido", loading: false });
     }
   },
 
@@ -239,14 +328,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (p.id) {
       const local: Property = {
         id: p.id,
-        address: p.address ?? '',
-        chip: p.chip ?? '',
-        folio: p.folio ?? '',
-        ownerId: p.ownerId ?? '',
-        owner: p.owner ?? p.ownerName ?? '',
-        ownerName: p.owner ?? p.ownerName ?? '',
-        ownerIdNumber: p.ownerIdNumber ?? '',
-        status: p.status ?? 'Activo',
+        address: p.address ?? "",
+        chip: p.chip ?? "",
+        folio: p.folio ?? "",
+        ownerId: p.ownerId ?? "",
+        owner: p.owner ?? p.ownerName ?? "",
+        ownerName: p.owner ?? p.ownerName ?? "",
+        ownerIdNumber: p.ownerIdNumber ?? "",
+        status: p.status ?? "Activo",
         propertyType: p.propertyType,
         driveFolderId: p.driveFolderId ?? null,
         driveFolderPath: p.driveFolderPath ?? null,
@@ -261,17 +350,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     // Sin id: sí crear remotamente (caso de un futuro "quick add" sin wizard)
     try {
-      const data = await apiCall('POST', '/api/properties', p);
+      const data = await apiCall("POST", "/api/properties", p);
       const created: Property = {
         id: data.propertyId,
-        address: p.address ?? '',
-        chip: p.chip ?? '',
-        folio: p.folio ?? '',
-        ownerId: p.ownerId ?? '',
-        owner: p.owner ?? p.ownerName ?? '',
-        ownerName: p.owner ?? p.ownerName ?? '',
-        ownerIdNumber: p.ownerIdNumber ?? '',
-        status: p.status ?? 'Activo',
+        address: p.address ?? "",
+        chip: p.chip ?? "",
+        folio: p.folio ?? "",
+        ownerId: p.ownerId ?? "",
+        owner: p.owner ?? p.ownerName ?? "",
+        ownerName: p.owner ?? p.ownerName ?? "",
+        ownerIdNumber: p.ownerIdNumber ?? "",
+        status: p.status ?? "Activo",
         propertyType: p.propertyType,
         driveFolderId: data.driveFolderId ?? p.driveFolderId ?? null,
         driveFolderPath: data.driveFolderPath ?? null,
@@ -284,7 +373,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set((s) => ({ properties: [...s.properties, created] }));
       return created;
     } catch (err: any) {
-      console.error('[store] addProperty failed:', err);
+      console.error("[store] addProperty failed:", err);
       set({ error: err.message });
       return null;
     }
@@ -292,32 +381,44 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   updateProperty: async (id, patch) => {
     try {
-      await apiCall('PATCH', `/api/properties/${id}`, patch);
+      await apiCall("PATCH", `/api/properties/${id}`, patch);
       set((s) => ({
-        properties: s.properties.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+        properties: s.properties.map((p) =>
+          p.id === id ? { ...p, ...patch } : p,
+        ),
       }));
     } catch (err: any) {
-      console.error('[store] updateProperty failed:', err);
+      console.error("[store] updateProperty failed:", err);
       set({ error: err.message });
     }
   },
 
-  removeProperty: async (id): Promise<{ ok: true; driveCleanupStatus: string } | { ok: false; error: string; hasInventories?: boolean }> => {
+  removeProperty: async (
+    id,
+  ): Promise<
+    | { ok: true; driveCleanupStatus: string }
+    | { ok: false; error: string; hasInventories?: boolean }
+  > => {
     try {
-      const data = await apiCall<{ success: boolean; driveCleanupStatus?: string; error?: string; hasInventories?: boolean }>(
-        'DELETE',
-        `/api/properties/${id}`,
-      );
+      const data = await apiCall<{
+        success: boolean;
+        driveCleanupStatus?: string;
+        error?: string;
+        hasInventories?: boolean;
+      }>("DELETE", `/api/properties/${id}`);
       if (!data.success) {
-        return { ok: false, error: data.error ?? 'Error desconocido' };
+        return { ok: false, error: data.error ?? "Error desconocido" };
       }
       set((s) => ({ properties: s.properties.filter((p) => p.id !== id) }));
-      return { ok: true, driveCleanupStatus: data.driveCleanupStatus ?? 'skipped' };
+      return {
+        ok: true,
+        driveCleanupStatus: data.driveCleanupStatus ?? "skipped",
+      };
     } catch (err: any) {
-      console.error('[store] removeProperty failed:', err);
-      const msg = err?.message ?? 'Error eliminando propiedad';
+      console.error("[store] removeProperty failed:", err);
+      const msg = err?.message ?? "Error eliminando propiedad";
       // Para distinguir el 409 (con inventario) del resto
-      const hasInv = msg.includes('inventario');
+      const hasInv = msg.includes("inventario");
       return { ok: false, error: msg, hasInventories: hasInv };
     }
   },
@@ -325,19 +426,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // ── Tenants ─────────────────────────────────────────────────────────
   addTenant: async (t) => {
     try {
-      const data = await apiCall('POST', '/api/tenants', t);
+      const data = await apiCall("POST", "/api/tenants", t);
       const created: Tenant = {
         id: data.tenantId,
-        name: t.name ?? '',
-        idNumber: t.idNumber ?? '',
+        name: t.name ?? "",
+        idNumber: t.idNumber ?? "",
         email: t.email,
         phone: t.phone,
-        propertyId: t.propertyId ?? '',
+        propertyId: t.propertyId ?? "",
         rent: t.rent ?? 0,
         adminFee: t.adminFee ?? 0,
-        status: 'Activo',
-        leaseStartDate: t.leaseStartDate ?? new Date().toISOString().slice(0, 10),
-        tenantDriveFolderId: data.tenantDriveFolderId ?? t.tenantDriveFolderId ?? null,
+        status: "Activo",
+        leaseStartDate:
+          t.leaseStartDate ?? new Date().toISOString().slice(0, 10),
+        tenantDriveFolderId:
+          data.tenantDriveFolderId ?? t.tenantDriveFolderId ?? null,
         ...t,
       } as Tenant;
       set((s) => ({ tenants: [...s.tenants, created] }));
@@ -358,7 +461,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
       return created;
     } catch (err: any) {
-      console.error('[store] addTenant failed:', err);
+      console.error("[store] addTenant failed:", err);
       set({ error: err.message });
       return null;
     }
@@ -366,30 +469,30 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   updateTenant: async (id, patch) => {
     try {
-      await apiCall('PATCH', `/api/tenants/${id}`, patch);
+      await apiCall("PATCH", `/api/tenants/${id}`, patch);
       set((s) => ({
         tenants: s.tenants.map((t) => (t.id === id ? { ...t, ...patch } : t)),
       }));
       return true;
     } catch (err: any) {
-      console.error('[store] updateTenant failed:', err);
+      console.error("[store] updateTenant failed:", err);
       return false;
     }
   },
 
   removeTenant: async (id) => {
     try {
-      await apiCall('DELETE', `/api/tenants/${id}`);
+      await apiCall("DELETE", `/api/tenants/${id}`);
       set((s) => ({ tenants: s.tenants.filter((t) => t.id !== id) }));
     } catch (err: any) {
-      console.error('[store] removeTenant failed:', err);
+      console.error("[store] removeTenant failed:", err);
     }
   },
 
   // ── Financial ───────────────────────────────────────────────────────
   addFinancialRecord: async (r) => {
     try {
-      const data = await apiCall('POST', '/api/financial-records', r);
+      const data = await apiCall("POST", "/api/financial-records", r);
       const created: FinancialRecord = {
         id: data.recordId,
         ...r,
@@ -397,7 +500,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set((s) => ({ financialRecords: [...s.financialRecords, created] }));
       return created;
     } catch (err: any) {
-      console.error('[store] addFinancialRecord failed:', err);
+      console.error("[store] addFinancialRecord failed:", err);
       set({ error: err.message });
       return null;
     }
@@ -405,21 +508,25 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   updateFinancialRecord: async (id, patch) => {
     try {
-      await apiCall('PATCH', `/api/financial-records/${id}`, patch);
+      await apiCall("PATCH", `/api/financial-records/${id}`, patch);
       set((s) => ({
-        financialRecords: s.financialRecords.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+        financialRecords: s.financialRecords.map((r) =>
+          r.id === id ? { ...r, ...patch } : r,
+        ),
       }));
     } catch (err: any) {
-      console.error('[store] updateFinancialRecord failed:', err);
+      console.error("[store] updateFinancialRecord failed:", err);
     }
   },
 
   removeFinancialRecord: async (id) => {
     try {
-      await apiCall('DELETE', `/api/financial-records/${id}`);
-      set((s) => ({ financialRecords: s.financialRecords.filter((r) => r.id !== id) }));
+      await apiCall("DELETE", `/api/financial-records/${id}`);
+      set((s) => ({
+        financialRecords: s.financialRecords.filter((r) => r.id !== id),
+      }));
     } catch (err: any) {
-      console.error('[store] removeFinancialRecord failed:', err);
+      console.error("[store] removeFinancialRecord failed:", err);
     }
   },
 
@@ -432,4 +539,4 @@ export const selectTenants = (s: AppState) => s.tenants;
 export const selectFinancialRecords = (s: AppState) => s.financialRecords;
 
 /** Constante exportada por si en el futuro queremos migrar entre stores. */
-export { STORAGE_KEYS } from '../hooks/storageKeys';
+export { STORAGE_KEYS } from "../hooks/storageKeys";

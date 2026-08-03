@@ -58,7 +58,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
   const [toast, setToast] = useState<{
     message: string;
-    type: "success" | "error";
+    type: "success" | "error" | "warning";
   } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [user, setUser] = useState<LocalUser | null>(null);
@@ -78,6 +78,7 @@ export default function App() {
   const properties = useAppStore((s) => s.properties);
   const tenants = useAppStore((s) => s.tenants);
   const financialRecords = useAppStore((s) => s.financialRecords);
+  const hydrationPartial = useAppStore((s) => s.hydrationPartial);
   const addProperty = useAppStore((s) => s.addProperty);
   const updateProperty = useAppStore((s) => s.updateProperty);
   const addTenant = useAppStore((s) => s.addTenant);
@@ -88,15 +89,29 @@ export default function App() {
   const removeFinancialRecord = useAppStore((s) => s.removeFinancialRecord);
   const removeProperty = useAppStore((s) => s.removeProperty);
 
+  // BUG-019: si el último hydrate terminó con datos parciales (algún
+  // endpoint falló por timeout/5xx), avisamos al user con un toast warning.
+  // Se dispara SOLO cuando el flag pasa de false→true (no en cada render).
+  useEffect(() => {
+    if (hydrationPartial) {
+      showToast(
+        "Algunos datos no pudieron cargarse. Reintentá desde Configuración.",
+        "warning",
+      );
+    }
+  }, [hydrationPartial]);
+
   const [closedMonths, setClosedMonths] = useState<string[]>([]);
   const [openedMonths, setOpenedMonths] = useState<string[]>([]);
 
   const showToast = (
     message: string,
-    type: "success" | "error" = "success",
+    type: "success" | "error" | "warning" = "success",
   ) => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
+    // Warnings duran más (5s) para que el user alcance a leerlos.
+    const ttl = type === "warning" ? 5000 : 3000;
+    setTimeout(() => setToast(null), ttl);
   };
 
   // Reset inactivity timeout
@@ -542,7 +557,9 @@ export default function App() {
           className={`fixed bottom-6 right-6 z-[9999] max-w-md p-4 rounded-lg shadow-2xl border ${
             toast.type === "success"
               ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-              : "bg-red-50 border-red-200 text-red-900"
+              : toast.type === "warning"
+                ? "bg-amber-50 border-amber-200 text-amber-900"
+                : "bg-red-50 border-red-200 text-red-900"
           }`}
         >
           <pre className="text-sm whitespace-pre-wrap font-sans m-0">
