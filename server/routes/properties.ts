@@ -6,6 +6,7 @@ import crypto from "crypto";
 import pool, { ensureDefaultOrg } from "../db.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
 import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
+import { withTransaction } from "../lib/withTransaction.js";
 
 const router = express.Router();
 
@@ -464,109 +465,132 @@ router.post("/", async (req, res) => {
     // agregar 1 owner nuevo, debe re-enviar TODOS los owners.
     if (Array.isArray(owners)) {
       try {
-        // Capturar el primer owner (si hay) para usarlo como "primer owner" legacy
-        // al parsear documentos con keys legacy.
-        const ownerIds: string[] = [];
-        await pool.query(`DELETE FROM property_owners WHERE property_id = ?`, [
-          propertyId,
-        ]);
-        for (let i = 0; i < owners.length; i++) {
-          const o = owners[i] ?? {};
-          const ownerId =
-            typeof o.id === "string" && o.id && !o.id.startsWith("wizard-")
-              ? o.id
-              : crypto.randomUUID();
-          const name = String(o.name ?? "").trim();
-          if (!name) continue; // saltamos owners sin nombre
-          const idNumber = o.idNumber ?? o.id_number ?? null;
-          const phone = o.phone ?? null;
-          const email = o.email ?? null;
-          // ownershipPct: aceptar number, string, o null
-          let ownershipPct: number | null = null;
-          if (
-            o.ownershipPct !== undefined &&
-            o.ownershipPct !== null &&
-            o.ownershipPct !== ""
-          ) {
-            const n = Number(o.ownershipPct);
-            if (!isNaN(n) && n >= 0 && n <= 100) ownershipPct = n;
+        // BUG-017: DELETE + INSERT debe ser atómico. Si un INSERT falla a
+        // mitad de camino, los anteriores ya commitearon sin la transacción
+        // y la propiedad queda con un set parcial. Envolvemos todo en
+        // withTransaction: o se aplican TODOS los inserts o NINGUNO.
+        await withTransaction(async (conn) => {
+          // Capturar el primer owner (si hay) para usarlo como "primer owner" legacy
+          // al parsear documentos con keys legacy.
+          const ownerIds: string[] = [];
+          await conn.query(`DELETE FROM property_owners WHERE property_id = ?`, [
+            propertyId,
+          ]);
+          for (let i = 0; i < owners.length; i++) {
+            const o = owners[i] ?? {};
+            const ownerId =
+              typeof o.id === "string" && o.id && !o.id.startsWith("wizard-")
+                ? o.id
+                : crypto.randomUUID();
+            const name = String(o.name ?? "").trim();
+            if (!name) continue; // saltamos owners sin nombre
+            const idNumber = o.idNumber ?? o.id_number ?? null;
+            const phone = o.phone ?? null;
+            const email = o.email ?? null;
+            // ownershipPct: aceptar number, string, o null
+            let ownershipPct: number | null = null;
+            if (
+              o.ownershipPct !== undefined &&
+              o.ownershipPct !== null &&
+              o.ownershipPct !== ""
+            ) {
+              const n = Number(o.ownershipPct);
+              if (!isNaN(n) && n >= 0 && n <= 100) ownershipPct = n;
+            }
+            const position = Number(o.position) || i + 1;
+            await conn.query(
+              `INSERT INTO property_owners
+              (id, organization_id, property_id, name, id_number, phone, email,
+               ownership_pct, position, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                ownerId,
+                orgId,
+                propertyId,
+                name,
+                idNumber ? String(idNumber) : null,
+                phone ? String(phone) : null,
+                email ? String(email) : null,
+                ownershipPct,
+                position,
+                o.notes ?? null,
+              ],
+            );
+            ownerIds.push(ownerId);
           }
-          const position = Number(o.position) || i + 1;
-          await pool.query(
-            `INSERT INTO property_owners
-            (id, organization_id, property_id, name, id_number, phone, email,
-             ownership_pct, position, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              ownerId,
-              orgId,
-              propertyId,
-              name,
-              idNumber ? String(idNumber) : null,
-              phone ? String(phone) : null,
-              email ? String(email) : null,
-              ownershipPct,
-              position,
-              o.notes ?? null,
-            ],
-          );
-          ownerIds.push(ownerId);
-        }
-        // Si el frontend mandó owners[] vacío, NO borramos el legacy `owner_name`
-        // (compat: lo seteamos arriba). Pero si explícitamente mandó `owners`
-        // y quedó vacío, el sistema de legacy queda sin primer owner — eso es
-        // decisión del usuario (probablemente quiere resetear).
+          // Si el frontend mandó owners[] vacío, NO borramos el legacy `owner_name`
+          // (compat: lo seteamos arriba). Pero si explícitamente mandó `owners`
+          // y quedó vacío, el sistema de legacy queda sin primer owner — eso es
+          // decisión del usuario (probablemente quiere resetear).
+        });
       } catch (err: any) {
         console.error("[DB] Error persistiendo property_owners:", err.message);
-        // No bloqueamos: la propiedad ya quedó guardada, los owners se pueden
-        // re-enviar en otro POST.
+        // BUG-017: antes silenciábamos. Ahora devolvemos 500 para que el
+        // cliente sepa que la operación falló y pueda reintentar. La
+        // transacción ya hizo rollback, así que la propiedad queda con
+        // los owners VIEJOS intactos.
+        res.status(500).json({
+          error: "Error guardando owners. Cambios no aplicados.",
+          hint: "Reintentá el POST con el mismo body.",
+        });
+        return;
       }
     }
 
     // ── 4. Persistir units (estrategia idéntica: DELETE + INSERT) ──────
     if (Array.isArray(units)) {
       try {
-        await pool.query(`DELETE FROM property_units WHERE property_id = ?`, [
-          propertyId,
-        ]);
-        for (let i = 0; i < units.length; i++) {
-          const u = units[i] ?? {};
-          const type = String(u.type ?? "").trim();
-          if (!UNIT_TYPES.has(type)) {
-            console.warn(
-              `[units] tipo inválido "${type}" — se salta. Permitidos: ${[...UNIT_TYPES].join(", ")}`,
+        // BUG-017: misma lógica que owners — DELETE + INSERT en una sola
+        // transacción para evitar set parcial si un INSERT falla.
+        await withTransaction(async (conn) => {
+          await conn.query(`DELETE FROM property_units WHERE property_id = ?`, [
+            propertyId,
+          ]);
+          for (let i = 0; i < units.length; i++) {
+            const u = units[i] ?? {};
+            const type = String(u.type ?? "").trim();
+            if (!UNIT_TYPES.has(type)) {
+              console.warn(
+                `[units] tipo inválido "${type}" — se salta. Permitidos: ${[...UNIT_TYPES].join(", ")}`,
+              );
+              continue;
+            }
+            const label = String(u.label ?? "").trim();
+            if (!label) continue; // sin label no se puede mostrar
+            const unitId =
+              typeof u.id === "string" && u.id && !u.id.startsWith("wizard-")
+                ? u.id
+                : crypto.randomUUID();
+            const folioMatricula = u.folioMatricula ?? u.folio_matricula ?? null;
+            const areaM2 = u.areaM2 ?? u.area_m2 ?? null;
+            const position = Number(u.position) || i + 1;
+            await conn.query(
+              `INSERT INTO property_units
+              (id, organization_id, property_id, type, label, folio_matricula,
+               area_m2, notes, position)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                unitId,
+                orgId,
+                propertyId,
+                type,
+                label,
+                folioMatricula ? String(folioMatricula) : null,
+                areaM2 !== null && areaM2 !== "" ? Number(areaM2) : null,
+                u.notes ?? null,
+                position,
+              ],
             );
-            continue;
           }
-          const label = String(u.label ?? "").trim();
-          if (!label) continue; // sin label no se puede mostrar
-          const unitId =
-            typeof u.id === "string" && u.id && !u.id.startsWith("wizard-")
-              ? u.id
-              : crypto.randomUUID();
-          const folioMatricula = u.folioMatricula ?? u.folio_matricula ?? null;
-          const areaM2 = u.areaM2 ?? u.area_m2 ?? null;
-          const position = Number(u.position) || i + 1;
-          await pool.query(
-            `INSERT INTO property_units
-            (id, organization_id, property_id, type, label, folio_matricula,
-             area_m2, notes, position)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              unitId,
-              orgId,
-              propertyId,
-              type,
-              label,
-              folioMatricula ? String(folioMatricula) : null,
-              areaM2 !== null && areaM2 !== "" ? Number(areaM2) : null,
-              u.notes ?? null,
-              position,
-            ],
-          );
-        }
+        });
       } catch (err: any) {
         console.error("[DB] Error persistiendo property_units:", err.message);
+        // BUG-017: 500 con hint accionable (mismo patrón que owners).
+        res.status(500).json({
+          error: "Error guardando units. Cambios no aplicados.",
+          hint: "Reintentá el POST con el mismo body.",
+        });
+        return;
       }
     }
 

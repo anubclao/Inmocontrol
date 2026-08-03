@@ -33,8 +33,10 @@
 
 import { Router } from "express";
 import crypto from "crypto";
+import type { PoolConnection } from "mysql2/promise";
 import pool, { ensureDefaultOrg } from "../db.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+import { withTransaction } from "../lib/withTransaction.js";
 // Reutilizamos los cálculos del cliente. tsx resuelve TS, no hay problema.
 import {
   generateAmortization,
@@ -390,39 +392,47 @@ router.post(
 
     const updated = applyPaymentToRow(row, paidOnDayOfMonth, policy);
 
-    await pool.query(
-      `UPDATE amortization_rows
-       SET paid_on_day_of_month = ?,
-           applied_late_fee_pct = ?,
-           late_fee_amount      = ?,
-           total                = ?,
-           status               = ?,
-           paid_at              = ?,
-           paid_amount          = ?
-       WHERE id = ?`,
-      [
-        updated.paidOnDayOfMonth,
-        updated.appliedLateFeePct,
-        updated.lateFeeAmount,
-        updated.total,
-        updated.status,
-        updated.paidAt ??
-          new Date().toISOString().slice(0, 19).replace("T", " "),
-        updated.paidAmount ?? updated.total,
-        rowId,
-      ],
-    );
+    // BUG-008: el UPDATE a amortization_rows y la marca del invoice deben
+    // ser atómicos. Si el 2do falla, el primero no puede haber commiteado
+    // (dejaría la amortización pagada pero el invoice pendiente).
+    // Envolvemos ambas en withTransaction: o se aplican las dos o ninguna.
+    await withTransaction(async (conn) => {
+      await conn.query(
+        `UPDATE amortization_rows
+         SET paid_on_day_of_month = ?,
+             applied_late_fee_pct = ?,
+             late_fee_amount      = ?,
+             total                = ?,
+             status               = ?,
+             paid_at              = ?,
+             paid_amount          = ?
+         WHERE id = ?`,
+        [
+          updated.paidOnDayOfMonth,
+          updated.appliedLateFeePct,
+          updated.lateFeeAmount,
+          updated.total,
+          updated.status,
+          updated.paidAt ??
+            new Date().toISOString().slice(0, 19).replace("T", " "),
+          updated.paidAmount ?? updated.total,
+          rowId,
+        ],
+      );
 
-    // Marca el invoice existente como pagado. Si todavía no fue enviado
-    // (caso edge: agente pagó directo sin enviar antes), lo crea como paid
-    // sin sent_at para no perder trazabilidad.
-    await markInvoicePaid(
-      orgId,
-      row.propertyId,
-      contractId,
-      row.periodStart.slice(0, 7),
-      updated.total,
-    );
+      // Marca el invoice existente como pagado. Si todavía no fue enviado
+      // (caso edge: agente pagó directo sin enviar antes), lo crea como paid
+      // sin sent_at para no perder trazabilidad.
+      // BUG-008: pasamos `conn` para que use la MISMA transacción.
+      await markInvoicePaid(
+        orgId,
+        row.propertyId,
+        contractId,
+        row.periodStart.slice(0, 7),
+        updated.total,
+        conn,
+      );
+    });
 
     res.json(updated);
   }),
@@ -433,6 +443,10 @@ router.post(
  // fue enviado antes con POST /invoices/send), solo actualiza status + paid_*.
  // Si NO existe (caso edge: agente registró el pago sin enviar antes), crea
  // uno nuevo con status='paid' y sent_at=NULL (queda como evidencia histórica).
+ *
+ * BUG-008: ahora acepta `conn` opcional. Si se pasa, todas las queries usan
+ * esa conexión (forma parte de la transacción del caller). Si no, usa
+ * `pool.query` (modo standalone legacy — para scripts / casos de borde).
  */
 async function markInvoicePaid(
   orgId: string,
@@ -440,13 +454,18 @@ async function markInvoicePaid(
   contractId: string,
   period: string,
   paidAmount: number,
+  conn?: PoolConnection,
 ) {
-  const [existing] = await pool.query(
+  // Helper: la query va contra la conexión transaccional si está, sino al pool.
+  const q = (sql: string, params: any[]) =>
+    conn ? conn.query(sql, params) : pool.query(sql, params);
+
+  const [existing] = await q(
     `SELECT id FROM rent_invoices WHERE contract_id = ? AND period = ?`,
     [contractId, period],
   );
   if ((existing as any[]).length > 0) {
-    await pool.query(
+    await q(
       `UPDATE rent_invoices
        SET status = 'paid', paid_at = NOW(), paid_amount = ?
        WHERE contract_id = ? AND period = ?`,
@@ -455,7 +474,7 @@ async function markInvoicePaid(
     return;
   }
 
-  const [rows] = await pool.query(
+  const [rows] = await q(
     `SELECT * FROM amortization_rows
      WHERE contract_id = ? AND period_start LIKE ? LIMIT 1`,
     [contractId, `${period}%`],
@@ -464,14 +483,14 @@ async function markInvoicePaid(
   if (list.length === 0) return;
   const row = rowToAmortization(list[0]);
 
-  const [bankRows] = await pool.query(
+  const [bankRows] = await q(
     `SELECT id FROM bank_accounts WHERE property_id = ? AND is_primary = 1 LIMIT 1`,
     [propertyId],
   );
   const primaryBankId = (bankRows as any[])[0]?.id ?? null;
 
   const invoice = generateInvoiceFromRow(row, { paymentLink: primaryBankId });
-  await pool.query(
+  await q(
     `INSERT INTO rent_invoices
        (id, organization_id, property_id, contract_id, period,
         due_date, subtotal, total_early, total_mid, total_late, status, paid_at, paid_amount)

@@ -56,7 +56,7 @@ export interface TenantsViewProps {
    *  usa el return para mostrar el toast correcto. */
   onUpdateTenant: (id: string, updates: any) => Promise<boolean>;
   onDeleteTenant: (id: string) => Promise<void>;
-  onUpdateProperty: (id: string, updates: any) => void;
+  onUpdateProperty: (id: string, updates: any) => Promise<boolean>;
   role: Role | null;
 }
 
@@ -521,7 +521,33 @@ export function TenantsView({
       if (data.propertyDriveFolderId && !selectedProperty?.driveFolderId) {
         propUpdate.driveFolderId = data.propertyDriveFolderId;
       }
-      onUpdateProperty(form.propertyId, propUpdate);
+      // BUG-023: el PATCH a la propiedad puede fallar. Antes era fire-and-forget
+      // y dejaba el tenant creado en MySQL pero la propiedad sin actualizar,
+      // con toast mentiroso de éxito. Ahora esperamos el resultado:
+      // - Si OK: cerrar modal, resetear form, mostrar toast de éxito.
+      // - Si falla: NO cerrar el modal, mostrar toast de warning. El tenant
+      //   ya existe en MySQL (no lo podemos "descrear"); el user puede
+      //   reintentar el PATCH desde el módulo Properties o reintentar
+      //   el wizard completo (el 409 lo bloquea preventivamente).
+      const propertyUpdated = await onUpdateProperty(
+        form.propertyId,
+        propUpdate,
+      );
+      if (!propertyUpdated) {
+        // BUG-023: el tenant SÍ se creó en MySQL pero la propiedad quedó sin
+        // actualizar. Mostramos error (toast system solo soporta success|error)
+        // para que el user lo note. El modal sigue abierto para que pueda
+        // decidir si reintenta o cancela (el tenant creado quedará visible en
+        // la lista — no se "deshace" mágicamente).
+        showToast(
+          "Inquilino creado pero la propiedad no se pudo actualizar a 'En Colocación'. Reintentá desde el módulo Propiedades.",
+          "error",
+        );
+        // Salimos sin resetear form ni cerrar modal para que el user note
+        // que algo falló. El modal sigue abierto con los datos.
+        setCreatingTenant(false);
+        return;
+      }
       showToast(
         (data.message || "Arrendatario creado") +
           " — completa el Inventario de Colocación para activar la propiedad",

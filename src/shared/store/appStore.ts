@@ -384,6 +384,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   updateProperty: async (id, patch) => {
+    // BUG-023: antes swalloweaba el error y retornaba void. Eso hacía que
+    // el caller (TenantsView.handleConfirmAndCreate) pensara que el PATCH
+    // había funcionado, mostrara toast de éxito, y quedara con el tenant
+    // creado en MySQL pero la propiedad sin actualizar.
+    // Ahora: si el server devuelve error, lo re-throw para que el caller
+    // pueda decidir qué hacer (mostrar toast de error, no cerrar el modal,
+    // etc). BUG-003 ya aplicó el mismo patrón en updateTenant.
     try {
       await apiCall("PATCH", `/api/properties/${id}`, patch);
       set((s) => ({
@@ -394,6 +401,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (err: any) {
       console.error("[store] updateProperty failed:", err);
       set({ error: err.message });
+      throw err;
     }
   },
 

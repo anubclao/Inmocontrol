@@ -356,9 +356,26 @@ export default function App() {
         /* silent — la UI no depende de este refresh */
       });
   };
-  const handleUpdateProperty = (id: string, updates: any) => {
-    updateProperty(id, updates);
-    showToast("Propiedad actualizada");
+  const handleUpdateProperty = async (
+    id: string,
+    updates: any,
+  ): Promise<boolean> => {
+    // BUG-023: antes era fire-and-forget con toast mentiroso. Ahora esperamos
+    // el resultado real y propagamos el éxito/fallo al caller (true/false).
+    // El caller (ej. TenantsView.handleConfirmAndCreate) usa este return
+    // para NO cerrar el modal si el PATCH falló — el tenant ya se creó en
+    // MySQL pero la propiedad no se actualizó, y eso requiere manejo UX.
+    try {
+      await updateProperty(id, updates);
+      showToast("Propiedad actualizada");
+      return true;
+    } catch {
+      showToast(
+        "Error al actualizar la propiedad. Reintentá en unos segundos.",
+        "error",
+      );
+      return false;
+    }
   };
   const handleUpdateTenant = async (
     id: string,

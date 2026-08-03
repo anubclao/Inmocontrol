@@ -160,6 +160,9 @@ CREATE TABLE IF NOT EXISTS tenants (
   PRIMARY KEY (id),
   KEY tenants_org_idx (organization_id),
   KEY tenants_property_idx (property_id),
+  -- BUG-033: UNIQUE constraint evita duplicados de (org, document_id).
+  -- Migration 013 aplica lo mismo en DBs existentes.
+  UNIQUE KEY uniq_tenant_org_doc (organization_id, document_id),
   KEY tenants_doc_idx (organization_id, document_id),
   CONSTRAINT fk_tenants_org FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
   CONSTRAINT fk_tenants_property FOREIGN KEY (property_id) REFERENCES properties (id) ON DELETE SET NULL
@@ -532,6 +535,9 @@ CREATE TABLE IF NOT EXISTS rent_invoices (
   updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uniq_invoice_contract_period (contract_id, period),
+  -- BUG-032: UNIQUE constraint evita duplicar invoice_number bajo concurrencia.
+  -- Migration 012 aplica lo mismo en DBs existentes.
+  UNIQUE KEY uniq_invoice_number (invoice_number),
   KEY invoices_org_idx (organization_id),
   KEY invoices_property_period_idx (property_id, period),
   KEY invoices_invoice_number_idx (invoice_number),
