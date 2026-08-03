@@ -1,20 +1,36 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Modal } from '../../../shared/ui';
-import { AreaConfigPanel } from './AreaConfigPanel';
-import { AreaEditor } from './AreaEditor';
-import { SignatureStep } from './SignatureStep';
-import { inventoryDB, normalizePhotosArray } from '../inventoryDB';
-import { getPropertyTypeConfig, resolveAreas, type PropertyType } from '../inventoryConfig';
-import type { Inventory, InventoryArea, InventoryItem, InventoryPhoto, ItemMedia, Signature } from '../inventoryTypes';
-import { generateInventoryPDF } from '../inventoryPdf';
-import { useAppStore } from '../../../shared/store/appStore';
+import { useEffect, useMemo, useState } from "react";
+import { Button, Card, Modal } from "../../../shared/ui";
+import { AreaConfigPanel } from "./AreaConfigPanel";
+import { AreaEditor } from "./AreaEditor";
+import { SignatureStep } from "./SignatureStep";
+import { inventoryDB, normalizePhotosArray } from "../inventoryDB";
+import {
+  getPropertyTypeConfig,
+  resolveAreas,
+  type PropertyType,
+} from "../inventoryConfig";
+import type {
+  Inventory,
+  InventoryArea,
+  InventoryItem,
+  InventoryPhoto,
+  ItemMedia,
+  Signature,
+} from "../inventoryTypes";
+import { generateInventoryPDF } from "../inventoryPdf";
+import { useAppStore } from "../../../shared/store/appStore";
 
 interface StepInventoryProps {
-  showToast: (msg: string, type?: 'success' | 'error') => void;
+  showToast: (msg: string, type?: "success" | "error") => void;
   propertyId: string;
-  property: { address: string; owner: string; chip: string; ownerIdNumber?: string };
+  property: {
+    address: string;
+    owner: string;
+    chip: string;
+    ownerIdNumber?: string;
+  };
   propertyType: PropertyType;
-  phase: 'inicial' | 'final';
+  phase: "inicial" | "final";
   onBack: () => void;
   /** Llamado al finalizar el inventario. Acepta el inventario final como parámetro
    *  para evitar closures stale en el componente padre (PropertiesView). */
@@ -22,7 +38,12 @@ interface StepInventoryProps {
   /** Cuando es Inventario Final, le pasamos el Inicial para poder copiar áreas base */
   baseInventory?: Inventory | null;
   /** Datos del arrendatario asignado a la propiedad (para prellenar firmas) */
-  tenantData?: { name: string; idNumber: string; email?: string; phone?: string } | null;
+  tenantData?: {
+    name: string;
+    idNumber: string;
+    email?: string;
+    phone?: string;
+  } | null;
   /** ID de la carpeta del arrendatario en Google Drive (para subir el PDF firmado) */
   tenantDriveFolderId?: string | null;
   /** Modo captación: oculta las firmas del agente/arrendatario; la finalize solo genera PDF del inventario */
@@ -31,7 +52,7 @@ interface StepInventoryProps {
   onInventoryFinalized?: (inventory: Inventory) => Promise<void>;
 }
 
-type Stage = 'config' | 'editing' | 'signing';
+type Stage = "config" | "editing" | "signing";
 
 const initialCounters = (
   propertyType: PropertyType,
@@ -42,13 +63,25 @@ const initialCounters = (
   }
   const def = getPropertyTypeConfig(propertyType);
   const c: Record<string, number> = {};
-  def.multiCounters.forEach((mc) => { c[mc.key] = mc.default; });
+  def.multiCounters.forEach((mc) => {
+    c[mc.key] = mc.default;
+  });
   return c;
 };
 
 export function StepInventory({
-  showToast, propertyId, property, propertyType, phase, onBack, onComplete, baseInventory,
-  tenantData,   tenantDriveFolderId, hideSignatures = false, onInventoryFinalized,
+  showToast,
+  propertyId,
+  property,
+  propertyType,
+  phase,
+  onBack,
+  onComplete,
+  baseInventory,
+  tenantData,
+  tenantDriveFolderId,
+  hideSignatures = false,
+  onInventoryFinalized,
 }: StepInventoryProps) {
   const inventoryId = `${propertyId}:${phase}`;
   const [inventory, setInventory] = useState<Inventory | null>(null);
@@ -56,26 +89,39 @@ export function StepInventory({
   // Prellenar datos del arrendatario: del prop o del store
   const storeTenants = useAppStore((s) => s.tenants);
   const storeTenant = useMemo(
-    () => storeTenants.find((t) => t.propertyId === propertyId && t.status === 'Activo') ?? null,
+    () =>
+      storeTenants.find(
+        (t) => t.propertyId === propertyId && t.status === "Activo",
+      ) ?? null,
     [storeTenants, propertyId],
   );
   // Combina prop + store: el prop tiene prioridad (viene del tenant placement flow)
-  const effectiveTenantData = tenantData ?? (storeTenant ? {
-    name: storeTenant.name,
-    idNumber: storeTenant.idNumber,
-    email: storeTenant.email,
-    phone: storeTenant.phone,
-  } : null);
-  const [stage, setStage] = useState<Stage>('config');
+  const effectiveTenantData =
+    tenantData ??
+    (storeTenant
+      ? {
+          name: storeTenant.name,
+          idNumber: storeTenant.idNumber,
+          email: storeTenant.email,
+          phone: storeTenant.phone,
+        }
+      : null);
+  const [stage, setStage] = useState<Stage>("config");
   const [currentAreaIndex, setCurrentAreaIndex] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [customAreas, setCustomAreas] = useState<{ id: string; label: string }[]>([]);
+  const [customAreas, setCustomAreas] = useState<
+    { id: string; label: string }[]
+  >([]);
   // Modal de confirmación al finalizar inventario (reemplaza window.confirm)
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [resumenFinalizacion, setResumenFinalizacion] = useState<{
-    areasConFotos: number; totalAreas: number; totalMedia: number;
-    totalPhotos: number; totalItemMedia: number;
-    totalItemsEvaluados: number; areasSinFotos: InventoryArea[];
+    areasConFotos: number;
+    totalAreas: number;
+    totalMedia: number;
+    totalPhotos: number;
+    totalItemMedia: number;
+    totalItemsEvaluados: number;
+    areasSinFotos: InventoryArea[];
   } | null>(null);
 
   // Carga inicial
@@ -95,7 +141,9 @@ export function StepInventory({
 
       if (shouldFetchFromMysql) {
         try {
-          const res = await fetch(`/api/inventories?propertyId=${encodeURIComponent(propertyId)}`);
+          const res = await fetch(
+            `/api/inventories?propertyId=${encodeURIComponent(propertyId)}`,
+          );
           if (res.ok) {
             const data = await res.json();
             const remote = (data.inventories ?? []).find(
@@ -104,7 +152,9 @@ export function StepInventory({
             if (remote) {
               const remotePhotos = normalizePhotosArray(remote.photos);
               if (remotePhotos.length > 0) {
-                console.log(`[inventory] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`);
+                console.log(
+                  `[inventory] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`,
+                );
               }
               existing = {
                 id: remote.id,
@@ -124,7 +174,7 @@ export function StepInventory({
               } as Inventory;
               // Re-hidratar IndexedDB: inventario + cada foto en su store
               await inventoryDB.saveInventory(existing);
-              for (const p of (existing.photos ?? [])) {
+              for (const p of existing.photos ?? []) {
                 if (p?.dataUrl) {
                   await inventoryDB.savePhoto({
                     id: p.id,
@@ -136,11 +186,13 @@ export function StepInventory({
                   });
                 }
               }
-              console.log(`[inventory] Recuperado de MySQL: ${remote.id} (${(existing.photos ?? []).length} fotos)`);
+              console.log(
+                `[inventory] Recuperado de MySQL: ${remote.id} (${(existing.photos ?? []).length} fotos)`,
+              );
             }
           }
         } catch (err) {
-          console.warn('[inventory] fallback MySQL fetch failed:', err);
+          console.warn("[inventory] fallback MySQL fetch failed:", err);
         }
       }
       if (cancelled) return;
@@ -151,9 +203,18 @@ export function StepInventory({
         // objeto, re-save con la forma correcta (self-heal) — así la
         // próxima lectura ya no tiene que normalizar.
         const normalizedPhotos = normalizePhotosArray(existing.photos);
-        if (existing.photos && typeof existing.photos === 'object' && !Array.isArray(existing.photos)) {
-          const shape = normalizedPhotos.length === 0 ? 'array vacío (id set sin metadata)' : 'array con metadata';
-          console.warn(`[inventory] ${inventoryId}: photos era Record/Object — normalizado a ${shape}. Self-heal save.`);
+        if (
+          existing.photos &&
+          typeof existing.photos === "object" &&
+          !Array.isArray(existing.photos)
+        ) {
+          const shape =
+            normalizedPhotos.length === 0
+              ? "array vacío (id set sin metadata)"
+              : "array con metadata";
+          console.warn(
+            `[inventory] ${inventoryId}: photos era Record/Object — normalizado a ${shape}. Self-heal save.`,
+          );
           existing = { ...existing, photos: normalizedPhotos };
           void inventoryDB.saveInventory(existing);
         } else if (normalizedPhotos !== existing.photos) {
@@ -163,12 +224,13 @@ export function StepInventory({
         setCustomAreas(existing.customAreas ?? []);
         // En modo captación (hideSignatures) no hay firmas — se salta el paso de firmas
         if (hideSignatures) {
-          setStage(existing.signedAt ? 'editing' : 'editing');
+          setStage(existing.signedAt ? "editing" : "editing");
         } else {
-          setStage(existing.signedAt ? 'signing' : 'editing');
+          setStage(existing.signedAt ? "signing" : "editing");
         }
       } else {
-        const type: PropertyType = baseInventory?.propertyType ?? propertyType ?? 'apartamento';
+        const type: PropertyType =
+          baseInventory?.propertyType ?? propertyType ?? "apartamento";
         const counters = initialCounters(type, baseInventory);
         const config = getPropertyTypeConfig(type);
         const resolved = resolveAreas(config, counters);
@@ -182,7 +244,7 @@ export function StepInventory({
         }));
 
         // Si es Final, copiamos items de cada área del Inicial
-        if (phase === 'final' && baseInventory) {
+        if (phase === "final" && baseInventory) {
           baseInventory.areas.forEach((baseArea) => {
             const target = areas.find((a) => a.id === baseArea.id);
             if (target) {
@@ -199,7 +261,8 @@ export function StepInventory({
           propertyType: type,
           counters,
           areas,
-          photos: phase === 'final' && baseInventory ? baseInventory.photos : [],
+          photos:
+            phase === "final" && baseInventory ? baseInventory.photos : [],
           signatures: [],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -209,12 +272,14 @@ export function StepInventory({
         await inventoryDB.saveInventory(inv);
         setInventory(inv);
         // Mantener en 'config' para que el usuario configure los contadores primero
-        setStage('config');
+        setStage("config");
       }
       setLoading(false);
     })();
-    return () => { cancelled = true; };
-  }, [inventoryId, propertyId, phase, baseInventory]);
+    return () => {
+      cancelled = true;
+    };
+  }, [inventoryId, propertyId, phase, baseInventory?.id]);
 
   const persist = async (next: Inventory) => {
     next.updatedAt = new Date().toISOString();
@@ -224,7 +289,7 @@ export function StepInventory({
     // Sin esto, `inventoryDB.getPhoto(id)` siempre devuelve null → el PDF
     // sale sin fotos y la subida a Drive en finalize se saltea silenciosamente.
     // Solo guardamos fotos NUEVAS o actualizadas (comparamos dataUrl).
-    for (const p of (next.photos ?? [])) {
+    for (const p of next.photos ?? []) {
       if (!p?.dataUrl) continue;
       const existing = await inventoryDB.getPhoto(p.id);
       if (!existing || existing.dataUrl !== p.dataUrl) {
@@ -251,16 +316,19 @@ export function StepInventory({
   /** Finaliza la captación: guarda el inventario y genera el PDF antes de llamar onComplete */
   const handleFinalizeInventory = async () => {
     if (!inventory) {
-      console.error('[inventory] No hay inventario cargado');
-      showToast('No hay inventario para finalizar', 'error');
+      console.error("[inventory] No hay inventario cargado");
+      showToast("No hay inventario para finalizar", "error");
       return;
     }
 
     // Validación final: áreas sin fotos (cuenta fotos de área + media de items)
     const areasSinFotos = inventory.areas.filter((a) => {
-      const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
+      const areaPhotoCount = inventory.photos.filter(
+        (p) => p.areaId === a.id,
+      ).length;
       const itemMediaCount = Object.values(a.items).reduce<number>(
-        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0),
+        0,
       );
       return areaPhotoCount + itemMediaCount === 0;
     });
@@ -269,21 +337,33 @@ export function StepInventory({
     const totalAreas = inventory.areas.length;
     const totalPhotos = inventory.photos.length;
     const totalItemMedia = inventory.areas.reduce(
-      (acc, a) => acc + Object.values(a.items).reduce<number>(
-        (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0), 0,
-      ), 0,
+      (acc, a) =>
+        acc +
+        Object.values(a.items).reduce<number>(
+          (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0),
+          0,
+        ),
+      0,
     );
     const totalMedia = totalPhotos + totalItemMedia;
     const areasConFotos = totalAreas - areasSinFotos.length;
     const totalItemsEvaluados = inventory.areas.reduce(
-      (acc, a) => acc + Object.values(a.items).filter((it: InventoryItem) => it.status).length,
+      (acc, a) =>
+        acc +
+        Object.values(a.items).filter((it: InventoryItem) => it.status).length,
       0,
     );
 
     // En lugar de window.confirm, mostramos un Modal con el resumen y la opción de revisar.
     // Esto le da al usuario la chance de volver si olvidó algo, sin alerta nativa fea.
     setResumenFinalizacion({
-      areasConFotos, totalAreas, totalMedia, totalPhotos, totalItemMedia, totalItemsEvaluados, areasSinFotos,
+      areasConFotos,
+      totalAreas,
+      totalMedia,
+      totalPhotos,
+      totalItemMedia,
+      totalItemsEvaluados,
+      areasSinFotos,
     });
     setConfirmFinalize(true);
   };
@@ -293,48 +373,54 @@ export function StepInventory({
     if (!inventory || !resumenFinalizacion) return;
     setConfirmFinalize(false);
 
-    const { areasConFotos, totalAreas, totalMedia, totalItemsEvaluados, areasSinFotos } = resumenFinalizacion;
-    console.log('[inventory] Iniciando finalización...');
+    const {
+      areasConFotos,
+      totalAreas,
+      totalMedia,
+      totalItemsEvaluados,
+      areasSinFotos,
+    } = resumenFinalizacion;
+    console.log("[inventory] Iniciando finalización...");
     try {
       // Guardar inventario con signedAt vacío (es captación, sin firmas)
       const finalInv = { ...inventory, signedAt: undefined };
       await persist(finalInv);
-      console.log('[inventory] Persistido en IndexedDB');
+      console.log("[inventory] Persistido en IndexedDB");
 
       // Subir JSON a MySQL + PDF a Drive (si hay callback)
       if (onInventoryFinalized) {
         try {
-          showToast('Subiendo inventario a Drive y MySQL...');
+          showToast("Subiendo inventario a Drive y MySQL...");
           await onInventoryFinalized(finalInv);
-          console.log('[inventory] Callback finalizado');
+          console.log("[inventory] Callback finalizado");
         } catch (e) {
-          console.error('[inventory] error en callback de finalización:', e);
-          showToast('Error subiendo a Drive, pero continuando', 'error');
+          console.error("[inventory] error en callback de finalización:", e);
+          showToast("Error subiendo a Drive, pero continuando", "error");
         }
       }
 
       // Generar y descargar PDF del inventario
-      showToast('Generando PDF del inventario...');
+      showToast("Generando PDF del inventario...");
       await onGeneratePDF();
-      console.log('[inventory] PDF generado');
+      console.log("[inventory] PDF generado");
 
       // Toast final con resumen
       showToast(
         `✓ Inventario guardado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${totalItemsEvaluados} ítems`,
-        'success',
+        "success",
       );
       // Pasamos el inventario final explícitamente para evitar closures stale del padre
       onComplete(finalInv);
     } catch (err) {
-      console.error('[inventory] Error en handleFinalizeInventory:', err);
-      showToast('Error al finalizar inventario', 'error');
+      console.error("[inventory] Error en handleFinalizeInventory:", err);
+      showToast("Error al finalizar inventario", "error");
     }
   };
 
   const onStart = () => {
     if (!inventory) return;
     setCurrentAreaIndex(0);
-    setStage('editing');
+    setStage("editing");
   };
 
   const onAreaChange = (area: InventoryArea) => {
@@ -383,7 +469,10 @@ export function StepInventory({
    * El media también queda inline en el `InventoryItem.media` para que la
    * UI lo muestre sin tener que hacer un round-trip a IndexedDB.
    */
-  const onSaveItemMedia = async (_itemId: string, media: ItemMedia): Promise<void> => {
+  const onSaveItemMedia = async (
+    _itemId: string,
+    media: ItemMedia,
+  ): Promise<void> => {
     if (!inventory) return;
     try {
       await inventoryDB.savePhoto({
@@ -400,18 +489,21 @@ export function StepInventory({
         sizeBytes: media.sizeBytes,
       });
     } catch (err) {
-      console.error('[itemMedia] savePhoto failed:', err);
+      console.error("[itemMedia] savePhoto failed:", err);
       throw err;
     }
   };
 
   /** Borra el media persistido de un item. */
-  const onDeleteItemMedia = async (_itemId: string, mediaId: string): Promise<void> => {
+  const onDeleteItemMedia = async (
+    _itemId: string,
+    mediaId: string,
+  ): Promise<void> => {
     if (!inventory) return;
     try {
       await inventoryDB.deletePhoto(`${inventory.id}:${mediaId}`);
     } catch (err) {
-      console.error('[itemMedia] deletePhoto failed:', err);
+      console.error("[itemMedia] deletePhoto failed:", err);
       throw err;
     }
   };
@@ -425,31 +517,43 @@ export function StepInventory({
     // Áreas evaluadas: cuentan las que tienen al menos 1 foto O item con media.
     // (los items marcados `removed: true` también cuentan como "evaluados")
     const areasConFotos = inventory.areas.filter((a) => {
-      const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
+      const areaPhotoCount = inventory.photos.filter(
+        (p) => p.areaId === a.id,
+      ).length;
       const itemMediaCount = Object.values(a.items).reduce<number>(
-        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
+        (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0),
+        0,
       );
       return areaPhotoCount + itemMediaCount > 0;
     }).length;
     // Total media: fotos de área + media de items
     const totalItemMedia = inventory.areas.reduce(
-      (acc, a) => acc + Object.values(a.items).reduce<number>(
-        (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0), 0,
-      ), 0,
+      (acc, a) =>
+        acc +
+        Object.values(a.items).reduce<number>(
+          (sub, it) => sub + ((it as InventoryItem).media?.length ?? 0),
+          0,
+        ),
+      0,
     );
     const totalMedia = totalPhotos + totalItemMedia;
     const totalItemsEvaluados = inventory.areas.reduce(
-      (acc, a) => acc + Object.values(a.items).filter((it: InventoryItem) => it.status).length,
+      (acc, a) =>
+        acc +
+        Object.values(a.items).filter((it: InventoryItem) => it.status).length,
       0,
     );
 
     // En fase final: detectar novedades vs. inventario de captación
     let novedadesCount = 0;
-    if (inventory.phase === 'final' && baseInventory) {
+    if (inventory.phase === "final" && baseInventory) {
       for (const area of inventory.areas) {
         const baseArea = baseInventory.areas.find((ba) => ba.id === area.id);
         if (!baseArea) continue;
-        for (const [itemId, currentItem] of Object.entries(area.items) as [string, InventoryItem][]) {
+        for (const [itemId, currentItem] of Object.entries(area.items) as [
+          string,
+          InventoryItem,
+        ][]) {
           const baseItem = baseArea.items[itemId];
           if (!baseItem) continue;
           if (baseItem.status !== currentItem.status) novedadesCount++;
@@ -458,14 +562,15 @@ export function StepInventory({
     }
 
     // Confirmación con resumen
-    const phaseLabel = inventory.phase === 'inicial' ? 'de captación' : 'de colocación';
+    const phaseLabel =
+      inventory.phase === "inicial" ? "de captación" : "de colocación";
     const resumen =
       `¿Está seguro de firmar el inventario ${phaseLabel}?\n\n` +
-      `• Firmantes: ${signatures.length} (${signatures.map((s) => s.signerRole).join(', ')})\n` +
+      `• Firmantes: ${signatures.length} (${signatures.map((s) => s.signerRole).join(", ")})\n` +
       `• Áreas evaluadas: ${areasConFotos}/${totalAreas}\n` +
       `• Archivos: ${totalMedia} (fotos + videos)\n` +
       `• Ítems evaluados: ${totalItemsEvaluados}` +
-      (novedadesCount > 0 ? `\n• Novedades detectadas: ${novedadesCount}` : '');
+      (novedadesCount > 0 ? `\n• Novedades detectadas: ${novedadesCount}` : "");
 
     if (!window.confirm(resumen)) return;
 
@@ -473,25 +578,30 @@ export function StepInventory({
       ...inventory,
       signatures,
       signedAt: new Date().toISOString(),
-      tenantName: signatures.find((s) => s.signerRole === 'arrendatario')?.signerName,
-      agentName: signatures.find((s) => s.signerRole === 'agente')?.signerName,
+      tenantName: signatures.find((s) => s.signerRole === "arrendatario")
+        ?.signerName,
+      agentName: signatures.find((s) => s.signerRole === "agente")?.signerName,
     };
     await persist(next);
-    showToast('Inventario firmado y guardado', 'success');
+    showToast("Inventario firmado y guardado", "success");
 
-    if (inventory.phase === 'final') {
+    if (inventory.phase === "final") {
       // phase === 'final': Inventario de Colocación firmado.
       // (El contrato de arrendamiento se sube por separado desde el módulo de arrendatarios)
       // Avisamos al padre para que haga los efectos colaterales:
       //  - flip status de la propiedad a "Arrendado"
       //  - cerrar overlay
       try {
-        const { generateInventoryPdfBlob } = await import('../inventoryPdf');
-        const { inventoryDB: invDB } = await import('../inventoryDB');
-        const blob = await generateInventoryPdfBlob(next, property, async (id) => {
-          const photo = await invDB.getPhoto(id);
-          return (photo as any)?.dataUrl ?? null;
-        });
+        const { generateInventoryPdfBlob } = await import("../inventoryPdf");
+        const { inventoryDB: invDB } = await import("../inventoryDB");
+        const blob = await generateInventoryPdfBlob(
+          next,
+          property,
+          async (id) => {
+            const photo = await invDB.getPhoto(id);
+            return (photo as any)?.dataUrl ?? null;
+          },
+        );
 
         const reader = new FileReader();
         const base64 = await new Promise<string>((resolve) => {
@@ -504,51 +614,54 @@ export function StepInventory({
 
         // 1) Subir a Inventarios/ del Drive de la propiedad (respaldo principal)
         try {
-          await fetch('/api/inventories/upload-pdf', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+          await fetch("/api/inventories/upload-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               propertyId: inventory.propertyId,
-              phase: 'final',
+              phase: "final",
               base64Data: base64,
               inventoryDate: today,
             }),
           });
-          showToast('✓ PDF de colocación guardado en Inventarios/', 'success');
+          showToast("✓ PDF de colocación guardado en Inventarios/", "success");
         } catch (e) {
-          console.warn('[colocación] no se pudo subir a Inventarios/', e);
+          console.warn("[colocación] no se pudo subir a Inventarios/", e);
         }
 
         // 2) Copiar también a la carpeta Contrato/ del arrendatario
         if (tenantDriveFolderId) {
           try {
-            await fetch('/api/tenants/upload-document', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+            await fetch("/api/tenants/upload-document", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 tenantDriveFolderId,
-                folder: 'Contrato',
+                folder: "Contrato",
                 fileName,
                 base64Data: base64,
               }),
             });
-            showToast('✓ Copia guardada en carpeta del arrendatario', 'success');
+            showToast(
+              "✓ Copia guardada en carpeta del arrendatario",
+              "success",
+            );
           } catch (e) {
-            console.warn('[colocación] no se pudo copiar al arrendatario:', e);
+            console.warn("[colocación] no se pudo copiar al arrendatario:", e);
           }
         }
 
         showToast(
           `✓ Inventario de colocación firmado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${novedadesCount} novedades`,
-          'success',
+          "success",
         );
 
         // Inventario de colocación completo: avisamos al padre para que
         // cierre el overlay y haga el flip de status a "Arrendado".
         onComplete(next);
       } catch (e) {
-        console.error('Error generando/subiendo PDF de colocación:', e);
-        showToast('Error al generar/subir PDF firmado', 'error');
+        console.error("Error generando/subiendo PDF de colocación:", e);
+        showToast("Error al generar/subir PDF firmado", "error");
       }
     }
   };
@@ -556,16 +669,22 @@ export function StepInventory({
   const onGeneratePDF = async () => {
     if (!inventory) return;
     try {
-      const { useSettingsStore } = await import('../../../shared/store/settingsStore');
+      const { useSettingsStore } =
+        await import("../../../shared/store/settingsStore");
       const agencyName = useSettingsStore.getState().agency.name;
-      await generateInventoryPDF(inventory, property, async (id) => {
-        const photo = inventory.photos.find((p) => p.id === id);
-        return photo?.dataUrl ?? null;
-      }, { agencyName });
-      showToast('PDF generado correctamente', 'success');
+      await generateInventoryPDF(
+        inventory,
+        property,
+        async (id) => {
+          const photo = inventory.photos.find((p) => p.id === id);
+          return photo?.dataUrl ?? null;
+        },
+        { agencyName },
+      );
+      showToast("PDF generado correctamente", "success");
     } catch (err) {
       console.error(err);
-      showToast('Error al generar PDF', 'error');
+      showToast("Error al generar PDF", "error");
     }
   };
 
@@ -585,25 +704,43 @@ export function StepInventory({
       {resumenFinalizacion && (
         <div className="space-y-4">
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <p className="text-sm font-semibold text-emerald-900 mb-2">Resumen del inventario</p>
+            <p className="text-sm font-semibold text-emerald-900 mb-2">
+              Resumen del inventario
+            </p>
             <ul className="text-xs text-emerald-800 space-y-1">
-              <li>• <strong>Áreas evaluadas:</strong> {resumenFinalizacion.areasConFotos} de {resumenFinalizacion.totalAreas}</li>
-              <li>• <strong>Archivos:</strong> {resumenFinalizacion.totalMedia} ({resumenFinalizacion.totalPhotos} fotos de área + {resumenFinalizacion.totalItemMedia} fotos/videos de items)</li>
-              <li>• <strong>Ítems evaluados:</strong> {resumenFinalizacion.totalItemsEvaluados}</li>
+              <li>
+                • <strong>Áreas evaluadas:</strong>{" "}
+                {resumenFinalizacion.areasConFotos} de{" "}
+                {resumenFinalizacion.totalAreas}
+              </li>
+              <li>
+                • <strong>Archivos:</strong> {resumenFinalizacion.totalMedia} (
+                {resumenFinalizacion.totalPhotos} fotos de área +{" "}
+                {resumenFinalizacion.totalItemMedia} fotos/videos de items)
+              </li>
+              <li>
+                • <strong>Ítems evaluados:</strong>{" "}
+                {resumenFinalizacion.totalItemsEvaluados}
+              </li>
             </ul>
           </div>
 
           {resumenFinalizacion.areasSinFotos.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
               <p className="font-semibold mb-1">⚠️ Áreas sin foto:</p>
-              <p>{resumenFinalizacion.areasSinFotos.map((a) => a.label).join(', ')}</p>
+              <p>
+                {resumenFinalizacion.areasSinFotos
+                  .map((a) => a.label)
+                  .join(", ")}
+              </p>
             </div>
           )}
 
           <p className="text-sm text-slate-600">
-            Al confirmar, el inventario se guardará en MySQL, se generará el PDF y se
-            subirá a Google Drive (carpeta <code>Inventarios/</code> de la propiedad),
-            junto con todas las fotos. La propiedad quedará en estado <strong>Activo</strong>.
+            Al confirmar, el inventario se guardará en MySQL, se generará el PDF
+            y se subirá a Google Drive (carpeta <code>Inventarios/</code> de la
+            propiedad), junto con todas las fotos. La propiedad quedará en
+            estado <strong>Activo</strong>.
           </p>
 
           <div className="flex gap-3 pt-2">
@@ -614,10 +751,7 @@ export function StepInventory({
             >
               Revisar inventario
             </Button>
-            <Button
-              className="flex-1"
-              onClick={() => void executeFinalize()}
-            >
+            <Button className="flex-1" onClick={() => void executeFinalize()}>
               Sí, finalizar
             </Button>
           </div>
@@ -637,176 +771,237 @@ export function StepInventory({
     );
   }
 
-  if (stage === 'config') {
+  if (stage === "config") {
     return (
       <>
-      <AreaConfigPanel
-        propertyType={inventory.propertyType}
-        counters={inventory.counters}
-        customAreas={customAreas}
-        onPropertyTypeChange={(t) => {
-          const config = getPropertyTypeConfig(t);
-          const newCounters: Record<string, number> = {};
-          config.multiCounters.forEach((mc) => { newCounters[mc.key] = mc.default; });
-          const resolved = resolveAreas(config, newCounters, customAreas);
-          const newAreas: InventoryArea[] = resolved.map((a) => ({
-            id: a.id, category: a.category, label: a.label, items: {}, photos: [],
-          }));
-          void persist({ ...inventory, propertyType: t, counters: newCounters, areas: newAreas, customAreas });
-        }}
-        onCountersChange={(c) => {
-          const config = getPropertyTypeConfig(inventory.propertyType);
-          const resolved = resolveAreas(config, c, customAreas);
-          // Preservar items de áreas que ya existían por id
-          const itemsMap = new Map<string, Record<string, InventoryItem>>(
-            inventory.areas.map((a) => [a.id, a.items])
-          );
-          const newAreas: InventoryArea[] = resolved.map((a) => ({
-            id: a.id, category: a.category, label: a.label,
-            items: itemsMap.get(a.id) ?? {},
-            photos: [],
-          }));
-          void persist({ ...inventory, counters: c, areas: newAreas, customAreas });
-        }}
-        onCustomAreasChange={(next) => {
-          setCustomAreas(next);
-          const config = getPropertyTypeConfig(inventory.propertyType);
-          const resolved = resolveAreas(config, inventory.counters, next);
-          const itemsMap = new Map<string, Record<string, InventoryItem>>(
-            inventory.areas.map((a) => [a.id, a.items])
-          );
-          const newAreas: InventoryArea[] = resolved.map((a) => ({
-            id: a.id, category: a.category, label: a.label,
-            items: itemsMap.get(a.id) ?? {},
-            photos: [],
-          }));
-          void persist({ ...inventory, customAreas: next, areas: newAreas });
-        }}
-        onStart={() => setStage('editing')}
-        onCancel={onBack}
-        onSaveDraft={() => {
-          // El autosave a IndexedDB ya persiste en cada cambio (vía `persist`).
-          // Este botón es un checkpoint explícito: confirmamos al agente.
-          showToast('✓ Configuración del inventario guardada como borrador', 'success');
-        }}
-      />
-      {confirmModal}
+        <AreaConfigPanel
+          propertyType={inventory.propertyType}
+          counters={inventory.counters}
+          customAreas={customAreas}
+          onPropertyTypeChange={(t) => {
+            const config = getPropertyTypeConfig(t);
+            const newCounters: Record<string, number> = {};
+            config.multiCounters.forEach((mc) => {
+              newCounters[mc.key] = mc.default;
+            });
+            const resolved = resolveAreas(config, newCounters, customAreas);
+            const newAreas: InventoryArea[] = resolved.map((a) => ({
+              id: a.id,
+              category: a.category,
+              label: a.label,
+              items: {},
+              photos: [],
+            }));
+            void persist({
+              ...inventory,
+              propertyType: t,
+              counters: newCounters,
+              areas: newAreas,
+              customAreas,
+            });
+          }}
+          onCountersChange={(c) => {
+            const config = getPropertyTypeConfig(inventory.propertyType);
+            const resolved = resolveAreas(config, c, customAreas);
+            // Preservar items de áreas que ya existían por id
+            const itemsMap = new Map<string, Record<string, InventoryItem>>(
+              inventory.areas.map((a) => [a.id, a.items]),
+            );
+            const newAreas: InventoryArea[] = resolved.map((a) => ({
+              id: a.id,
+              category: a.category,
+              label: a.label,
+              items: itemsMap.get(a.id) ?? {},
+              photos: [],
+            }));
+            void persist({
+              ...inventory,
+              counters: c,
+              areas: newAreas,
+              customAreas,
+            });
+          }}
+          onCustomAreasChange={(next) => {
+            setCustomAreas(next);
+            const config = getPropertyTypeConfig(inventory.propertyType);
+            const resolved = resolveAreas(config, inventory.counters, next);
+            const itemsMap = new Map<string, Record<string, InventoryItem>>(
+              inventory.areas.map((a) => [a.id, a.items]),
+            );
+            const newAreas: InventoryArea[] = resolved.map((a) => ({
+              id: a.id,
+              category: a.category,
+              label: a.label,
+              items: itemsMap.get(a.id) ?? {},
+              photos: [],
+            }));
+            void persist({ ...inventory, customAreas: next, areas: newAreas });
+          }}
+          onStart={() => setStage("editing")}
+          onCancel={onBack}
+          onSaveDraft={() => {
+            // El autosave a IndexedDB ya persiste en cada cambio (vía `persist`).
+            // Este botón es un checkpoint explícito: confirmamos al agente.
+            showToast(
+              "✓ Configuración del inventario guardada como borrador",
+              "success",
+            );
+          }}
+        />
+        {confirmModal}
       </>
     );
   }
 
-  if (stage === 'editing' && currentArea) {
+  if (stage === "editing" && currentArea) {
     const config = getPropertyTypeConfig(inventory.propertyType);
     return (
       <>
-      <div className="space-y-4">
-        {phase === 'final' && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-            <span className="font-bold uppercase">Inventario Final —</span> los items se prellenan desde el Inventario Inicial. Ajusta los estados si hubo cambios durante el arriendo.
-          </div>
-        )}
-        <Card className="p-6">
-          <AreaEditor
-            area={currentArea}
-            index={currentAreaIndex}
-            total={inventory.areas.length}
-            recommendedPhotos={config.recommendedPhotos}
-            photos={inventory.photos}
-            onChange={onAreaChange}
-            onPhotosChange={onPhotosChange}
-            onRemovePhoto={onRemovePhoto}
-            onSaveItemMedia={onSaveItemMedia}
-            onDeleteItemMedia={onDeleteItemMedia}
-            onBack={() => setCurrentAreaIndex(Math.max(0, currentAreaIndex - 1))}
-            onNext={() => {
-              if (!inventory) return;
-              const area = inventory.areas[currentAreaIndex];
-              const areaPhotoCount = inventory.photos.filter((p) => p.areaId === area.id).length;
-              const itemMediaCount = Object.values(area.items).reduce<number>(
-                (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
-              );
-              if (areaPhotoCount + itemMediaCount === 0) {
-                showToast(`Sube al menos una foto o video de "${area.label}" antes de continuar`, 'error');
-                return;
+        <div className="space-y-4">
+          {phase === "final" && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+              <span className="font-bold uppercase">Inventario Final —</span>{" "}
+              los items se prellenan desde el Inventario Inicial. Ajusta los
+              estados si hubo cambios durante el arriendo.
+            </div>
+          )}
+          <Card className="p-6">
+            <AreaEditor
+              area={currentArea}
+              index={currentAreaIndex}
+              total={inventory.areas.length}
+              recommendedPhotos={config.recommendedPhotos}
+              photos={inventory.photos}
+              onChange={onAreaChange}
+              onPhotosChange={onPhotosChange}
+              onRemovePhoto={onRemovePhoto}
+              onSaveItemMedia={onSaveItemMedia}
+              onDeleteItemMedia={onDeleteItemMedia}
+              onBack={() =>
+                setCurrentAreaIndex(Math.max(0, currentAreaIndex - 1))
               }
-              setCurrentAreaIndex(Math.min(inventory.areas.length - 1, currentAreaIndex + 1));
-            }}
-            onSkipToSign={hideSignatures
-              ? () => { void handleFinalizeInventory(); }
-              : () => setStage('signing')}
-            hideSignatures={hideSignatures}
-          />
-        </Card>
-        {/* Banner de autoguardado + botón de checkpoint explícito.
+              onNext={() => {
+                if (!inventory) return;
+                const area = inventory.areas[currentAreaIndex];
+                const areaPhotoCount = inventory.photos.filter(
+                  (p) => p.areaId === area.id,
+                ).length;
+                const itemMediaCount = Object.values(area.items).reduce<number>(
+                  (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0),
+                  0,
+                );
+                if (areaPhotoCount + itemMediaCount === 0) {
+                  showToast(
+                    `Sube al menos una foto o video de "${area.label}" antes de continuar`,
+                    "error",
+                  );
+                  return;
+                }
+                setCurrentAreaIndex(
+                  Math.min(inventory.areas.length - 1, currentAreaIndex + 1),
+                );
+              }}
+              onSkipToSign={
+                hideSignatures
+                  ? () => {
+                      void handleFinalizeInventory();
+                    }
+                  : () => setStage("signing")
+              }
+              hideSignatures={hideSignatures}
+            />
+          </Card>
+          {/* Banner de autoguardado + botón de checkpoint explícito.
             El state del inventario se persiste en IndexedDB en cada cambio
             (vía `persist()`), pero el agente necesita un botón visible para
             confirmar que su progreso está a salvo sin tener que finalizar. */}
-        <div className="flex items-center justify-between gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-          <div className="text-xs text-emerald-800">
-            <strong>Autoguardado activo.</strong> Tus cambios se guardan automáticamente al cambiar de área o de step.
+          <div className="flex items-center justify-between gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+            <div className="text-xs text-emerald-800">
+              <strong>Autoguardado activo.</strong> Tus cambios se guardan
+              automáticamente al cambiar de área o de step.
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                showToast(
+                  "✓ Inventario guardado en este dispositivo",
+                  "success",
+                )
+              }
+              className="gap-1.5 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
+            >
+              💾 Guardar borrador
+            </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => showToast('✓ Inventario guardado en este dispositivo', 'success')}
-            className="gap-1.5 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
-          >
-            💾 Guardar borrador
-          </Button>
+          {/* Stepper de áreas */}
+          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+            {inventory.areas.map((a, i) => {
+              const filled = Object.values(a.items).filter(
+                (it: InventoryItem) => it.status,
+              ).length;
+              const done = filled > 0;
+              return (
+                <button
+                  key={a.id}
+                  onClick={() => {
+                    const areaPhotoCount = inventory.photos.filter(
+                      (p) => p.areaId === a.id,
+                    ).length;
+                    const itemMediaCount = Object.values(
+                      a.items,
+                    ).reduce<number>(
+                      (acc, it) =>
+                        acc + ((it as InventoryItem).media?.length ?? 0),
+                      0,
+                    );
+                    if (
+                      i !== currentAreaIndex &&
+                      areaPhotoCount + itemMediaCount === 0 &&
+                      !inventory.areas[currentAreaIndex]
+                    ) {
+                      showToast(
+                        `Sube al menos una foto o video de "${a.label}" antes de ir`,
+                        "error",
+                      );
+                      return;
+                    }
+                    setCurrentAreaIndex(i);
+                  }}
+                  className={`w-7 h-7 rounded text-[10px] font-bold transition-all ${
+                    i === currentAreaIndex
+                      ? "bg-blue-600 text-white"
+                      : done
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-400"
+                  }`}
+                  title={a.label}
+                >
+                  {i + 1}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        {/* Stepper de áreas */}
-        <div className="flex items-center justify-center gap-1.5 flex-wrap">
-          {inventory.areas.map((a, i) => {
-            const filled = Object.values(a.items).filter((it: InventoryItem) => it.status).length;
-            const done = filled > 0;
-            return (
-              <button
-                key={a.id}
-                onClick={() => {
-                  const areaPhotoCount = inventory.photos.filter((p) => p.areaId === a.id).length;
-                  const itemMediaCount = Object.values(a.items).reduce<number>(
-                    (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0), 0,
-                  );
-                  if (i !== currentAreaIndex && areaPhotoCount + itemMediaCount === 0 && !inventory.areas[currentAreaIndex]) {
-                    showToast(`Sube al menos una foto o video de "${a.label}" antes de ir`, 'error');
-                    return;
-                  }
-                  setCurrentAreaIndex(i);
-                }}
-                className={`w-7 h-7 rounded text-[10px] font-bold transition-all ${
-                  i === currentAreaIndex
-                    ? 'bg-blue-600 text-white'
-                    : done
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-slate-100 text-slate-400'
-                }`}
-                title={a.label}
-              >
-                {i + 1}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {confirmModal}
+        {confirmModal}
       </>
     );
   }
 
   return (
     <>
-    <Card className="p-6">
-      <SignatureStep
-        inventory={inventory}
-        propertyOwner={property.owner}
-        propertyOwnerIdNumber={property.ownerIdNumber}
-        tenantData={effectiveTenantData}
-        onSaveSignatures={onSaveSignatures}
-        onGeneratePDF={onGeneratePDF}
-        onBack={() => setStage('editing')}
-      />
-    </Card>
-    {confirmModal}
+      <Card className="p-6">
+        <SignatureStep
+          inventory={inventory}
+          propertyOwner={property.owner}
+          propertyOwnerIdNumber={property.ownerIdNumber}
+          tenantData={effectiveTenantData}
+          onSaveSignatures={onSaveSignatures}
+          onGeneratePDF={onGeneratePDF}
+          onBack={() => setStage("editing")}
+        />
+      </Card>
+      {confirmModal}
     </>
   );
 }

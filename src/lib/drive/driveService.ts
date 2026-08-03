@@ -3,9 +3,17 @@
  * Solo se usa cuando el usuario tiene GDrive conectado (useGoogleDriveStore).
  */
 
-import { useGoogleDriveStore } from '../../shared/store/googleDriveStore';
+import { useGoogleDriveStore } from "../../shared/store/googleDriveStore";
+import {
+  fetchWithTimeout,
+  TimeoutError,
+} from "../../shared/lib/fetchWithTimeout";
 
-const API = '/api/drive';
+const API = "/api/drive";
+
+// BUG-024: timeouts diferenciados. Queries rapidas (15s), uploads (30s).
+const DRIVE_QUERY_TIMEOUT_MS = 15_000;
+const DRIVE_UPLOAD_TIMEOUT_MS = 30_000;
 
 /** Crea las carpetas de una propiedad nueva en Drive y devuelve el folderId. */
 export async function createPropertyFolders(
@@ -16,14 +24,20 @@ export async function createPropertyFolders(
   if (!connected) return null;
 
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${API}/create-property-folders?propertyId=${encodeURIComponent(propertyId)}&propertyName=${encodeURIComponent(propertyName)}`,
+      {},
+      DRIVE_QUERY_TIMEOUT_MS,
     );
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return data.propertyFolderId;
   } catch (err) {
-    console.error('[Drive] Error creando carpetas:', err);
+    if (err instanceof TimeoutError) {
+      console.warn("[Drive] createPropertyFolders timeout");
+    } else {
+      console.error("[Drive] Error creando carpetas:", err);
+    }
     return null;
   }
 }
@@ -39,26 +53,39 @@ export async function createPropertyFolders(
 export async function uploadFileToDrive(
   propertyId: string,
   folderId: string,
-  subfolder: 'Propietario' | 'Inventarios',
+  subfolder: "Propietario" | "Inventarios",
   fileName: string,
   base64Data: string,
 ): Promise<{ webViewLink?: string; error?: string }> {
   const { connected } = useGoogleDriveStore.getState();
-  if (!connected || !folderId) return { error: 'Drive no conectado' };
+  if (!connected || !folderId) return { error: "Drive no conectado" };
 
   try {
-    const res = await fetch(`${API}/upload-file`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ propertyId, folderId, subfolder, fileName, base64Data }),
-    });
+    const res = await fetchWithTimeout(
+      `${API}/upload-file`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          propertyId,
+          folderId,
+          subfolder,
+          fileName,
+          base64Data,
+        }),
+      },
+      DRIVE_UPLOAD_TIMEOUT_MS,
+    );
     if (!res.ok) {
       const err = await res.json();
-      return { error: err.error ?? 'Upload failed' };
+      return { error: err.error ?? "Upload failed" };
     }
     const data = await res.json();
     return { webViewLink: data.webViewLink };
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      return { error: "Drive no respondió a tiempo. Reintentá." };
+    }
     return { error: String(err) };
   }
 }
@@ -69,7 +96,7 @@ export function fileToBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      resolve(result.split(',')[1]); // sin el prefix "data:...;base64,"
+      resolve(result.split(",")[1]); // sin el prefix "data:...;base64,"
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
@@ -92,21 +119,38 @@ export function fileToBase64(file: File): Promise<string> {
 export async function uploadPdfToDrive(
   blob: Blob,
   parentFolderId: string,
-  parentKind: 'property' | 'tenant' | 'custom',
+  parentKind: "property" | "tenant" | "custom",
   subfolder: string,
   fileName: string,
-): Promise<{ fileId?: string; webViewLink?: string; skipped?: boolean; reason?: string; error?: string }> {
+): Promise<{
+  fileId?: string;
+  webViewLink?: string;
+  skipped?: boolean;
+  reason?: string;
+  error?: string;
+}> {
   const { connected } = useGoogleDriveStore.getState();
-  if (!connected) return { skipped: true, reason: 'Drive no conectado' };
-  if (!parentFolderId) return { skipped: true, reason: 'No hay carpeta padre en Drive' };
+  if (!connected) return { skipped: true, reason: "Drive no conectado" };
+  if (!parentFolderId)
+    return { skipped: true, reason: "No hay carpeta padre en Drive" };
 
   try {
     const base64 = await blobToBase64(blob);
-    const res = await fetch(`${API}/upload-pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parentFolderId, parentKind, subfolder, fileName, base64Data: base64 }),
-    });
+    const res = await fetchWithTimeout(
+      `${API}/upload-pdf`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parentFolderId,
+          parentKind,
+          subfolder,
+          fileName,
+          base64Data: base64,
+        }),
+      },
+      DRIVE_UPLOAD_TIMEOUT_MS,
+    );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       return { error: err.error ?? `HTTP ${res.status}` };
@@ -114,6 +158,9 @@ export async function uploadPdfToDrive(
     const data = await res.json();
     return { fileId: data.fileId, webViewLink: data.webViewLink };
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      return { error: "Drive no respondió a tiempo. Reintentá." };
+    }
     return { error: String(err) };
   }
 }
@@ -124,7 +171,7 @@ function blobToBase64(blob: Blob): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      resolve(result.split(',')[1] ?? '');
+      resolve(result.split(",")[1] ?? "");
     };
     reader.onerror = reject;
     reader.readAsDataURL(blob);

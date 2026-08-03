@@ -326,7 +326,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // un POST duplicado a /api/properties sin localId → server trataba como INSERT
     // y creaba otra carpeta en Drive para la misma propiedad.
     if (p.id) {
+      // BUG-020: mover ...p ANTES de los defaults para que no los pise.
+      // Antes, si p.chip era undefined, el spread al final reescribia
+      // chip: '' con chip: undefined → cards renderizaban `undefined`.
       const local: Property = {
+        ...p,
         id: p.id,
         address: p.address ?? "",
         chip: p.chip ?? "",
@@ -343,7 +347,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         mandatePdfUrl: p.mandatePdfUrl ?? null,
         mandateSignedAt: p.mandateSignedAt ?? null,
         createdAt: new Date().toISOString(),
-        ...p,
       } as Property;
       set((s) => ({ properties: [...s.properties, local] }));
       return local;
@@ -351,7 +354,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // Sin id: sí crear remotamente (caso de un futuro "quick add" sin wizard)
     try {
       const data = await apiCall("POST", "/api/properties", p);
+      // BUG-020: mismo fix — spread al principio, defaults al final.
       const created: Property = {
+        ...p,
         id: data.propertyId,
         address: p.address ?? "",
         chip: p.chip ?? "",
@@ -368,7 +373,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         mandatePdfUrl: p.mandatePdfUrl ?? null,
         mandateSignedAt: p.mandateSignedAt ?? null,
         createdAt: new Date().toISOString(),
-        ...p,
       } as Property;
       set((s) => ({ properties: [...s.properties, created] }));
       return created;
