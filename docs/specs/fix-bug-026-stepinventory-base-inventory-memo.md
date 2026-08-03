@@ -19,11 +19,17 @@
 ### Estado actual (`StepInventory.tsx:82-`)
 
 El useEffect principal hace:
+
 ```ts
-useEffect(() => {
-  // ... fetch desde MySQL ...
-  // ... hidratar state con baseInventory + remote ...
-}, [/* qué deps? */]);
+useEffect(
+  () => {
+    // ... fetch desde MySQL ...
+    // ... hidratar state con baseInventory + remote ...
+  },
+  [
+    /* qué deps? */
+  ],
+);
 ```
 
 Si las deps incluyen `baseInventory` directamente, y el padre pasa una
@@ -64,8 +70,10 @@ useEffect(() => {
     let existing = await inventoryDB.getInventory(inventoryId);
     // ... resto ...
   })();
-  return () => { cancelled = true; };
-}, [inventoryId, baseInventory?.id, phase, propertyId]);  // ← CAMBIO
+  return () => {
+    cancelled = true;
+  };
+}, [inventoryId, baseInventory?.id, phase, propertyId]); // ← CAMBIO
 ```
 
 ### AC-3: Comportamiento exitoso sin cambios
@@ -113,7 +121,7 @@ useEffect(() => {
 ```ts
 useEffect(() => {
   // ... fetch ...
-}, [baseInventory, phase, propertyId]);  // ← re-carga si cambia la referencia
+}, [baseInventory, phase, propertyId]); // ← re-carga si cambia la referencia
 ```
 
 ### Después (re-carga por id)
@@ -121,13 +129,13 @@ useEffect(() => {
 ```ts
 useEffect(() => {
   // ... fetch ...
-}, [baseInventory?.id, phase, propertyId]);  // ← re-carga solo si cambia el id
+}, [baseInventory?.id, phase, propertyId]); // ← re-carga solo si cambia el id
 ```
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
+| Trigger         | Tipo      | Copy exacto         |
+| --------------- | --------- | ------------------- |
 | Cualquier flujo | (ninguno) | (sin cambios de UX) |
 
 ## 7. Out of Scope

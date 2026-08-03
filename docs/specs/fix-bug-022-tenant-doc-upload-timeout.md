@@ -58,9 +58,10 @@ Ese SÍ tiene timeout (probablemente). BUG-022 es la inconsistencia.
 ### AC-3: Cancelar el fetch si el componente se desmonta
 
 - En el `useEffect` cleanup del componente (o via `AbortController` local):
+
   ```ts
   const abortControllerRef = useRef<AbortController | null>(null);
-  
+
   const handleDocUpload = async (e, folder, tenant) => {
     abortControllerRef.current = new AbortController();
     try {
@@ -70,7 +71,7 @@ Ese SÍ tiene timeout (probablemente). BUG-022 es la inconsistencia.
       // ...
     }
   };
-  
+
   useEffect(() => {
     return () => abortControllerRef.current?.abort();
   }, []);
@@ -145,12 +146,12 @@ try {
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
-| Upload OK | success | `Documento subido a ${folder}/ en Google Drive` (sin cambios) |
-| Upload timeout (30s) | error | `La subida tardó más de 30s. Reintentá.` |
-| Upload error genérico | error | `Error de conexión al subir documento` (sin cambios) |
-| Upload cancelado (navegó a otra vista) | (ninguno) | (sin toast, silencioso) |
+| Trigger                                | Tipo      | Copy exacto                                                   |
+| -------------------------------------- | --------- | ------------------------------------------------------------- |
+| Upload OK                              | success   | `Documento subido a ${folder}/ en Google Drive` (sin cambios) |
+| Upload timeout (30s)                   | error     | `La subida tardó más de 30s. Reintentá.`                      |
+| Upload error genérico                  | error     | `Error de conexión al subir documento` (sin cambios)          |
+| Upload cancelado (navegó a otra vista) | (ninguno) | (sin toast, silencioso)                                       |
 
 ## 7. Out of Scope
 

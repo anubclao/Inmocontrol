@@ -24,11 +24,11 @@ const handleConfirmAndCreate = async () => {
   const res = await fetch('/api/tenants', {...});
   const data = await res.json();
   if (!res.ok) { showToast(...); return; }   // OK, falla antes de avanzar
-  
+
   // Paso 2: actualizar propiedad
   onAddTenant({...});                          // ← state local actualizado
   onUpdateProperty(form.propertyId, propUpdate);  // ← PATCH puede fallar
-  
+
   // Paso 3: cleanup
   showToast('Arrendatario creado...');
   setForm({ ... });                            // ← form reseteado
@@ -39,6 +39,7 @@ const handleConfirmAndCreate = async () => {
 ### Resultado
 
 Si `onUpdateProperty` falla (PATCH devuelve 500):
+
 - Tenant YA creado en MySQL.
 - onAddTenant YA actualizó el state local.
 - PATCH falló → user no se entera (toast dice "creado OK").
@@ -58,7 +59,7 @@ const handleConfirmAndCreate = async () => {
   const res = await fetch('/api/tenants', {...});
   const data = await res.json();
   if (!res.ok) { showToast(...); return; }
-  
+
   // Paso 2: actualizar propiedad (PUEDE FALLAR)
   try {
     await onUpdateProperty(form.propertyId, propUpdate);
@@ -74,7 +75,7 @@ const handleConfirmAndCreate = async () => {
     // NO cerrar el modal todavía
     return;
   }
-  
+
   // Paso 3: solo si todo OK → state local + cerrar modal
   onAddTenant({...});
   showToast('Inquilino creado...');
@@ -178,10 +179,10 @@ setIsCreateModalOpen(false);
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
-| Tenant + Property OK | success | `Arrendatario creado — completa el Inventario de Colocación para activar la propiedad` (sin cambios) |
-| Tenant OK, Property FAIL | warning | `Inquilino creado pero no se pudo actualizar la propiedad. Reintentá desde Properties.` |
+| Trigger                  | Tipo    | Copy exacto                                                                                          |
+| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------- |
+| Tenant + Property OK     | success | `Arrendatario creado — completa el Inventario de Colocación para activar la propiedad` (sin cambios) |
+| Tenant OK, Property FAIL | warning | `Inquilino creado pero no se pudo actualizar la propiedad. Reintentá desde Properties.`              |
 
 ## 7. Out of Scope
 

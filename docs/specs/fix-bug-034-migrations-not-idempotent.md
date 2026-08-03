@@ -10,7 +10,8 @@ Como dev/operador, quiero que TODAS las migrations sean idempotentes (re-ejecuta
 ## Contexto
 
 Migrations no idempotentes hoy:
-- 002_*.sql
+
+- 002\_\*.sql
 - 004_invoice_number.sql
 - 006a-password_hash.sql
 

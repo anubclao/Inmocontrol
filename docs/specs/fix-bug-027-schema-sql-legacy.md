@@ -21,6 +21,7 @@ la primera request.
 ### Estado actual
 
 `db/mysql/schema.sql` (el original, "limpio") tiene:
+
 - ❌ Sin columnas `inventory_captacion_pdf_url` / `inventory_colocacion_pdf_url`
   en `properties`.
 - ❌ Sin tablas `property_owners` / `property_units`.
@@ -33,6 +34,7 @@ actualizados con Fase 2+. Son los que DEBERÍAN ser canónicos.
 ### Resultado
 
 Si un nuevo dev/operador hace deploy fresh usando `schema.sql`:
+
 1. La app arranca.
 2. Primer GET /api/properties → MySQL tira `ER_BAD_FIELD_ERROR: Unknown column 'inventory_captacion_pdf_url'`.
 3. Express devuelve 500.

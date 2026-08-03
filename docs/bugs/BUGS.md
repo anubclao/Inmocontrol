@@ -25,12 +25,12 @@
 
 **Estado por ola de fix:**
 
-| Ola                   | Bugs              | Status                                     |
-| --------------------- | ----------------- | ------------------------------------------ |
-| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK                 |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 24/24 specs aprobados (todos)            |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | 🟡 6/6 specs aprobados (todos)              |
-| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                               |
+| Ola                   | Bugs              | Status                           |
+| --------------------- | ----------------- | -------------------------------- |
+| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK       |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 24/24 specs aprobados (todos) |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | 🟡 6/6 specs aprobados (todos)   |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                     |
 
 ---
 
@@ -361,19 +361,29 @@
 | BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
 | BUG-019     | hydrate() sin timeouts (spinner eterno si 1 cuelga)     | `7353188`  |
 | BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |     | BUG-029 | Central error wrapper (estructural, mata 5+ bugs) | `6bbec81` + `11c49f6` |
+| BUG-006     | ensureDefaultOrg() fuera del try en billing.ts (16 ep)  | `777b24f`  |
+| BUG-009     | Doble-click crea carpetas Drive duplicadas              | `3e7840e`  |
+| BUG-011     | PATCH /contracts sin validación                         | `pending`  |
+| BUG-012     | DELETE /contracts FK violation → 409                    | `pending`  |
+| BUG-014     | Inventories upload-pdf sin try/catch en Drive           | `pending`  |
+| BUG-015     | Inventories upload-photos sin withTimeout               | `pending`  |
+| BUG-016     | Properties.ts creación de carpetas Drive sin timeout   | `pending`  |
+| BUG-018     | PATCH /properties/:id siempre 200 aunque affectedRows=0 | `pending`  |
 
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
 
-| Bug               |       Spec       |  Verifier   | Status         |
-| ----------------- | :--------------: | :---------: | -------------- |
-| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`   |
-| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`   |
-| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`   |
-| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`   |
-| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`   |
-| BUG-006 a BUG-028 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente) |
+| Bug               |       Spec       |  Verifier   | Status                            |
+| ----------------- | :--------------: | :---------: | --------------------------------- |
+| BUG-001           | ❌ (no necesita) |     ❌      | ✅ `8f5c88e`                      |
+| BUG-002           | ❌ (no necesita) |     ❌      | ✅ `7c551b0`                      |
+| BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`                      |
+| BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`                      |
+| BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`                      |
+| BUG-006 a BUG-018 |   ✅ Aprobado    |  parcial    | 🟡 7/13 implementados (BUG-006, 009, 011, 012, 014, 015, 016, 018) |
+| BUG-019           |   ✅ Aprobado    | ✅ Aprobado | ✅ `7353188`                       |
+| BUG-020 a BUG-028 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente)  |
 | BUG-029           |   ✅ Aprobado    | ✅ Aprobado | ✅ `11c49f6`                      |
 | BUG-030 a BUG-035 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente) |
 

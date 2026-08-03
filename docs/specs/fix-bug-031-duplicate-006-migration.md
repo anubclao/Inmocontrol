@@ -1,4 +1,4 @@
-# Fix: Duplicado en 006_*.sql (BUG-031)
+# Fix: Duplicado en 006\_\*.sql (BUG-031)
 
 > Karpathy Spec - Agosto 2026.
 > Bug origen: BUG-031 en docs/bugs/BUGS.md. Severidad: Verde Bajo.
@@ -10,10 +10,11 @@ Como dev, quiero que cada migration tenga un numero unico y secuencial.
 ## Contexto
 
 db/mysql/migrations/ tiene:
+
 - 006_password_hash.sql
 - 006_property_charges.sql
 
-Ambas con el mismo prefijo 006_. Si un script usa el numero para ordenar, no sabe cual va primero.
+Ambas con el mismo prefijo 006\_. Si un script usa el numero para ordenar, no sabe cual va primero.
 
 ## Acceptance Criteria
 

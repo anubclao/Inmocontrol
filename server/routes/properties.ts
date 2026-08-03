@@ -1,10 +1,10 @@
-import * as dotenv from 'dotenv';
-dotenv.config({ path: '.env.local' });
-import express from 'express';
-import { google } from 'googleapis';
-import crypto from 'crypto';
-import pool, { ensureDefaultOrg } from '../db.js';
-import { isTokenExpiringSoon } from '../lib/googleAuth.js';
+import * as dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+import express from "express";
+import { google } from "googleapis";
+import crypto from "crypto";
+import pool, { ensureDefaultOrg } from "../db.js";
+import { isTokenExpiringSoon } from "../lib/googleAuth.js";
 
 const router = express.Router();
 
@@ -26,10 +26,19 @@ const GOOGLE_API_TIMEOUT_MS = 8_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    const t = setTimeout(
+      () => reject(new Error(`Timeout after ${ms}ms: ${label}`)),
+      ms,
+    );
     p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
     );
   });
 }
@@ -38,11 +47,11 @@ async function getFreshDriveClient() {
   try {
     const [rows] = await withTimeout(
       pool.query<any[]>(
-        'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-        ['default_user', 'google_drive'],
+        "SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
+        ["default_user", "google_drive"],
       ),
       GOOGLE_API_TIMEOUT_MS,
-      'user_oauth_tokens SELECT',
+      "user_oauth_tokens SELECT",
     );
     if (!rows.length || !rows[0].access_token) return null;
     oauth2Client.setCredentials({
@@ -54,24 +63,32 @@ async function getFreshDriveClient() {
       const { credentials } = await withTimeout(
         oauth2Client.refreshAccessToken(),
         GOOGLE_API_TIMEOUT_MS,
-        'oauth2 refreshAccessToken',
+        "oauth2 refreshAccessToken",
       );
       oauth2Client.setCredentials(credentials);
       await withTimeout(
         pool.query(
-          'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
-          [credentials.access_token, credentials.expiry_date, 'default_user', 'google_drive'],
+          "UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?",
+          [
+            credentials.access_token,
+            credentials.expiry_date,
+            "default_user",
+            "google_drive",
+          ],
         ),
         GOOGLE_API_TIMEOUT_MS,
-        'user_oauth_tokens UPDATE',
+        "user_oauth_tokens UPDATE",
       );
     }
-    return google.drive({ version: 'v3', auth: oauth2Client });
+    return google.drive({ version: "v3", auth: oauth2Client });
   } catch (err: any) {
     // No rompemos el request entero si Drive está lento/caído. El caller
     // chequea `if (drive)` y sigue sin Drive — los docs se subirán después
     // cuando el agente los reintente desde el Detalle del Inmueble.
-    console.warn('[Drive] getFreshDriveClient falló (continuando sin Drive):', err.message);
+    console.warn(
+      "[Drive] getFreshDriveClient falló (continuando sin Drive):",
+      err.message,
+    );
     return null;
   }
 }
@@ -81,16 +98,16 @@ async function getFreshDriveClient() {
  * El Mandato NO está acá — sigue en properties.mandato_pdf_url.
  */
 const DOC_TYPES = {
-  cedula: 'cedula',
-  certificado_tradicion: 'certificado_tradicion',
-  predial: 'predial',
-  rut: 'rut',
-  otro: 'otro',
+  cedula: "cedula",
+  certificado_tradicion: "certificado_tradicion",
+  predial: "predial",
+  rut: "rut",
+  otro: "otro",
 } as const;
 type DocType = keyof typeof DOC_TYPES;
 
 /** Tipos de unidades adicionales permitidas. */
-const UNIT_TYPES = new Set(['parking', 'storage', 'other']);
+const UNIT_TYPES = new Set(["parking", "storage", "other"]);
 
 /**
  * Parsea la key de un slot de documento y devuelve su tipo + (opcional) ownerId
@@ -111,35 +128,50 @@ const UNIT_TYPES = new Set(['parking', 'storage', 'other']);
  *
  * Devuelve `null` si la key no es un doc reconocido.
  */
-function parseDocumentKey(key: string, firstOwnerId: string | null): {
+function parseDocumentKey(
+  key: string,
+  firstOwnerId: string | null,
+): {
   docType: DocType;
   ownerId: string | null;
   unitId: string | null;
 } | null {
   // 1. Formato nuevo
-  if (key.includes(':')) {
-    const [docTypeRaw, link] = key.split(':', 2);
-    if (!Object.prototype.hasOwnProperty.call(DOC_TYPES, docTypeRaw)) return null;
+  if (key.includes(":")) {
+    const [docTypeRaw, link] = key.split(":", 2);
+    if (!Object.prototype.hasOwnProperty.call(DOC_TYPES, docTypeRaw))
+      return null;
     const docType = docTypeRaw as DocType;
-    if (docType === 'cedula' || docType === 'rut') {
+    if (docType === "cedula" || docType === "rut") {
       // link debe ser un ownerId real (no "main")
       return { docType, ownerId: link, unitId: null };
     }
-    if (docType === 'certificado_tradicion') {
-      return { docType, ownerId: null, unitId: link === 'main' ? null : link };
+    if (docType === "certificado_tradicion") {
+      return { docType, ownerId: null, unitId: link === "main" ? null : link };
     }
-    if (docType === 'predial') {
+    if (docType === "predial") {
       // "predial:algo" no es válido → se rechaza
       return null;
     }
     return { docType, ownerId: null, unitId: null };
   }
   // 2. Formato legacy
-  const LEGACY_MAP: Record<string, { docType: DocType; ownerId: string | null; unitId: string | null }> = {
-    'Cédula de Ciudadanía':     { docType: 'cedula',                ownerId: firstOwnerId, unitId: null },
-    'Rut Actualizado':          { docType: 'rut',                   ownerId: firstOwnerId, unitId: null },
-    'Impuesto Predial':         { docType: 'predial',               ownerId: null,         unitId: null },
-    'Certificado de Tradición': { docType: 'certificado_tradicion', ownerId: null,         unitId: null },
+  const LEGACY_MAP: Record<
+    string,
+    { docType: DocType; ownerId: string | null; unitId: string | null }
+  > = {
+    "Cédula de Ciudadanía": {
+      docType: "cedula",
+      ownerId: firstOwnerId,
+      unitId: null,
+    },
+    "Rut Actualizado": { docType: "rut", ownerId: firstOwnerId, unitId: null },
+    "Impuesto Predial": { docType: "predial", ownerId: null, unitId: null },
+    "Certificado de Tradición": {
+      docType: "certificado_tradicion",
+      ownerId: null,
+      unitId: null,
+    },
   };
   return LEGACY_MAP[key] ?? null;
 }
@@ -160,18 +192,32 @@ function parseDocumentKey(key: string, firstOwnerId: string | null): {
  *   - `slotKey` formato legacy: "Cédula de Ciudadanía", "Rut Actualizado", etc.
  *     (se vincula al primer owner y/o a la unidad principal)
  */
-router.post('/', async (req, res) => {
-  console.log('[POST /api/properties] body:', {
-    address: req.body.address, owner: req.body.ownerName, localId: req.body.localId,
+router.post("/", async (req, res) => {
+  console.log("[POST /api/properties] body:", {
+    address: req.body.address,
+    owner: req.body.ownerName,
+    localId: req.body.localId,
     hasMandate: !!req.body.mandatePdfUrl,
     docsCount: req.body.documents ? Object.keys(req.body.documents).length : 0,
     ownersCount: Array.isArray(req.body.owners) ? req.body.owners.length : 0,
-    unitsCount:  Array.isArray(req.body.units)  ? req.body.units.length  : 0,
+    unitsCount: Array.isArray(req.body.units) ? req.body.units.length : 0,
   });
   const {
-    localId, address, chip, folio, ownerName, ownerIdNumber, ownerPhone, ownerEmail,
-    propertyType, mandatePdfUrl, mandateSignedAt, status,
-    owners, units, documents,
+    localId,
+    address,
+    chip,
+    folio,
+    ownerName,
+    ownerIdNumber,
+    ownerPhone,
+    ownerEmail,
+    propertyType,
+    mandatePdfUrl,
+    mandateSignedAt,
+    status,
+    owners,
+    units,
+    documents,
   } = req.body as Record<string, any>;
 
   // FIX 2026-07-22: top-level try/catch para garantizar respuesta JSON.
@@ -182,111 +228,146 @@ router.post('/', async (req, res) => {
   // frontend puede mostrarlo en consola y el usuario no se queda
   // colgado con "el botón no hace nada".
   try {
+    // Validación: address + ownerName son requeridos solo en INSERT.
+    const isUpsert = !!(localId && !String(localId).startsWith("wizard-"));
+    if (!isUpsert && (!address || !ownerName)) {
+      res
+        .status(400)
+        .json({ error: "Faltan campos requeridos: address, ownerName" });
+      return;
+    }
 
-  // Validación: address + ownerName son requeridos solo en INSERT.
-  const isUpsert = !!(localId && !String(localId).startsWith('wizard-'));
-  if (!isUpsert && (!address || !ownerName)) {
-    res.status(400).json({ error: 'Faltan campos requeridos: address, ownerName' });
-    return;
-  }
+    // ── 1. Crear carpeta en Drive SOLO en INSERT (no en UPSERT) ────────
+    let driveFolderId: string | null = null;
+    let driveFolderPath: string | null = null;
+    if (!isUpsert) {
+      const drive = await getFreshDriveClient();
+      if (drive) {
+        try {
+          const [tokenRows] = await pool.query<any[]>(
+            "SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
+            ["default_user", "google_drive"],
+          );
+          const rootFolderId = tokenRows[0]?.drive_folder_id;
 
-  // ── 1. Crear carpeta en Drive SOLO en INSERT (no en UPSERT) ────────
-  let driveFolderId: string | null = null;
-  let driveFolderPath: string | null = null;
-  if (!isUpsert) {
-    const drive = await getFreshDriveClient();
-    if (drive) {
-      try {
-        const [tokenRows] = await pool.query<any[]>(
-          'SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-          ['default_user', 'google_drive'],
-        );
-        const rootFolderId = tokenRows[0]?.drive_folder_id;
+          if (rootFolderId) {
+            // BUG-016: con withTimeout en las 4 llamadas a Drive.
+            const existing = await withTimeout(
+              drive.files.list({
+                q: `name='${String(address).replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
+                fields: "files(id)",
+                spaces: "drive",
+              }),
+              GOOGLE_API_TIMEOUT_MS,
+              "drive.files.list (property folder)",
+            );
 
-        if (rootFolderId) {
-          const existing = await drive.files.list({
-            q: `name='${String(address).replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
-            fields: 'files(id)',
-            spaces: 'drive',
-          });
+            let folderId = existing.data.files?.[0]?.id;
+            if (!folderId) {
+              const created = await withTimeout(
+                drive.files.create({
+                  requestBody: {
+                    name: address,
+                    mimeType: "application/vnd.google-apps.folder",
+                    parents: [rootFolderId],
+                  },
+                  fields: "id",
+                }),
+                GOOGLE_API_TIMEOUT_MS,
+                "drive.files.create (property folder)",
+              );
+              folderId = created.data.id!;
+            }
+            driveFolderId = folderId;
+            driveFolderPath = `InmoControl/${address}`;
 
-          let folderId = existing.data.files?.[0]?.id;
-          if (!folderId) {
-            const created = await drive.files.create({
-              requestBody: {
-                name: address,
-                mimeType: 'application/vnd.google-apps.folder',
-                parents: [rootFolderId],
-              },
-              fields: 'id',
-            });
-            folderId = created.data.id!;
-          }
-          driveFolderId = folderId;
-          driveFolderPath = `InmoControl/${address}`;
-
-          const subs = ['Propietario', 'Inventarios'];
-          for (const sub of subs) {
-            const subExisting = await drive.files.list({
-              q: `name='${sub}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
-              fields: 'files(id)',
-              spaces: 'drive',
-            });
-            if (!subExisting.data.files?.length) {
-              await drive.files.create({
-                requestBody: {
-                  name: sub,
-                  mimeType: 'application/vnd.google-apps.folder',
-                  parents: [folderId],
-                },
-                fields: 'id',
-              });
+            const subs = ["Propietario", "Inventarios"];
+            for (const sub of subs) {
+              const subExisting = await withTimeout(
+                drive.files.list({
+                  q: `name='${sub}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
+                  fields: "files(id)",
+                  spaces: "drive",
+                }),
+                GOOGLE_API_TIMEOUT_MS,
+                `drive.files.list (subfolder ${sub})`,
+              );
+              if (!subExisting.data.files?.length) {
+                await withTimeout(
+                  drive.files.create({
+                    requestBody: {
+                      name: sub,
+                      mimeType: "application/vnd.google-apps.folder",
+                      parents: [folderId],
+                    },
+                    fields: "id",
+                  }),
+                  GOOGLE_API_TIMEOUT_MS,
+                  `drive.files.create (subfolder ${sub})`,
+                );
+              }
             }
           }
+        } catch (err: any) {
+          console.warn(
+            "[Drive] Error creando carpeta de propiedad:",
+            err.message,
+          );
         }
-      } catch (err: any) {
-        console.warn('[Drive] Error creando carpeta de propiedad:', err.message);
       }
     }
-  }
 
-  // ── 2. Resolver propertyId ─────────────────────────────────────────
-  const propertyId = localId && !String(localId).startsWith('wizard-') ? localId : crypto.randomUUID();
-  const dbStatus = status || 'Pendiente';
+    // ── 2. Resolver propertyId ─────────────────────────────────────────
+    const propertyId =
+      localId && !String(localId).startsWith("wizard-")
+        ? localId
+        : crypto.randomUUID();
+    const dbStatus = status || "Pendiente";
 
-  const toMysqlDateTime = (iso: string | null | undefined): string | null => {
-    if (!iso) return null;
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return null;
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-           `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-  };
-  const dbMandateSignedAt = toMysqlDateTime(mandateSignedAt);
+    const toMysqlDateTime = (iso: string | null | undefined): string | null => {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return null;
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return (
+        `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+        `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
+      );
+    };
+    const dbMandateSignedAt = toMysqlDateTime(mandateSignedAt);
 
-  // Resolvemos orgId ANTES del try principal porque los loops de owners/units
-  // están en try blocks separados más abajo. Si lo declaráramos adentro del
-  // try, no sería visible fuera.
-  //
-  // FIX 2026-07-22: si `ensureDefaultOrg()` tira (ej: tabla `organizations`
-  // no existe, schema drift, FK corrupta), el error se propagaba sin ser
-  // atrapado y Express devolvía HTML 500 (su default error page) en vez de
-  // JSON. Eso hacía que el frontend reciba un body no parseable y el
-  // usuario vea "el botón no hace nada". Ahora lo capturamos explícito y
-  // devolvemos JSON con el mensaje real.
-  let orgId: string;
-  try {
-    orgId = await ensureDefaultOrg();
-  } catch (err: any) {
-    console.error('[POST /api/properties] Error resolviendo orgId:', err.message);
-    res.status(500).json({ error: 'Error resolviendo organización por defecto: ' + (err.message ?? String(err)) });
-    return;
-  }
+    // Resolvemos orgId ANTES del try principal porque los loops de owners/units
+    // están en try blocks separados más abajo. Si lo declaráramos adentro del
+    // try, no sería visible fuera.
+    //
+    // FIX 2026-07-22: si `ensureDefaultOrg()` tira (ej: tabla `organizations`
+    // no existe, schema drift, FK corrupta), el error se propagaba sin ser
+    // atrapado y Express devolvía HTML 500 (su default error page) en vez de
+    // JSON. Eso hacía que el frontend reciba un body no parseable y el
+    // usuario vea "el botón no hace nada". Ahora lo capturamos explícito y
+    // devolvemos JSON con el mensaje real.
+    let orgId: string;
+    try {
+      orgId = await ensureDefaultOrg();
+    } catch (err: any) {
+      console.error(
+        "[POST /api/properties] Error resolviendo orgId:",
+        err.message,
+      );
+      res
+        .status(500)
+        .json({
+          error:
+            "Error resolviendo organización por defecto: " +
+            (err.message ?? String(err)),
+        });
+      return;
+    }
 
-  try {
-    if (isUpsert) {
-      await pool.query(
-        `UPDATE properties SET
+    try {
+      if (isUpsert) {
+        await pool.query(
+          `UPDATE properties SET
            address           = COALESCE(?, address),
            chip              = COALESCE(?, chip),
            folio             = COALESCE(?, folio),
@@ -301,210 +382,233 @@ router.post('/', async (req, res) => {
            mandato_pdf_url   = CASE WHEN ? IS NULL OR ? = '' THEN mandato_pdf_url ELSE ? END,
            mandato_signed_at = COALESCE(?, mandato_signed_at)
          WHERE id = ? AND organization_id = ?`,
-        [
-          address ?? null,
-          chip ?? null,
-          folio ?? null,
-          ownerName ?? null,
-          ownerIdNumber ?? null,
-          ownerPhone ?? null,
-          ownerEmail ?? null,
-          driveFolderId,
-          driveFolderPath,
-          propertyType ?? null,
-          dbStatus,
-          mandatePdfUrl ?? null,
-          mandatePdfUrl ?? null,
-          mandatePdfUrl ?? null,
-          dbMandateSignedAt,
-          propertyId,
-          orgId,
-        ],
-      );
-    } else {
-      // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
-      // (consistente con el fix 4c6a6e9 que rechazó blob/data en
-      // property_documents.file_url).
-      if (mandatePdfUrl && (typeof mandatePdfUrl === 'string') &&
-          (mandatePdfUrl.startsWith('blob:') || mandatePdfUrl.startsWith('data:'))) {
-        return res.status(400).json({
-          error: 'mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá con Drive conectado.',
-        });
-      }
-      await pool.query(
-        `INSERT INTO properties
+          [
+            address ?? null,
+            chip ?? null,
+            folio ?? null,
+            ownerName ?? null,
+            ownerIdNumber ?? null,
+            ownerPhone ?? null,
+            ownerEmail ?? null,
+            driveFolderId,
+            driveFolderPath,
+            propertyType ?? null,
+            dbStatus,
+            mandatePdfUrl ?? null,
+            mandatePdfUrl ?? null,
+            mandatePdfUrl ?? null,
+            dbMandateSignedAt,
+            propertyId,
+            orgId,
+          ],
+        );
+      } else {
+        // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
+        // (consistente con el fix 4c6a6e9 que rechazó blob/data en
+        // property_documents.file_url).
+        if (
+          mandatePdfUrl &&
+          typeof mandatePdfUrl === "string" &&
+          (mandatePdfUrl.startsWith("blob:") ||
+            mandatePdfUrl.startsWith("data:"))
+        ) {
+          return res.status(400).json({
+            error:
+              "mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá con Drive conectado.",
+          });
+        }
+        await pool.query(
+          `INSERT INTO properties
           (id, organization_id, address, chip, folio, owner_name, owner_id_number, owner_phone, owner_email,
            status, drive_folder_id, drive_folder_path, property_type,
            mandato_pdf_url, mandato_signed_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          propertyId,
-          orgId,
-          address,
-          chip || null,
-          folio || null,
-          ownerName,
-          ownerIdNumber || null,
-          ownerPhone || null,
-          ownerEmail || null,
-          dbStatus,
-          driveFolderId,
-          driveFolderPath,
-          propertyType || null,
-          mandatePdfUrl ?? null,
-          dbMandateSignedAt,
-        ],
-      );
+          [
+            propertyId,
+            orgId,
+            address,
+            chip || null,
+            folio || null,
+            ownerName,
+            ownerIdNumber || null,
+            ownerPhone || null,
+            ownerEmail || null,
+            dbStatus,
+            driveFolderId,
+            driveFolderPath,
+            propertyType || null,
+            mandatePdfUrl ?? null,
+            dbMandateSignedAt,
+          ],
+        );
+      }
+    } catch (err: any) {
+      console.error("[DB] Error creando propiedad:", err.message);
+      res
+        .status(500)
+        .json({ error: "Error guardando propiedad: " + err.message });
+      return;
     }
-  } catch (err: any) {
-    console.error('[DB] Error creando propiedad:', err.message);
-    res.status(500).json({ error: 'Error guardando propiedad: ' + err.message });
-    return;
-  }
 
-  // ── 3. Persistir owners (solo si vienen en el body) ────────────────
-  // Estrategia: DELETE + INSERT en UPSERT para mantener consistencia con el
-  // wizard. Si el frontend NO manda `owners`, no tocamos la tabla (caso de
-  // un PATCH puntual que solo quiere cambiar el status, por ejemplo).
-  //
-  // IMPORTANTE: el DELETE va en ON DELETE CASCADE a property_documents
-  // (los docs del owner se borran con él). Si el frontend solo quiere
-  // agregar 1 owner nuevo, debe re-enviar TODOS los owners.
-  if (Array.isArray(owners)) {
-    try {
-      // Capturar el primer owner (si hay) para usarlo como "primer owner" legacy
-      // al parsear documentos con keys legacy.
-      const ownerIds: string[] = [];
-      await pool.query(`DELETE FROM property_owners WHERE property_id = ?`, [propertyId]);
-      for (let i = 0; i < owners.length; i++) {
-        const o = owners[i] ?? {};
-        const ownerId = (typeof o.id === 'string' && o.id && !o.id.startsWith('wizard-'))
-          ? o.id
-          : crypto.randomUUID();
-        const name = String(o.name ?? '').trim();
-        if (!name) continue; // saltamos owners sin nombre
-        const idNumber = o.idNumber ?? o.id_number ?? null;
-        const phone    = o.phone ?? null;
-        const email    = o.email ?? null;
-        // ownershipPct: aceptar number, string, o null
-        let ownershipPct: number | null = null;
-        if (o.ownershipPct !== undefined && o.ownershipPct !== null && o.ownershipPct !== '') {
-          const n = Number(o.ownershipPct);
-          if (!isNaN(n) && n >= 0 && n <= 100) ownershipPct = n;
-        }
-        const position = Number(o.position) || (i + 1);
-        await pool.query(
-          `INSERT INTO property_owners
+    // ── 3. Persistir owners (solo si vienen en el body) ────────────────
+    // Estrategia: DELETE + INSERT en UPSERT para mantener consistencia con el
+    // wizard. Si el frontend NO manda `owners`, no tocamos la tabla (caso de
+    // un PATCH puntual que solo quiere cambiar el status, por ejemplo).
+    //
+    // IMPORTANTE: el DELETE va en ON DELETE CASCADE a property_documents
+    // (los docs del owner se borran con él). Si el frontend solo quiere
+    // agregar 1 owner nuevo, debe re-enviar TODOS los owners.
+    if (Array.isArray(owners)) {
+      try {
+        // Capturar el primer owner (si hay) para usarlo como "primer owner" legacy
+        // al parsear documentos con keys legacy.
+        const ownerIds: string[] = [];
+        await pool.query(`DELETE FROM property_owners WHERE property_id = ?`, [
+          propertyId,
+        ]);
+        for (let i = 0; i < owners.length; i++) {
+          const o = owners[i] ?? {};
+          const ownerId =
+            typeof o.id === "string" && o.id && !o.id.startsWith("wizard-")
+              ? o.id
+              : crypto.randomUUID();
+          const name = String(o.name ?? "").trim();
+          if (!name) continue; // saltamos owners sin nombre
+          const idNumber = o.idNumber ?? o.id_number ?? null;
+          const phone = o.phone ?? null;
+          const email = o.email ?? null;
+          // ownershipPct: aceptar number, string, o null
+          let ownershipPct: number | null = null;
+          if (
+            o.ownershipPct !== undefined &&
+            o.ownershipPct !== null &&
+            o.ownershipPct !== ""
+          ) {
+            const n = Number(o.ownershipPct);
+            if (!isNaN(n) && n >= 0 && n <= 100) ownershipPct = n;
+          }
+          const position = Number(o.position) || i + 1;
+          await pool.query(
+            `INSERT INTO property_owners
             (id, organization_id, property_id, name, id_number, phone, email,
              ownership_pct, position, notes)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            ownerId,
-            orgId,
-            propertyId,
-            name,
-            idNumber ? String(idNumber) : null,
-            phone ? String(phone) : null,
-            email ? String(email) : null,
-            ownershipPct,
-            position,
-            o.notes ?? null,
-          ],
-        );
-        ownerIds.push(ownerId);
-      }
-      // Si el frontend mandó owners[] vacío, NO borramos el legacy `owner_name`
-      // (compat: lo seteamos arriba). Pero si explícitamente mandó `owners`
-      // y quedó vacío, el sistema de legacy queda sin primer owner — eso es
-      // decisión del usuario (probablemente quiere resetear).
-    } catch (err: any) {
-      console.error('[DB] Error persistiendo property_owners:', err.message);
-      // No bloqueamos: la propiedad ya quedó guardada, los owners se pueden
-      // re-enviar en otro POST.
-    }
-  }
-
-  // ── 4. Persistir units (estrategia idéntica: DELETE + INSERT) ──────
-  if (Array.isArray(units)) {
-    try {
-      await pool.query(`DELETE FROM property_units WHERE property_id = ?`, [propertyId]);
-      for (let i = 0; i < units.length; i++) {
-        const u = units[i] ?? {};
-        const type = String(u.type ?? '').trim();
-        if (!UNIT_TYPES.has(type)) {
-          console.warn(`[units] tipo inválido "${type}" — se salta. Permitidos: ${[...UNIT_TYPES].join(', ')}`);
-          continue;
+            [
+              ownerId,
+              orgId,
+              propertyId,
+              name,
+              idNumber ? String(idNumber) : null,
+              phone ? String(phone) : null,
+              email ? String(email) : null,
+              ownershipPct,
+              position,
+              o.notes ?? null,
+            ],
+          );
+          ownerIds.push(ownerId);
         }
-        const label = String(u.label ?? '').trim();
-        if (!label) continue; // sin label no se puede mostrar
-        const unitId = (typeof u.id === 'string' && u.id && !u.id.startsWith('wizard-'))
-          ? u.id
-          : crypto.randomUUID();
-        const folioMatricula = u.folioMatricula ?? u.folio_matricula ?? null;
-        const areaM2 = u.areaM2 ?? u.area_m2 ?? null;
-        const position = Number(u.position) || (i + 1);
-        await pool.query(
-          `INSERT INTO property_units
+        // Si el frontend mandó owners[] vacío, NO borramos el legacy `owner_name`
+        // (compat: lo seteamos arriba). Pero si explícitamente mandó `owners`
+        // y quedó vacío, el sistema de legacy queda sin primer owner — eso es
+        // decisión del usuario (probablemente quiere resetear).
+      } catch (err: any) {
+        console.error("[DB] Error persistiendo property_owners:", err.message);
+        // No bloqueamos: la propiedad ya quedó guardada, los owners se pueden
+        // re-enviar en otro POST.
+      }
+    }
+
+    // ── 4. Persistir units (estrategia idéntica: DELETE + INSERT) ──────
+    if (Array.isArray(units)) {
+      try {
+        await pool.query(`DELETE FROM property_units WHERE property_id = ?`, [
+          propertyId,
+        ]);
+        for (let i = 0; i < units.length; i++) {
+          const u = units[i] ?? {};
+          const type = String(u.type ?? "").trim();
+          if (!UNIT_TYPES.has(type)) {
+            console.warn(
+              `[units] tipo inválido "${type}" — se salta. Permitidos: ${[...UNIT_TYPES].join(", ")}`,
+            );
+            continue;
+          }
+          const label = String(u.label ?? "").trim();
+          if (!label) continue; // sin label no se puede mostrar
+          const unitId =
+            typeof u.id === "string" && u.id && !u.id.startsWith("wizard-")
+              ? u.id
+              : crypto.randomUUID();
+          const folioMatricula = u.folioMatricula ?? u.folio_matricula ?? null;
+          const areaM2 = u.areaM2 ?? u.area_m2 ?? null;
+          const position = Number(u.position) || i + 1;
+          await pool.query(
+            `INSERT INTO property_units
             (id, organization_id, property_id, type, label, folio_matricula,
              area_m2, notes, position)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            unitId,
-            orgId,
-            propertyId,
-            type,
-            label,
-            folioMatricula ? String(folioMatricula) : null,
-            areaM2 !== null && areaM2 !== '' ? Number(areaM2) : null,
-            u.notes ?? null,
-            position,
-          ],
-        );
+            [
+              unitId,
+              orgId,
+              propertyId,
+              type,
+              label,
+              folioMatricula ? String(folioMatricula) : null,
+              areaM2 !== null && areaM2 !== "" ? Number(areaM2) : null,
+              u.notes ?? null,
+              position,
+            ],
+          );
+        }
+      } catch (err: any) {
+        console.error("[DB] Error persistiendo property_units:", err.message);
       }
-    } catch (err: any) {
-      console.error('[DB] Error persistiendo property_units:', err.message);
     }
-  }
 
-  // ── 5. Persistir documents (con vínculo a owner_id / unit_id) ──────
-  // Para resolver keys legacy ("Cédula de Ciudadanía") necesitamos el id
-  // del primer owner. Lo leemos de la BD si acabamos de insertarlo, o de
-  // la fila legacy si no se mandó `owners`.
-  let firstOwnerId: string | null = null;
-  try {
-    const [po] = await pool.query<any[]>(
-      `SELECT id FROM property_owners WHERE property_id = ? ORDER BY position ASC LIMIT 1`,
-      [propertyId],
-    );
-    firstOwnerId = po[0]?.id ?? null;
-  } catch { /* noop */ }
+    // ── 5. Persistir documents (con vínculo a owner_id / unit_id) ──────
+    // Para resolver keys legacy ("Cédula de Ciudadanía") necesitamos el id
+    // del primer owner. Lo leemos de la BD si acabamos de insertarlo, o de
+    // la fila legacy si no se mandó `owners`.
+    let firstOwnerId: string | null = null;
+    try {
+      const [po] = await pool.query<any[]>(
+        `SELECT id FROM property_owners WHERE property_id = ? ORDER BY position ASC LIMIT 1`,
+        [propertyId],
+      );
+      firstOwnerId = po[0]?.id ?? null;
+    } catch {
+      /* noop */
+    }
 
-  if (documents && typeof documents === 'object') {
-    for (const [key, url] of Object.entries(documents)) {
-      if (typeof url !== 'string' || !url) continue;
-      // FIX AC-15 (jul-2026): nunca persistir `blob:` ni `data:` URLs.
-      // Son locales al browser y expiran al cerrar la pestaña/refresh.
-      // Si el cliente las manda, las rechazamos silenciosamente (con log)
-      // para que el bug histórico no se repita en filas zombie.
-      if (url.startsWith('blob:') || url.startsWith('data:')) {
-        console.warn(`[docs] rechazando "${key}" — URL local (${url.slice(0, 40)}...) no se persiste en MySQL. El cliente debe re-subir cuando Drive esté conectado.`);
-        continue;
-      }
-      const parsed = parseDocumentKey(key, firstOwnerId);
-      if (!parsed) continue; // key no reconocida → la salteamos
-      // Si parsed.ownerId es del wizard (wizard-X), no lo podemos persistir
-      // (FK explota). Lo saltamos — el frontend debe reenviar tras el UPSERT.
-      if (parsed.ownerId && String(parsed.ownerId).startsWith('wizard-')) {
-        console.warn(`[docs] se salta "${key}" — ownerId es wizard-temp`);
-        continue;
-      }
-      if (parsed.unitId && String(parsed.unitId).startsWith('wizard-')) {
-        console.warn(`[docs] se salta "${key}" — unitId es wizard-temp`);
-        continue;
-      }
-      try {
-        await pool.query(
-          `INSERT INTO property_documents
+    if (documents && typeof documents === "object") {
+      for (const [key, url] of Object.entries(documents)) {
+        if (typeof url !== "string" || !url) continue;
+        // FIX AC-15 (jul-2026): nunca persistir `blob:` ni `data:` URLs.
+        // Son locales al browser y expiran al cerrar la pestaña/refresh.
+        // Si el cliente las manda, las rechazamos silenciosamente (con log)
+        // para que el bug histórico no se repita en filas zombie.
+        if (url.startsWith("blob:") || url.startsWith("data:")) {
+          console.warn(
+            `[docs] rechazando "${key}" — URL local (${url.slice(0, 40)}...) no se persiste en MySQL. El cliente debe re-subir cuando Drive esté conectado.`,
+          );
+          continue;
+        }
+        const parsed = parseDocumentKey(key, firstOwnerId);
+        if (!parsed) continue; // key no reconocida → la salteamos
+        // Si parsed.ownerId es del wizard (wizard-X), no lo podemos persistir
+        // (FK explota). Lo saltamos — el frontend debe reenviar tras el UPSERT.
+        if (parsed.ownerId && String(parsed.ownerId).startsWith("wizard-")) {
+          console.warn(`[docs] se salta "${key}" — ownerId es wizard-temp`);
+          continue;
+        }
+        if (parsed.unitId && String(parsed.unitId).startsWith("wizard-")) {
+          console.warn(`[docs] se salta "${key}" — unitId es wizard-temp`);
+          continue;
+        }
+        try {
+          await pool.query(
+            `INSERT INTO property_documents
             (id, property_id, owner_id, unit_id, doc_type, file_name, file_url, file_size, uploaded_by)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
@@ -513,57 +617,69 @@ router.post('/', async (req, res) => {
              file_url   = VALUES(file_url),
              file_name  = VALUES(file_name),
              uploaded_at = CURRENT_TIMESTAMP`,
-          [
-            crypto.randomUUID(),
-            propertyId,
-            parsed.ownerId,
-            parsed.unitId,
-            parsed.docType,
-            `${key}.pdf`,
-            url,
-            null,
-            'default_user',
-          ],
-        );
-      } catch (err: any) {
-        console.warn(`[DB] No se pudo persistir property_document (${key}):`, err.message);
+            [
+              crypto.randomUUID(),
+              propertyId,
+              parsed.ownerId,
+              parsed.unitId,
+              parsed.docType,
+              `${key}.pdf`,
+              url,
+              null,
+              "default_user",
+            ],
+          );
+        } catch (err: any) {
+          console.warn(
+            `[DB] No se pudo persistir property_document (${key}):`,
+            err.message,
+          );
+        }
       }
     }
-  }
 
-  // ── 6. En UPSERT devolvemos el folder Drive existente si está null ──
-  let responseDriveFolderId = driveFolderId;
-  let responseDriveFolderPath = driveFolderPath;
-  if (isUpsert && (!responseDriveFolderId || !responseDriveFolderPath)) {
-    const [existing] = await pool.query<any[]>(
-      'SELECT drive_folder_id, drive_folder_path FROM properties WHERE id = ?',
-      [propertyId],
-    );
-    if (existing.length) {
-      responseDriveFolderId = responseDriveFolderId ?? existing[0].drive_folder_id;
-      responseDriveFolderPath = responseDriveFolderPath ?? existing[0].drive_folder_path;
+    // ── 6. En UPSERT devolvemos el folder Drive existente si está null ──
+    let responseDriveFolderId = driveFolderId;
+    let responseDriveFolderPath = driveFolderPath;
+    if (isUpsert && (!responseDriveFolderId || !responseDriveFolderPath)) {
+      const [existing] = await pool.query<any[]>(
+        "SELECT drive_folder_id, drive_folder_path FROM properties WHERE id = ?",
+        [propertyId],
+      );
+      if (existing.length) {
+        responseDriveFolderId =
+          responseDriveFolderId ?? existing[0].drive_folder_id;
+        responseDriveFolderPath =
+          responseDriveFolderPath ?? existing[0].drive_folder_path;
+      }
     }
-  }
 
-  console.log('[POST /api/properties] OK — id:', propertyId, 'drive:', responseDriveFolderPath ?? '(sin Drive)');
-  res.json({
-    success: true,
-    propertyId,
-    driveFolderId: responseDriveFolderId,
-    driveFolderPath: responseDriveFolderPath,
-    message: responseDriveFolderId
-      ? 'Propiedad guardada en MySQL y Drive'
-      : 'Propiedad guardada en MySQL (sin Drive — conecta tu Google Drive)',
-  });
+    console.log(
+      "[POST /api/properties] OK — id:",
+      propertyId,
+      "drive:",
+      responseDriveFolderPath ?? "(sin Drive)",
+    );
+    res.json({
+      success: true,
+      propertyId,
+      driveFolderId: responseDriveFolderId,
+      driveFolderPath: responseDriveFolderPath,
+      message: responseDriveFolderId
+        ? "Propiedad guardada en MySQL y Drive"
+        : "Propiedad guardada en MySQL (sin Drive — conecta tu Google Drive)",
+    });
   } catch (err: any) {
     // Cualquier error no manejado por los try/catch internos cae acá.
     // Devolvemos JSON para que el frontend pueda parsearlo (antes era HTML
     // y el browser tiraba SyntaxError en consola).
-    console.error('[POST /api/properties] UNHANDLED:', err.message ?? err);
+    console.error("[POST /api/properties] UNHANDLED:", err.message ?? err);
     if (err?.stack) console.error(err.stack);
     if (!res.headersSent) {
       res.status(500).json({
-        error: 'Error inesperado guardando propiedad: ' + (err.message ?? String(err)),
+        error:
+          "Error inesperado guardando propiedad: " +
+          (err.message ?? String(err)),
       });
     }
   }
@@ -575,7 +691,7 @@ router.post('/', async (req, res) => {
  * Los owners y units vienen con sus documentos anidados (cedula/rut por owner,
  * certificado_tradicion por unit). El Mandato vive aparte en `mandate_pdf_url`.
  */
-router.get('/:id', async (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
     const propertyId = req.params.id;
     const orgId = await ensureDefaultOrg();
@@ -591,7 +707,7 @@ router.get('/:id', async (req, res) => {
       [propertyId, orgId],
     );
     if (rows.length === 0) {
-      res.status(404).json({ error: 'Propiedad no encontrada' });
+      res.status(404).json({ error: "Propiedad no encontrada" });
       return;
     }
     const p = rows[0];
@@ -610,13 +726,13 @@ router.get('/:id', async (req, res) => {
       const [docRows] = await pool.query<any[]>(
         `SELECT owner_id, doc_type, file_url
          FROM property_documents
-         WHERE property_id = ? AND owner_id IN (${ownerIds.map(() => '?').join(',')})`,
+         WHERE property_id = ? AND owner_id IN (${ownerIds.map(() => "?").join(",")})`,
         [propertyId, ...ownerIds],
       );
       for (const d of docRows) {
         if (!d.owner_id) continue;
         if (!docsByOwner[d.owner_id]) docsByOwner[d.owner_id] = {};
-        if (d.doc_type === 'cedula' || d.doc_type === 'rut') {
+        if (d.doc_type === "cedula" || d.doc_type === "rut") {
           docsByOwner[d.owner_id][d.doc_type] = d.file_url;
         }
       }
@@ -647,13 +763,13 @@ router.get('/:id', async (req, res) => {
       const [docRows] = await pool.query<any[]>(
         `SELECT unit_id, doc_type, file_url
          FROM property_documents
-         WHERE property_id = ? AND unit_id IN (${unitIds.map(() => '?').join(',')})`,
+         WHERE property_id = ? AND unit_id IN (${unitIds.map(() => "?").join(",")})`,
         [propertyId, ...unitIds],
       );
       for (const d of docRows) {
         if (!d.unit_id) continue;
         if (!docsByUnit[d.unit_id]) docsByUnit[d.unit_id] = {};
-        if (d.doc_type === 'certificado_tradicion') {
+        if (d.doc_type === "certificado_tradicion") {
           docsByUnit[d.unit_id].certificado_tradicion = d.file_url;
         }
       }
@@ -678,7 +794,7 @@ router.get('/:id', async (req, res) => {
     );
     const propertyDocuments: Record<string, string> = {};
     for (const d of propDocRows) {
-      if (d.doc_type === 'predial' || d.doc_type === 'certificado_tradicion') {
+      if (d.doc_type === "predial" || d.doc_type === "certificado_tradicion") {
         propertyDocuments[d.doc_type] = d.file_url;
       }
     }
@@ -689,10 +805,10 @@ router.get('/:id', async (req, res) => {
     // aunque los docs estén subidos.
     const firstOwner = owners[0];
     const documentsLegacy: Record<string, string> = {
-      'Cédula de Ciudadanía': firstOwner?.documents?.cedula ?? '',
-      'Rut Actualizado':      firstOwner?.documents?.rut ?? '',
-      'Impuesto Predial':     propertyDocuments.predial ?? '',
-      'Certificado de Tradición': propertyDocuments.certificado_tradicion ?? '',
+      "Cédula de Ciudadanía": firstOwner?.documents?.cedula ?? "",
+      "Rut Actualizado": firstOwner?.documents?.rut ?? "",
+      "Impuesto Predial": propertyDocuments.predial ?? "",
+      "Certificado de Tradición": propertyDocuments.certificado_tradicion ?? "",
     };
     // Quitar entries vacías
     for (const k of Object.keys(documentsLegacy)) {
@@ -730,7 +846,7 @@ router.get('/:id', async (req, res) => {
       documents_legacy: documentsLegacy,
     });
   } catch (err: any) {
-    console.error('[GET /api/properties/:id]', err);
+    console.error("[GET /api/properties/:id]", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -741,9 +857,9 @@ router.get('/:id', async (req, res) => {
  * documentos anidados (para no inflar la lista). Si `?expand=full`, devuelve
  * también los docs (más pesado).
  */
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const expand = req.query.expand === 'full';
+    const expand = req.query.expand === "full";
     const orgId = await ensureDefaultOrg();
     const [rows] = await pool.query<any[]>(
       `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
@@ -766,13 +882,14 @@ router.get('/', async (req, res) => {
     const [ownerRows] = await pool.query<any[]>(
       `SELECT id, property_id, name, id_number, phone, email, ownership_pct, position
        FROM property_owners
-       WHERE property_id IN (${propertyIds.map(() => '?').join(',')})
+       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
        ORDER BY position ASC`,
       propertyIds,
     );
     const ownersByProperty: Record<string, any[]> = {};
     for (const o of ownerRows) {
-      if (!ownersByProperty[o.property_id]) ownersByProperty[o.property_id] = [];
+      if (!ownersByProperty[o.property_id])
+        ownersByProperty[o.property_id] = [];
       ownersByProperty[o.property_id].push({
         id: o.id,
         name: o.name,
@@ -788,7 +905,7 @@ router.get('/', async (req, res) => {
     const [unitRows] = await pool.query<any[]>(
       `SELECT id, property_id, type, label, folio_matricula, area_m2, position
        FROM property_units
-       WHERE property_id IN (${propertyIds.map(() => '?').join(',')})
+       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
        ORDER BY position ASC`,
       propertyIds,
     );
@@ -809,16 +926,20 @@ router.get('/', async (req, res) => {
     const [docRows] = await pool.query<any[]>(
       `SELECT property_id, doc_type, file_url
        FROM property_documents
-       WHERE property_id IN (${propertyIds.map(() => '?').join(',')})`,
+       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})`,
       propertyIds,
     );
     const docsByProperty: Record<string, Record<string, string>> = {};
     for (const d of docRows) {
       if (!docsByProperty[d.property_id]) docsByProperty[d.property_id] = {};
-      if (d.doc_type === 'cedula') docsByProperty[d.property_id]['Cédula de Ciudadanía'] = d.file_url;
-      else if (d.doc_type === 'rut') docsByProperty[d.property_id]['Rut Actualizado'] = d.file_url;
-      else if (d.doc_type === 'predial') docsByProperty[d.property_id]['Impuesto Predial'] = d.file_url;
-      else if (d.doc_type === 'certificado_tradicion') docsByProperty[d.property_id]['Certificado de Tradición'] = d.file_url;
+      if (d.doc_type === "cedula")
+        docsByProperty[d.property_id]["Cédula de Ciudadanía"] = d.file_url;
+      else if (d.doc_type === "rut")
+        docsByProperty[d.property_id]["Rut Actualizado"] = d.file_url;
+      else if (d.doc_type === "predial")
+        docsByProperty[d.property_id]["Impuesto Predial"] = d.file_url;
+      else if (d.doc_type === "certificado_tradicion")
+        docsByProperty[d.property_id]["Certificado de Tradición"] = d.file_url;
     }
 
     const properties = rows.map((r) => ({
@@ -846,42 +967,67 @@ router.get('/', async (req, res) => {
  * No tocar owners/units (esos se manejan vía POST). Solo campos escalares
  * de `properties` y documentos sueltos si vienen.
  */
-router.patch('/:id', async (req, res) => {
+router.patch("/:id", async (req, res) => {
   const { id } = req.params;
-  const allowed = ['address', 'chip', 'folio', 'owner_name', 'owner_id_number', 'owner_phone', 'owner_email', 'status', 'property_type', 'mandato_pdf_url', 'mandato_signed_at', 'drive_folder_id', 'drive_folder_path', 'inventory_pdf_url'];
+  const allowed = [
+    "address",
+    "chip",
+    "folio",
+    "owner_name",
+    "owner_id_number",
+    "owner_phone",
+    "owner_email",
+    "status",
+    "property_type",
+    "mandato_pdf_url",
+    "mandato_signed_at",
+    "drive_folder_id",
+    "drive_folder_path",
+    "inventory_pdf_url",
+  ];
   const updates: string[] = [];
   const values: any[] = [];
 
   const toMysqlDateTime = (v: any): string | null => {
-    if (v === null || v === undefined || v === '') return null;
-    if (typeof v !== 'string') return null;
+    if (v === null || v === undefined || v === "") return null;
+    if (typeof v !== "string") return null;
     if (/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(v)) return v;
     const d = new Date(v);
     if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 19).replace('T', ' ');
+    return d.toISOString().slice(0, 19).replace("T", " ");
   };
 
   const fieldAliases: Record<string, string[]> = {
-    'mandato_pdf_url':   ['mandato_pdf_url', 'mandatoPdfUrl', 'mandatePdfUrl'],
-    'mandato_signed_at': ['mandato_signed_at', 'mandatoSignedAt', 'mandateSignedAt'],
-    'drive_folder_id':   ['drive_folder_id', 'driveFolderId'],
-    'drive_folder_path': ['drive_folder_path', 'driveFolderPath'],
-    'inventory_pdf_url': ['inventory_pdf_url', 'inventoryPdfUrl'],
-    'property_type':     ['property_type', 'propertyType'],
-    'owner_name':        ['owner_name', 'ownerName'],
-    'owner_id_number':   ['owner_id_number', 'ownerIdNumber'],
-    'owner_phone':       ['owner_phone', 'ownerPhone'],
-    'owner_email':       ['owner_email', 'ownerEmail'],
+    mandato_pdf_url: ["mandato_pdf_url", "mandatoPdfUrl", "mandatePdfUrl"],
+    mandato_signed_at: [
+      "mandato_signed_at",
+      "mandatoSignedAt",
+      "mandateSignedAt",
+    ],
+    drive_folder_id: ["drive_folder_id", "driveFolderId"],
+    drive_folder_path: ["drive_folder_path", "driveFolderPath"],
+    inventory_pdf_url: ["inventory_pdf_url", "inventoryPdfUrl"],
+    property_type: ["property_type", "propertyType"],
+    owner_name: ["owner_name", "ownerName"],
+    owner_id_number: ["owner_id_number", "ownerIdNumber"],
+    owner_phone: ["owner_phone", "ownerPhone"],
+    owner_email: ["owner_email", "ownerEmail"],
   };
 
   for (const f of allowed) {
-    const keys = fieldAliases[f] ?? [f, f.replace(/_([a-z])/g, (_, c) => c.toUpperCase())];
+    const keys = fieldAliases[f] ?? [
+      f,
+      f.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
+    ];
     let value: any;
     for (const k of keys) {
-      if (req.body[k] !== undefined) { value = req.body[k]; break; }
+      if (req.body[k] !== undefined) {
+        value = req.body[k];
+        break;
+      }
     }
     if (value !== undefined) {
-      if (f === 'mandato_signed_at') {
+      if (f === "mandato_signed_at") {
         value = toMysqlDateTime(value);
       }
       updates.push(`${f} = ?`);
@@ -890,7 +1036,7 @@ router.patch('/:id', async (req, res) => {
   }
 
   if (!updates.length) {
-    res.json({ success: true, message: 'Nothing to update' });
+    res.json({ success: true, message: "Nothing to update" });
     return;
   }
   // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
@@ -899,11 +1045,15 @@ router.patch('/:id', async (req, res) => {
   // a file_url y tenía el mismo bug: el cliente persistía blob URLs
   // locales que morían al refrescar el browser.
   for (let i = 0; i < updates.length; i++) {
-    if (updates[i].startsWith('mandato_pdf_url = ?')) {
+    if (updates[i].startsWith("mandato_pdf_url = ?")) {
       const v = values[i];
-      if (typeof v === 'string' && (v.startsWith('blob:') || v.startsWith('data:'))) {
+      if (
+        typeof v === "string" &&
+        (v.startsWith("blob:") || v.startsWith("data:"))
+      ) {
         return res.status(400).json({
-          error: 'mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá desde el Detalle del Inmueble con Drive conectado.',
+          error:
+            "mandato_pdf_url no puede ser un blob/data URL — solo URLs de Drive (https://). Reintentá desde el Detalle del Inmueble con Drive conectado.",
         });
       }
     }
@@ -912,8 +1062,20 @@ router.patch('/:id', async (req, res) => {
   values.push(id);
   try {
     const orgId = await ensureDefaultOrg();
+    // BUG-018: pre-check para distinguir "no existe" (404) de "existe pero
+    // valores idénticos" (200 no-op). Sin este check, affectedRows=0
+    // podía significar ambas cosas y siempre devolvía 200 mentiroso.
+    const [exists] = await pool.query<any[]>(
+      `SELECT 1 FROM properties WHERE id = ? AND organization_id = ? LIMIT 1`,
+      [id, orgId],
+    );
+    if (!exists.length) {
+      return res.status(404).json({
+        error: "Propiedad no encontrada o no pertenece a esta organización",
+      });
+    }
     await pool.query(
-      `UPDATE properties SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
+      `UPDATE properties SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`,
       [...values, orgId],
     );
     res.json({ success: true });
@@ -928,7 +1090,7 @@ router.patch('/:id', async (req, res) => {
  * Con CASCADE, los `property_documents`, `property_owners` y `property_units`
  * se limpian automáticamente.
  */
-router.delete('/:id', async (req, res) => {
+router.delete("/:id", async (req, res) => {
   const { id } = req.params;
   const orgId = await ensureDefaultOrg();
 
@@ -940,7 +1102,7 @@ router.delete('/:id', async (req, res) => {
   );
 
   if (!propRows.length) {
-    res.status(404).json({ error: 'Propiedad no encontrada' });
+    res.status(404).json({ error: "Propiedad no encontrada" });
     return;
   }
 
@@ -951,7 +1113,8 @@ router.delete('/:id', async (req, res) => {
 
   if (invRows.length > 0) {
     res.status(409).json({
-      error: 'No se puede eliminar: este inmueble ya tiene inventario(s) asociado(s). Los inventarios son trazabilidad legal y no se pueden deshacer.',
+      error:
+        "No se puede eliminar: este inmueble ya tiene inventario(s) asociado(s). Los inventarios son trazabilidad legal y no se pueden deshacer.",
       hasInventories: true,
       inventoryPhase: invRows[0].phase,
     });
@@ -966,20 +1129,22 @@ router.delete('/:id', async (req, res) => {
       [id, orgId],
     );
   } catch (err: any) {
-    console.error('[DELETE /api/properties] MySQL error:', err.message);
-    res.status(500).json({ error: 'Error eliminando propiedad: ' + err.message });
+    console.error("[DELETE /api/properties] MySQL error:", err.message);
+    res
+      .status(500)
+      .json({ error: "Error eliminando propiedad: " + err.message });
     return;
   }
 
-  let driveCleanupStatus: 'skipped' | 'deleted' | 'failed' = 'skipped';
+  let driveCleanupStatus: "skipped" | "deleted" | "failed" = "skipped";
   if (property.drive_folder_id) {
     try {
       const drive = await getFreshDriveClient();
       if (drive) {
         const children = await drive.files.list({
           q: `'${property.drive_folder_id}' in parents and trashed=false`,
-          fields: 'files(id)',
-          spaces: 'drive',
+          fields: "files(id)",
+          spaces: "drive",
         });
         const childCount = children.data.files?.length ?? 0;
         if (childCount === 0) {
@@ -987,27 +1152,32 @@ router.delete('/:id', async (req, res) => {
             fileId: property.drive_folder_id,
             requestBody: { trashed: true },
           });
-          driveCleanupStatus = 'deleted';
+          driveCleanupStatus = "deleted";
         } else {
-          driveCleanupStatus = 'skipped';
+          driveCleanupStatus = "skipped";
         }
       }
     } catch (err: any) {
-      console.warn('[DELETE /api/properties] Drive cleanup error:', err.message);
-      driveCleanupStatus = 'failed';
+      console.warn(
+        "[DELETE /api/properties] Drive cleanup error:",
+        err.message,
+      );
+      driveCleanupStatus = "failed";
     }
   }
 
-  console.log(`[DELETE /api/properties] OK — id: ${id}, drive: ${driveCleanupStatus}`);
+  console.log(
+    `[DELETE /api/properties] OK — id: ${id}, drive: ${driveCleanupStatus}`,
+  );
   res.json({
     success: true,
     driveCleanupStatus,
     message:
-      driveCleanupStatus === 'deleted'
-        ? 'Propiedad eliminada y carpeta Drive vaciada'
-        : driveCleanupStatus === 'skipped'
-          ? 'Propiedad eliminada (la carpeta Drive tenía archivos; queda como histórico)'
-          : 'Propiedad eliminada (no se pudo limpiar Drive, hacelo manual si querés)',
+      driveCleanupStatus === "deleted"
+        ? "Propiedad eliminada y carpeta Drive vaciada"
+        : driveCleanupStatus === "skipped"
+          ? "Propiedad eliminada (la carpeta Drive tenía archivos; queda como histórico)"
+          : "Propiedad eliminada (no se pudo limpiar Drive, hacelo manual si querés)",
   });
 });
 

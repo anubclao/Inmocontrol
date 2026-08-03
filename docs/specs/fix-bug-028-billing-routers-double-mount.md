@@ -47,7 +47,7 @@ Hoy NO hay colisión (los paths no se solapan), pero el patrón es frágil.
 - Cambiar `app.use("/api/billing", banksRouter)` por:
   ```ts
   app.use("/api/billing/banks", banksRouter);
-  app.use("/api/billing/insurance", insuranceRouter);  // si existe
+  app.use("/api/billing/insurance", insuranceRouter); // si existe
   ```
 - Actualizar el frontend (`src/features/billing/api.ts` y callers) para
   apuntar a las nuevas URLs.
@@ -67,7 +67,7 @@ Hoy NO hay colisión (los paths no se solapan), pero el patrón es frágil.
   // PRIMER router que tenga la ruta. Si ambos definen el mismo path,
   // gana billingRouter (montado primero).
   app.use("/api/billing", billingRouter);
-  app.use("/api/billing", banksRouter);  // solo para /bank-accounts y /insurance/*
+  app.use("/api/billing", banksRouter); // solo para /bank-accounts y /insurance/*
   ```
 
 ### AC-4: Test E2E del orden
@@ -96,22 +96,24 @@ Hoy NO hay colisión (los paths no se solapan), pero el patrón es frágil.
 ### Antes (orden implícito)
 
 ```ts
-app.use("/api/billing", billingRouter);  // matchea /policies/*, /payments/*, etc.
-app.use("/api/billing", banksRouter);    // matchea /bank-accounts, /insurance/*
+app.use("/api/billing", billingRouter); // matchea /policies/*, /payments/*, etc.
+app.use("/api/billing", banksRouter); // matchea /bank-accounts, /insurance/*
 ```
 
 ### Después (orden explícito + namespace separado)
 
 Opción A (recomendada):
+
 ```ts
 app.use("/api/billing", billingRouter);
 app.use("/api/billing/banks", banksRouter);
-app.use("/api/billing/insurance", insuranceRouter);  // futuro
+app.use("/api/billing/insurance", insuranceRouter); // futuro
 ```
 
 Opción B (consolidar):
+
 ```ts
-app.use("/api/billing", billingRouter);  // incluye bank-accounts
+app.use("/api/billing", billingRouter); // incluye bank-accounts
 // (banksRouter borrado)
 ```
 

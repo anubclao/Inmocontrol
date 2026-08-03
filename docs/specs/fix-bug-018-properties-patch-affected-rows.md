@@ -22,10 +22,10 @@
 try {
   const orgId = await ensureDefaultOrg();
   await pool.query(
-    `UPDATE properties SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
+    `UPDATE properties SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`,
     [...values, orgId],
   );
-  res.json({ success: true });  // ← siempre 200, sin chequear affectedRows
+  res.json({ success: true }); // ← siempre 200, sin chequear affectedRows
 } catch (err: any) {
   res.status(500).json({ error: err.message });
 }
@@ -34,6 +34,7 @@ try {
 ### Resultado
 
 PATCH a una propiedad inexistente:
+
 1. MySQL ejecuta `UPDATE properties SET ... WHERE id = 'inexistente' AND org_id = 'X'`.
 2. `affectedRows = 0` (ninguna fila matchea).
 3. El handler devuelve `200 { success: true }`.
@@ -47,12 +48,12 @@ PATCH a una propiedad inexistente:
 
 ```ts
 const [result] = await pool.query(
-  `UPDATE properties SET ${updates.join(', ')} WHERE id = ? AND organization_id = ?`,
+  `UPDATE properties SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`,
   [...values, orgId],
 );
 if (result.affectedRows === 0) {
-  return res.status(404).json({ 
-    error: 'Propiedad no encontrada o no pertenece a esta organización',
+  return res.status(404).json({
+    error: "Propiedad no encontrada o no pertenece a esta organización",
   });
 }
 res.json({ success: true });
@@ -63,22 +64,24 @@ res.json({ success: true });
 - Si los valores del body son IDÉNTICOS a los actuales, MySQL devuelve
   `affectedRows = 0` PERO la fila SÍ existe.
 - Distinguir:
+
   ```ts
   // affectedRows = 0 puede significar:
   //   a) La fila no existe (404)
   //   b) La fila existe pero los valores son idénticos (200, no-op)
-  
+
   // Para distinguirlas, hacer un SELECT previo:
   const [exists] = await pool.query<any[]>(
     `SELECT 1 FROM properties WHERE id = ? AND organization_id = ? LIMIT 1`,
-    [id, orgId]
+    [id, orgId],
   );
   if (!exists.length) {
-    return res.status(404).json({ error: 'Propiedad no encontrada' });
+    return res.status(404).json({ error: "Propiedad no encontrada" });
   }
   // La fila existe → 200 (puede ser no-op si los valores son idénticos)
   res.json({ success: true });
   ```
+
 - Esto es 1 query extra (SELECT antes del UPDATE) — aceptable.
 
 ### AC-3: Comportamiento exitoso sin cambios
@@ -140,10 +143,10 @@ PATCH /api/properties/existente
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
-| PATCH a propiedad existente | success | `Propiedad actualizada` (sin cambios) |
-| PATCH a propiedad inexistente | error | `Propiedad no encontrada o no pertenece a esta organización` |
+| Trigger                       | Tipo    | Copy exacto                                                  |
+| ----------------------------- | ------- | ------------------------------------------------------------ |
+| PATCH a propiedad existente   | success | `Propiedad actualizada` (sin cambios)                        |
+| PATCH a propiedad inexistente | error   | `Propiedad no encontrada o no pertenece a esta organización` |
 
 ## 7. Out of Scope
 

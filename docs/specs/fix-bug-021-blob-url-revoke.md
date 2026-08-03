@@ -19,11 +19,13 @@
 ### Estado actual
 
 `PropertiesView.tsx` crea blob URLs en:
+
 - Línea 552: `mandateUrl = URL.createObjectURL(file)` (mandato PDF)
 - Línea 622: `docUrl = URL.createObjectURL(file)` (doc general)
 - Líneas 719, 726, 733: `blobUrl = URL.createObjectURL(file)` (wizard docs)
 
 `revokeObjectURL` solo se llama en:
+
 - Líneas 1435, 1489, 1797: cleanup de `uploadedDocs` array (wizard)
 - Líneas 2891, 2907: al cerrar el modal `viewingDoc`
 
@@ -45,11 +47,13 @@
   useEffect(() => {
     return () => {
       // Cleanup existente
-      Object.values(uploadedDocs).flat().forEach((u) => {
-        if (u && u.startsWith('blob:')) URL.revokeObjectURL(u);
-      });
+      Object.values(uploadedDocs)
+        .flat()
+        .forEach((u) => {
+          if (u && u.startsWith("blob:")) URL.revokeObjectURL(u);
+        });
       // FIX BUG-021: revocar también el mandateUrl si es blob
-      if (mandateUrl?.startsWith('blob:')) URL.revokeObjectURL(mandateUrl);
+      if (mandateUrl?.startsWith("blob:")) URL.revokeObjectURL(mandateUrl);
     };
   }, [uploadedDocs, mandateUrl]);
   ```
@@ -63,7 +67,7 @@
 - Crear en `src/shared/lib/blob.ts`:
   ```ts
   export function revokeIfBlob(url: string | null | undefined): void {
-    if (url && url.startsWith('blob:')) {
+    if (url && url.startsWith("blob:")) {
       URL.revokeObjectURL(url);
     }
   }
@@ -135,8 +139,8 @@ useEffect(() => {
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
+| Trigger         | Tipo      | Copy exacto                          |
+| --------------- | --------- | ------------------------------------ |
 | Cualquier flujo | (ninguno) | (sin cambios de UX — fix silencioso) |
 
 (No hay UX changes — el fix es 100% cleanup de memoria.)

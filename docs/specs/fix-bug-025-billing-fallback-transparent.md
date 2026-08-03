@@ -43,7 +43,7 @@ const result = await tryBackendOrFallback(
   () => api("PUT", "/billing/policies/123", policy),
   () => saveToLocalStorage(policy),
 );
-showToast("✓ Billing configurado", "success");  // ← MENTIRA si server falló
+showToast("✓ Billing configurado", "success"); // ← MENTIRA si server falló
 ```
 
 El toast de éxito se muestra INCLUSO si el server devolvió 500 y la policy
@@ -57,25 +57,34 @@ local se sobrescribe con el de MySQL y la policy desaparece.
 
 - En vez de devolver siempre el fallback silenciosamente, devolver un
   objeto con el source:
+
   ```ts
-  type FallbackResult<T> = 
-    | { source: 'backend'; value: T }
-    | { source: 'fallback'; value: T; reason: string };
-  
+  type FallbackResult<T> =
+    | { source: "backend"; value: T }
+    | { source: "fallback"; value: T; reason: string };
+
   async function tryBackendOrFallback<T>(
     backendCall: () => Promise<T>,
     fallback: () => T | Promise<T>,
   ): Promise<FallbackResult<T>> {
     const mode = await detectMode();
     if (mode === "local") {
-      return { source: 'fallback', value: await fallback(), reason: 'local mode' };
+      return {
+        source: "fallback",
+        value: await fallback(),
+        reason: "local mode",
+      };
     }
     try {
       const value = await backendCall();
-      return { source: 'backend', value };
+      return { source: "backend", value };
     } catch (err: any) {
       console.warn("[billing/api] backend falló, usando fallback local:", err);
-      return { source: 'fallback', value: await fallback(), reason: err?.message ?? 'unknown' };
+      return {
+        source: "fallback",
+        value: await fallback(),
+        reason: err?.message ?? "unknown",
+      };
     }
   }
   ```
@@ -87,7 +96,7 @@ const result = await tryBackendOrFallback(
   () => api("PUT", "/billing/policies/123", policy),
   () => saveToLocalStorage(policy),
 );
-if (result.source === 'backend') {
+if (result.source === "backend") {
   showToast("✓ Billing configurado", "success");
 } else {
   // Backend falló → fallback local
@@ -161,11 +170,11 @@ savePolicy(policy)
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
-| Save OK (backend) | success | `Billing configurado` (sin cambios) |
+| Trigger                    | Tipo    | Copy exacto                                                                                   |
+| -------------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| Save OK (backend)          | success | `Billing configurado` (sin cambios)                                                           |
 | Save FAIL (fallback local) | warning | `No se pudo guardar en el servidor. Guardado localmente. Reintentá cuando恢复了 la conexión.` |
-| Modo local | warning | `Modo local: los datos solo se guardan en este navegador.` |
+| Modo local                 | warning | `Modo local: los datos solo se guardan en este navegador.`                                    |
 
 ## 7. Out of Scope
 

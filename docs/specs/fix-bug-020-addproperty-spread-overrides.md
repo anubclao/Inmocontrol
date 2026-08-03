@@ -21,17 +21,18 @@
 ```ts
 const local: Property = {
   id: p.id,
-  address: p.address ?? "",        // default: ""
-  chip: p.chip ?? "",              // default: ""
+  address: p.address ?? "", // default: ""
+  chip: p.chip ?? "", // default: ""
   // ... más defaults ...
   createdAt: new Date().toISOString(),
-  ...p,                             // ← BUG: spread al final pisa los defaults
+  ...p, // ← BUG: spread al final pisa los defaults
 } as Property;
 ```
 
 ### Resultado
 
 Si `p.chip === undefined`:
+
 - `chip: p.chip ?? ""` setea `chip: ""` (correcto).
 - `...p` al final hace `chip: undefined` (sobreescribe con undefined).
 - Zustand guarda `chip: undefined`.
@@ -40,6 +41,7 @@ Si `p.chip === undefined`:
 ### Caso real (agregado por wizard con form incompleto)
 
 El wizard pasa un objeto parcial. `p.chip` puede ser:
+
 - `undefined` (campo no completado)
 - `""` (campo completado pero vacío)
 - `"ABC-123"` (campo completo)
@@ -52,9 +54,9 @@ El primer caso rompe la card.
 
 ```ts
 const local: Property = {
-  ...p,                             // ← primero: aplicar valores del payload
-  id: p.id,                          // explícito (id siempre presente)
-  address: p.address ?? "",          // defaults SOLO si el campo no vino
+  ...p, // ← primero: aplicar valores del payload
+  id: p.id, // explícito (id siempre presente)
+  address: p.address ?? "", // defaults SOLO si el campo no vino
   chip: p.chip ?? "",
   // ...
   createdAt: new Date().toISOString(), // explícito: SIEMPRE ahora
@@ -62,6 +64,7 @@ const local: Property = {
 ```
 
 Con este orden:
+
 - Si `p.chip = "ABC"`: el spread pone `chip: "ABC"`, el default `??` no aplica.
 - Si `p.chip = undefined`: el spread pone `chip: undefined`, el default `chip: p.chip ?? ""` aplica y setea `""`.
 - Si `p.chip = ""`: el spread pone `chip: ""`, el default `??` no aplica (porque `"" ?? ""` es `""`).
@@ -117,10 +120,10 @@ Con este orden:
 
 ```ts
 const local: Property = {
-  address: p.address ?? "",  // "" si undefined
-  chip: p.chip ?? "",        // "" si undefined
+  address: p.address ?? "", // "" si undefined
+  chip: p.chip ?? "", // "" si undefined
   // ... más defaults ...
-  ...p,                        // ← chip: undefined si p.chip era undefined
+  ...p, // ← chip: undefined si p.chip era undefined
 } as Property;
 // Resultado: { address: "", chip: undefined, ... }  ← BUG
 ```
@@ -129,8 +132,8 @@ const local: Property = {
 
 ```ts
 const local: Property = {
-  ...p,                                          // primero
-  address: p.address ?? "",                       // defaults aplican
+  ...p, // primero
+  address: p.address ?? "", // defaults aplican
   chip: p.chip ?? "",
   // ... más defaults ...
   createdAt: new Date().toISOString(),
@@ -140,8 +143,8 @@ const local: Property = {
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
+| Trigger        | Tipo    | Copy exacto                        |
+| -------------- | ------- | ---------------------------------- |
 | addProperty OK | success | `Propiedad agregada` (sin cambios) |
 
 (No hay cambios de UX — el fix es 100% defensivo.)

@@ -10,7 +10,8 @@ Como dev/operador, quiero que TODAS las migrations tengan un script apply-NNN-mi
 ## Contexto
 
 Migrations sin script:
-- 002_*.sql
+
+- 002\_\*.sql
 - 006a-password_hash.sql
 
 ## Acceptance Criteria
@@ -18,13 +19,14 @@ Migrations sin script:
 ### AC-1: Crear apply-002-migration.mjs
 
 ```js
-import pool from '../db/mysql/pool.js';
-import fs from 'fs';
-import path from 'path';
+import pool from "../db/mysql/pool.js";
+import fs from "fs";
+import path from "path";
 
 async function run() {
   const sql = fs.readFileSync(
-    path.join('db/mysql/migrations/002_*.sql'), 'utf8'
+    path.join("db/mysql/migrations/002_*.sql"),
+    "utf8",
   );
   // ... pre-check + execute ...
 }

@@ -1,4 +1,4 @@
-# Fix: Gap inicial sin 001_*.sql (BUG-030)
+# Fix: Gap inicial sin 001\_\*.sql (BUG-030)
 
 > Karpathy Spec - Agosto 2026.
 > Bug origen: BUG-030 en docs/bugs/BUGS.md. Severidad: Verde Bajo.
@@ -9,7 +9,7 @@ Como dev de InmoControl, quiero que las migrations tengan numeracion consistente
 
 ## Contexto
 
-El primer "001" es db/mysql/schema.sql (sin sufijo de version), pero las demas migrations SI tienen el patron 00N_*.sql. Esto confunde al reader.
+El primer "001" es db/mysql/schema.sql (sin sufijo de version), pero las demas migrations SI tienen el patron 00N\_\*.sql. Esto confunde al reader.
 
 ## Acceptance Criteria
 
@@ -25,7 +25,7 @@ Agregar header con conteo de migration.
 
 ### AC-3: Verificacion de orden
 
-ls db/mysql/*.sql | sort debe mostrar 000_initial_schema.sql primero.
+ls db/mysql/\*.sql | sort debe mostrar 000_initial_schema.sql primero.
 
 ## Effort
 

@@ -43,7 +43,10 @@ el cliente espera hasta 5min (browser proxy timeout).
 ### AC-1: Usar `fetchWithTimeout` (helper de BUG-019) en las 3 funciones
 
 ```ts
-import { fetchWithTimeout, TimeoutError } from '../../shared/lib/fetchWithTimeout';
+import {
+  fetchWithTimeout,
+  TimeoutError,
+} from "../../shared/lib/fetchWithTimeout";
 
 export async function createPropertyFolders(
   propertyId: string,
@@ -64,9 +67,9 @@ export async function createPropertyFolders(
     return data.propertyFolderId;
   } catch (err) {
     if (err instanceof TimeoutError) {
-      console.warn('[Drive] createPropertyFolders timeout');
+      console.warn("[Drive] createPropertyFolders timeout");
     } else {
-      console.error('[Drive] Error creando carpetas:', err);
+      console.error("[Drive] Error creando carpetas:", err);
     }
     return null;
   }
@@ -83,11 +86,11 @@ export async function createPropertyFolders(
 
 - Si `TimeoutError`:
   ```ts
-  return { error: 'Drive no respondió a tiempo. Reintentá.' };
+  return { error: "Drive no respondió a tiempo. Reintentá." };
   ```
 - Si otro error (500, 401, etc.):
   ```ts
-  return { error: err.message ?? 'Upload failed' };
+  return { error: err.message ?? "Upload failed" };
   ```
 
 ### AC-4: Comportamiento exitoso sin cambios
@@ -128,16 +131,20 @@ const res = await fetch(`${API}/create-property-folders?...`);
 ### Después (con timeout)
 
 ```ts
-const res = await fetchWithTimeout(`${API}/create-property-folders?...`, {}, 15_000);
+const res = await fetchWithTimeout(
+  `${API}/create-property-folders?...`,
+  {},
+  15_000,
+);
 ```
 
 ## 6. Tostadas exactas (copy approved — NO improvisar)
 
-| Trigger | Tipo | Copy exacto |
-|---|---|---|
-| Upload OK | success | (depende del caller, sin cambios) |
-| Upload timeout | error | `Drive no respondió a tiempo. Reintentá.` |
-| Upload error genérico | error | `${err.message}` (sin cambios) |
+| Trigger               | Tipo    | Copy exacto                               |
+| --------------------- | ------- | ----------------------------------------- |
+| Upload OK             | success | (depende del caller, sin cambios)         |
+| Upload timeout        | error   | `Drive no respondió a tiempo. Reintentá.` |
+| Upload error genérico | error   | `${err.message}` (sin cambios)            |
 
 ## 7. Out of Scope
 

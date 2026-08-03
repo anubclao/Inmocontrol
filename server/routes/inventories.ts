@@ -8,6 +8,33 @@ import pool, { ensureDefaultOrg } from "../db.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
+// BUG-014/015: drive con timeout 15s. Si Drive se cuelga, no esperamos
+// para siempre. Constante local (consistente con tenants.ts y properties.ts).
+const DRIVE_TIMEOUT_MS = 15_000;
+
+function withTimeout<T = any>(
+  p: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`Timeout after ${ms}ms: ${label}`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 const router = express.Router();
 
 const oauth2Client = new google.auth.OAuth2(
@@ -49,20 +76,29 @@ async function getOrCreateSubfolder(
   parentId: string,
   name: string,
 ): Promise<string> {
-  const list = await drive.files.list({
-    q: `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
-    fields: "files(id)",
-    spaces: "drive",
-  });
+  // BUG-014/015: con withTimeout para no colgarse.
+  const list = await withTimeout(
+    drive.files.list({
+      q: `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
+      fields: "files(id)",
+      spaces: "drive",
+    }),
+    DRIVE_TIMEOUT_MS,
+    `drive.files.list (subfolder ${name})`,
+  );
   if (list.data.files?.length) return list.data.files[0].id!;
-  const created = await drive.files.create({
-    requestBody: {
-      name,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: [parentId],
-    },
-    fields: "id",
-  });
+  const created = await withTimeout(
+    drive.files.create({
+      requestBody: {
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentId],
+      },
+      fields: "id",
+    }),
+    DRIVE_TIMEOUT_MS,
+    `drive.files.create (subfolder ${name})`,
+  );
   return created.data.id!;
 }
 
@@ -252,16 +288,25 @@ router.post("/upload-photos", async (req, res) => {
       const cleanBase64 = photo.base64Data.replace(/^data:[^;]+;base64,/, "");
 
       const buffer = Buffer.from(cleanBase64, "base64");
-      const result = await drive.files.create({
-        requestBody: { name: photo.name, parents: [photosFolderId] },
-        media: { mimeType, body: Readable.from(buffer) },
-        fields: "id, webViewLink",
-      });
+      // BUG-015: con withTimeout para que una foto colgada no bloquee el resto.
+      const result = await withTimeout(
+        drive.files.create({
+          requestBody: { name: photo.name, parents: [photosFolderId] },
+          media: { mimeType, body: Readable.from(buffer) },
+          fields: "id, webViewLink",
+        }),
+        DRIVE_TIMEOUT_MS,
+        `drive.files.create (photo ${photo.name})`,
+      );
 
-      await drive.permissions.create({
-        fileId: result.data.id!,
-        requestBody: { role: "reader", type: "anyone" },
-      });
+      await withTimeout(
+        drive.permissions.create({
+          fileId: result.data.id!,
+          requestBody: { role: "reader", type: "anyone" },
+        }),
+        DRIVE_TIMEOUT_MS,
+        `drive.permissions.create (photo ${photo.name})`,
+      );
 
       uploaded.push({
         name: photo.name,
@@ -344,17 +389,40 @@ router.post("/upload-pdf", async (req, res) => {
     base64Data.replace(/^data:application\/pdf;base64,/, ""),
     "base64",
   );
-  const uploaded = await drive.files.create({
-    requestBody: { name: fileName, parents: [inventariosFolderId] },
-    media: { mimeType: "application/pdf", body: Readable.from(buffer) },
-    fields: "id, webViewLink",
-  });
+  // BUG-014: con withTimeout + try/catch para que un timeout no devuelva
+  // HTML 500. El catch devuelve 503 con mensaje accionable.
+  let uploaded;
+  try {
+    uploaded = await withTimeout(
+      drive.files.create({
+        requestBody: { name: fileName, parents: [inventariosFolderId] },
+        media: { mimeType: "application/pdf", body: Readable.from(buffer) },
+        fields: "id, webViewLink",
+      }),
+      DRIVE_TIMEOUT_MS,
+      `drive.files.create (${fileName})`,
+    );
 
-  // Hacer público el link
-  await drive.permissions.create({
-    fileId: uploaded.data.id!,
-    requestBody: { role: "reader", type: "anyone" },
-  });
+    // Hacer público el link
+    await withTimeout(
+      drive.permissions.create({
+        fileId: uploaded.data.id!,
+        requestBody: { role: "reader", type: "anyone" },
+      }),
+      DRIVE_TIMEOUT_MS,
+      `drive.permissions.create (${fileName})`,
+    );
+  } catch (err: any) {
+    console.error("[upload-pdf] drive failed:", err);
+    if (err?.message?.includes("Timeout")) {
+      return res.status(503).json({
+        error: "Drive no responde. Reintentá en unos segundos.",
+      });
+    }
+    return res
+      .status(500)
+      .json({ error: err?.message ?? "Error subiendo PDF" });
+  }
 
   // 5. Guardar la URL en la propiedad según la fase.
   //    Las columnas `inventory_captacion_pdf_url` / `inventory_colocacion_pdf_url`
