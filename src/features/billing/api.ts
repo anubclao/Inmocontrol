@@ -88,19 +88,52 @@ async function api<T>(method: string, path: string, body?: any): Promise<T> {
   return (await r.json()) as T;
 }
 
-// Helper: try backend; on error, run fallback.
+// BUG-025: el helper original devolvía silenciosamente el fallback si el
+// server fallaba. El caller mostraba toast de éxito → user pensaba que
+// guardó en MySQL cuando en realidad quedó solo en localStorage.
+// Nuevo contrato: devuelve { source, value, reason } para que el caller
+// pueda decidir qué mostrar. Para mantener compat con los 30+ callers
+// que solo usan el value, hay un segundo helper `tryBackendOrFallbackValue`
+// que extrae `result.value` automáticamente.
+export type FallbackResult<T> =
+  | { source: "backend"; value: T }
+  | { source: "fallback"; value: T; reason: string };
+
 async function tryBackendOrFallback<T>(
   backendCall: () => Promise<T>,
   fallback: () => T | Promise<T>,
-): Promise<T> {
+): Promise<FallbackResult<T>> {
   const mode = await detectMode();
-  if (mode === "local") return fallback();
-  try {
-    return await backendCall();
-  } catch (err) {
-    console.warn("[billing/api] backend falló, usando fallback local:", err);
-    return fallback();
+  if (mode === "local") {
+    return {
+      source: "fallback",
+      value: await fallback(),
+      reason: "local mode (no backend detected)",
+    };
   }
+  try {
+    const value = await backendCall();
+    return { source: "backend", value };
+  } catch (err: any) {
+    console.warn("[billing/api] backend falló, usando fallback local:", err);
+    return {
+      source: "fallback",
+      value: await fallback(),
+      reason: err?.message ?? String(err),
+    };
+  }
+}
+
+/** Helper sugar: extrae `result.value` automáticamente. Para callers
+ * que NO necesitan distinguir entre backend OK y fallback silencioso. */
+async function tryBackendOrFallbackValue<T>(
+  backendCall: () => Promise<T>,
+  fallback: () => T | Promise<T>,
+): Promise<T> {
+  // Llamar al helper ORIGINAL (tryBackendOrFallback, no el value) que devuelve
+  // el FallbackResult con source/reason. Acá extraemos solo el value.
+  const r = await tryBackendOrFallback(backendCall, fallback);
+  return r.value;
 }
 
 // ─── Sync de entidades base (properties/contracts/tenants) ─────────────
@@ -126,7 +159,7 @@ export async function syncEntities(payload: {
 export async function getBillingPolicy(
   propertyId: string,
 ): Promise<BillingPolicy | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       try {
         return await api<BillingPolicy>(
@@ -151,7 +184,7 @@ export async function getBillingPolicy(
 }
 
 export async function saveBillingPolicy(policy: BillingPolicy): Promise<void> {
-  await tryBackendOrFallback(
+  await tryBackendOrFallbackValue(
     async () => {
       await api(
         "PUT",
@@ -172,7 +205,7 @@ export async function getOrGenerateAmortization(
   contract: Contract,
   policy: BillingPolicy,
 ): Promise<AmortizationRow[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       try {
         const existing = await api<AmortizationRow[]>(
@@ -211,7 +244,7 @@ export async function registerPayment(
   rowId: string,
   paidOnDayOfMonth: number,
 ): Promise<AmortizationRow | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const updated = await api<AmortizationRow>("POST", "/billing/payments", {
         contractId,
@@ -252,7 +285,7 @@ export async function addPropertyDiscount(
   propertyId: string,
   data: Omit<PropertyDiscount, "id" | "recordedAt">,
 ): Promise<PropertyDiscount> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const id = crypto.randomUUID();
       const created: PropertyDiscount = {
@@ -278,7 +311,7 @@ export async function addPropertyDiscount(
 export async function listPropertyDiscounts(
   propertyId: string,
 ): Promise<PropertyDiscount[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const charges = await api<PropertyCharge[]>(
         "GET",
@@ -329,7 +362,7 @@ export async function addPropertyCharge(
   propertyId: string,
   data: Omit<PropertyCharge, "id" | "recordedAt">,
 ): Promise<PropertyCharge> {
-  const created = await tryBackendOrFallback(
+  const created = await tryBackendOrFallbackValue(
     async () => {
       const id = crypto.randomUUID();
       const full: PropertyCharge = {
@@ -354,7 +387,7 @@ export async function addPropertyCharge(
 export async function listPropertyCharges(
   propertyId: string,
 ): Promise<PropertyCharge[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<PropertyCharge[]>(
         "GET",
@@ -369,7 +402,7 @@ export async function listPropertyChargesForPeriod(
   propertyId: string,
   period: string,
 ): Promise<PropertyCharge[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<PropertyCharge[]>(
         "GET",
@@ -387,7 +420,7 @@ export async function removePropertyCharge(
   propertyId: string,
   chargeId: string,
 ): Promise<void> {
-  await tryBackendOrFallback(
+  await tryBackendOrFallbackValue(
     async () => {
       await api("DELETE", `/billing/charges/${encodeURIComponent(chargeId)}`);
     },
@@ -406,7 +439,7 @@ export async function getInvoiceChargesSummary(
   propertyId: string,
   period: string,
 ): Promise<InvoiceChargesSummary> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<InvoiceChargesSummary>(
         "GET",
@@ -425,7 +458,7 @@ export async function addRentIncrease(
   propertyId: string,
   data: Omit<RentIncrease, "id" | "recordedAt">,
 ): Promise<RentIncrease> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const id = crypto.randomUUID();
       const created: RentIncrease = {
@@ -448,7 +481,7 @@ export async function addRentIncrease(
 export async function listRentIncreases(
   propertyId: string,
 ): Promise<RentIncrease[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<RentIncrease[]>(
         "GET",
@@ -464,7 +497,7 @@ export async function getAccountStatement(
   propertyId: string,
   period: string,
 ): Promise<AccountStatement> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<AccountStatement>(
         "GET",
@@ -500,7 +533,7 @@ export async function generateInvoiceForMonth(
   contractId: string,
   period: string,
 ): Promise<RentInvoice | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<RentInvoice>("POST", "/billing/invoices/generate", {
         propertyId,
@@ -523,7 +556,7 @@ export async function generateInvoiceForMonth(
 }
 
 export async function listInvoices(propertyId: string): Promise<RentInvoice[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<RentInvoice[]>(
         "GET",
@@ -542,7 +575,7 @@ export async function getInvoiceForPeriod(
   contractId: string,
   period: string,
 ): Promise<RentInvoice | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<RentInvoice | null>(
         "GET",
@@ -574,7 +607,7 @@ export async function markInvoiceAsSent(
   contractId: string,
   period: string,
 ): Promise<RentInvoice | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const updated = await api<RentInvoice>("POST", "/billing/invoices/send", {
         propertyId,
@@ -629,7 +662,7 @@ export async function listOwnerPayouts(
   propertyId: string,
   period?: string,
 ): Promise<OwnerPayout[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const q = period
         ? `?propertyId=${encodeURIComponent(propertyId)}&period=${encodeURIComponent(period)}`
@@ -648,19 +681,17 @@ export async function saveOwnerPayout(
   payout: Omit<OwnerPayout, "id" | "recordedAt"> & { id?: string },
 ): Promise<OwnerPayout> {
   const id = payout.id ?? crypto.randomUUID();
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const saved = await api<OwnerPayout>("POST", "/billing/owner-payouts", {
         ...payout,
         id,
       });
-      useBillingStore
-        .getState()
-        .addPayout(payout.propertyId, {
-          ...payout,
-          id,
-          recordedAt: new Date().toISOString(),
-        });
+      useBillingStore.getState().addPayout(payout.propertyId, {
+        ...payout,
+        id,
+        recordedAt: new Date().toISOString(),
+      });
       return saved;
     },
     () => {
@@ -679,7 +710,7 @@ export async function deleteOwnerPayout(
   propertyId: string,
   payoutId: string,
 ): Promise<void> {
-  await tryBackendOrFallback(
+  await tryBackendOrFallbackValue(
     async () => {
       await api(
         "DELETE",
@@ -706,7 +737,7 @@ export async function getOwnerStatement(
   propertyId: string,
   period: string,
 ): Promise<OwnerStatement | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<OwnerStatement>(
         "GET",
@@ -838,7 +869,7 @@ export async function logAction(
   actorName: string,
   payload?: Record<string, any>,
 ): Promise<PropertyAction> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const id = crypto.randomUUID();
       const created: PropertyAction = {
@@ -866,7 +897,7 @@ export async function logAction(
 export async function listActions(
   propertyId: string,
 ): Promise<PropertyAction[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<PropertyAction[]>(
         "GET",
@@ -881,7 +912,7 @@ export async function listActions(
 export async function listBankAccounts(
   propertyId?: string,
 ): Promise<BankAccount[]> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () =>
       api<BankAccount[]>(
         "GET",
@@ -894,7 +925,7 @@ export async function listBankAccounts(
 export async function saveBankAccount(
   account: BankAccount & { propertyId?: string | null },
 ): Promise<void> {
-  await tryBackendOrFallback(
+  await tryBackendOrFallbackValue(
     async () => {
       await api("POST", "/billing/bank-accounts", account);
     },
@@ -909,7 +940,7 @@ export async function saveBankAccount(
 export async function getInsurancePolicy(
   propertyId: string,
 ): Promise<PolicyInfo | null> {
-  return tryBackendOrFallback(
+  return tryBackendOrFallbackValue(
     async () => {
       const rows = await api<any[]>(
         "GET",
@@ -936,7 +967,7 @@ export async function getInsurancePolicy(
 export async function saveInsurancePolicy(
   p: PolicyInfo & { propertyId: string },
 ): Promise<void> {
-  await tryBackendOrFallback(
+  await tryBackendOrFallbackValue(
     async () => {
       await api("POST", "/billing/insurance-policies", {
         propertyId: p.propertyId,
