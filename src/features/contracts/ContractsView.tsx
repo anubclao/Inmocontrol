@@ -392,17 +392,24 @@ function ContractForm({
   useEffect(() => {
     if (contract) return; // edición: no tocar
     if (!form.propertyId) return; // sin propiedad seleccionada
-    if (form.rentAmount > 0 || form.adminFee > 0) return; // ya tiene valores
-    const t = tenants.find((x: any) => x.propertyId === form.propertyId && x.status === 'Activo');
-    if (!t) return;
-    setForm((f) => ({
-      ...f,
-      tenantId: t.id,
-      rentAmount: Number(t.rent ?? 0) || 0,
-      adminFee: Number(t.adminFee ?? 0) || 0,
-    }));
+    setForm((f) => {
+      // "no override": si el user ya tocó los campos, no pisar
+      if (f.rentAmount > 0 || f.adminFee > 0) return f;
+      const t = tenants.find(
+        (x: any) => x.propertyId === f.propertyId && x.status === 'Activo',
+      );
+      if (!t) return f;
+      return {
+        ...f,
+        tenantId: t.id,
+        rentAmount: Number(t.rent ?? 0) || 0,
+        adminFee: Number(t.adminFee ?? 0) || 0,
+      };
+    });
+    // Deps intencionales: re-disparar al cambiar propertyId o cuando el store
+    // termina de hidratar tenants/properties (caso típico: captación nueva).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // solo al mount
+  }, [form.propertyId, tenants, properties, contract]);
 
   const handleSave = () => {
     if (!form.propertyId) { alert('Selecciona una propiedad'); return; }
