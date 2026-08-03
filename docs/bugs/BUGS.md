@@ -28,7 +28,8 @@
 | Ola                   | Bugs              | Status                                     |
 | --------------------- | ----------------- | ------------------------------------------ |
 | 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK                 |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 2/24 specs aprobados (BUG-019, BUG-029) |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 24/24 specs aprobados (todos)            |
+| 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | 🟡 6/6 specs aprobados (todos)              |
 | 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                               |
 
 ---
@@ -358,7 +359,7 @@
 | (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
 | BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
-| BUG-019     | hydrate() sin timeouts (spinner eterno si 1 cuelga)     | `pending`  |
+| BUG-019     | hydrate() sin timeouts (spinner eterno si 1 cuelga)     | `7353188`  |
 | BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |     | BUG-029 | Central error wrapper (estructural, mata 5+ bugs) | `6bbec81` + `11c49f6` |
 
 ---
@@ -372,9 +373,9 @@
 | BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`   |
 | BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`   |
 | BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`   |
-| BUG-006 a BUG-028 |        ❌        |     ❌      | ⏳             |
-| BUG-029           |   ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente) |
-| BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳             |
+| BUG-006 a BUG-028 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente) |
+| BUG-029           |   ✅ Aprobado    | ✅ Aprobado | ✅ `11c49f6`                      |
+| BUG-030 a BUG-035 |   ✅ Aprobado    |     ❌      | ⏳ (specs listos, impl pendiente) |
 
 ---
 
