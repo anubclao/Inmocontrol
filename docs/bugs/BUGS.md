@@ -28,7 +28,7 @@
 | Ola                   | Bugs              | Status                                                    |
 | --------------------- | ----------------- | --------------------------------------------------------- |
 | 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ✅ 5/5 fixed, 5/5 specs OK |
-| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ⏳ Pendiente                                              |
+| 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | 🟡 2/24 specs aprobados (BUG-019, BUG-029)              |
 | 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                                              |
 
 ---
@@ -371,7 +371,8 @@
 | BUG-003           |   ✅ Aprobado    | ✅ Aprobado | ✅ `df8a4b2`        |
 | BUG-004           |   ✅ Aprobado    | ✅ Aprobado | ✅ `e99ad2b`        |
 | BUG-005           |   ✅ Aprobado    | ✅ Aprobado | ✅ `bef6d1d`        |
-| BUG-006 a BUG-029 |        ❌        |     ❌      | ⏳                  |
+| BUG-006 a BUG-028 |        ❌        |     ❌      | ⏳                  |
+| BUG-029           |  ✅ Aprobado    | ✅ Aprobado | ⏳ (siguiente)      |
 | BUG-030 a BUG-035 |        ❌        |     ❌      | ⏳                  |
 
 ---
