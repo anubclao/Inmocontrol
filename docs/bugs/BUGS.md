@@ -27,7 +27,7 @@
 
 | Ola                   | Bugs              | Status                        |
 | --------------------- | ----------------- | ----------------------------- |
-| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | ⏳ Pendiente (specs en draft) |
+| 🟥 Ola 1 (críticos)   | BUG-001 a BUG-005 | 🟡 2/5 fixed, 3/5 specs aprobados |
 | 🟨 Ola 2 (calidad)    | BUG-006 a BUG-029 | ⏳ Pendiente                  |
 | 🟦 Ola 3 (cleanup DB) | BUG-030 a BUG-035 | ⏳ Pendiente                  |
 
@@ -346,6 +346,8 @@
 | ID          | Bug                                                    | Fix commit |
 | ----------- | ------------------------------------------------------ | ---------- |
 | (linter-1)  | `t.documentId` no existe en Tenant                     | `77fee39`  |
+| BUG-001     | CORS no permite PATCH en prod                          | `8f5c88e`  |
+| BUG-002     | `commission_percentage` (typo) → `commission_pct`        | `7c551b0`  |
 | (linter-2)  | LoginScreen sin import React                           | `77fee39`  |
 | (linter-3)  | `alert.entity.category` (debería ser alert.category)   | `77fee39`  |
 | (linter-4)  | `Card` no acepta `key` prop                            | `77fee39`  |
@@ -361,11 +363,11 @@
 
 | Bug               |       Spec       | Verifier | Status |
 | ----------------- | :--------------: | :------: | ------ |
-| BUG-001           | ❌ (no necesita) |    ❌    | ⏳     |
-| BUG-002           | ❌ (no necesita) |    ❌    | ⏳     |
-| BUG-003           |     ⏳ draft     |    ⏳    | ⏳     |
-| BUG-004           |     ⏳ draft     |    ⏳    | ⏳     |
-| BUG-005           |     ⏳ draft     |    ⏳    | ⏳     |
+| BUG-001           | ❌ (no necesita) |    ❌    | ✅ `8f5c88e` |
+| BUG-002           | ❌ (no necesita) |    ❌    | ✅ `7c551b0` |
+| BUG-003           |  ✅ Aprobado     | ✅ Aprobado | ⏳ (siguiente) |
+| BUG-004           |  ✅ Aprobado     | ✅ Aprobado | ⏳ |
+| BUG-005           |  ✅ Aprobado     | ✅ Aprobado | ⏳ (siguiente) |
 | BUG-006 a BUG-029 |        ❌        |    ❌    | ⏳     |
 | BUG-030 a BUG-035 |        ❌        |    ❌    | ⏳     |
 

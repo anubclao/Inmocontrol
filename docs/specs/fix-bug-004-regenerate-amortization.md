@@ -269,6 +269,6 @@ Este fix es server-side, no agrega toasts. Pero el frontend puede agregar un toa
 
 ## 10. Approval
 
-**Status:** ⏳ Pending Review
-**Aprobado por:** [nombre del user]
-**Fecha de aprobación:** [YYYY-MM-DD]
+**Status:** ✅ Aprobado
+**Aprobado por:** user (Karpathy cycle, ago-2026)
+**Fecha de aprobación:** 2026-08-03
