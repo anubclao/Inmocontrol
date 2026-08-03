@@ -358,8 +358,7 @@
 | (formato-3) | Single quotes → double quotes (AlertsView)              | `d008bb6`  |
 | BUG-005     | `useEffect` con `[]` deps en auto-fill de ContractsView | `bef6d1d`  |
 | BUG-003     | PaymentModal cierra en error (UX rota)                  | `df8a4b2`  |
-| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  |
-
+| BUG-004     | Regenerar amortización revierte `paid` a `pending`      | `e99ad2b`  || BUG-029     | Central error wrapper (estructural, mata 5+ bugs)    | `6bbec81` + `11c49f6` |
 ---
 
 ## 🔄 Estado de specs (Karpathy cycle)
