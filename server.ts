@@ -5,7 +5,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
-import { errorHandler } from "./lib/errorHandler";
+import { errorHandler } from "./server/lib/errorHandler";
 import { fileURLToPath } from "url";
 
 import entitiesRouter from "./server/routes/entities.js";
