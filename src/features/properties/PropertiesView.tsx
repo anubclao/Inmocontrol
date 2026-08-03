@@ -585,7 +585,11 @@ export function PropertiesView({
       if (draft.uploadedDocsKeys) {
         const next: Record<string, string[]> = {};
         for (const [k, v] of Object.entries(draft.uploadedDocsKeys)) {
-          next[k] = [v]; // 'has-file' envuelto en array (semántica N archivos por slot)
+          // 'v' puede ser null (slots sin archivos en el draft original);
+          // solo guardamos los slots con al menos 1 archivo.
+          if (v !== null) {
+            next[k] = [v]; // 'has-file' envuelto en array (semántica N archivos por slot)
+          }
         }
         setUploadedDocs(next);
       }
