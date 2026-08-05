@@ -21,12 +21,35 @@ interface AppState {
   loading: boolean;
   error: string | null;
 
+  /** Timestamp (ms) de la última vez que se hizo fetch de properties.
+   *  Lo usa `fetchProperties({ force })` para no re-fetchear si los datos
+   *  están frescos. Spec fix_wizard_docs_persistence.md AC-3. */
+  lastPropertiesFetchedAt: number | null;
+  /** `true` cuando un componente marcó la lista como stale. El próximo
+   *  `fetchProperties()` ignora el cache y siempre refetchea. */
+  propertiesListStale: boolean;
+  /** ID de la propiedad recién creada por el wizard. PropertiesView la
+   *  usa para mostrar un highlight azul de 3s en la card correspondiente.
+   *  Spec AC-3.3. */
+  lastCreatedPropertyId: string | null;
+
   // Bootstrap: cargar todo desde MySQL
   hydrate: () => Promise<void>;
   /** `true` si el último `hydrate()` terminó con al menos un endpoint fallido
    *  (timeout, 5xx, red caída). Lo consume la App shell para mostrar un toast
    *  "Algunos datos no pudieron cargarse". Se resetea al volver a hidratar. */
   hydrationPartial: boolean;
+
+  /** Refetch SOLO de properties. Usado por el mount de PropertiesView (AC-3.1)
+   *  y por el `handleFinalize` para refrescar la lista sin re-hidratar todo.
+   *  Si `force=true` ignora el flag de stale y refetchea igual. */
+  fetchProperties: (opts?: { force?: boolean }) => Promise<void>;
+  /** Marca la lista como stale. El próximo `fetchProperties()` siempre
+   *  refetchea aunque los datos sean frescos. Llamado desde `handleFinalize`
+   *  para que al volver a la lista, la nueva propiedad aparezca sin F5. */
+  invalidatePropertiesList: () => void;
+  /** Setea el id de la propiedad recién creada (para highlight 3s en la card). */
+  setLastCreatedPropertyId: (id: string | null) => void;
 
   // Properties
   addProperty: (
@@ -69,6 +92,9 @@ const initialState = {
   loading: false,
   error: null,
   hydrationPartial: false,
+  lastPropertiesFetchedAt: null,
+  propertiesListStale: false,
+  lastCreatedPropertyId: null,
 };
 
 // `apiCall` con timeout configurable (BUG-019).
@@ -99,6 +125,100 @@ const apiCall = async <T = any>(
 
 export const useAppStore = create<AppState>()((set, get) => ({
   ...initialState,
+
+  /**
+   * Marca la lista de properties como stale. El próximo `fetchProperties()`
+   * va a ignorar la cache y refetchear. Llamado por:
+   *  - `handleFinalize` en PropertiesView (después de crear una propiedad)
+   *  - otros wizards que mutan properties (archive, restore, etc.)
+   */
+  invalidatePropertiesList: () => {
+    set({ propertiesListStale: true });
+  },
+
+  /**
+   * Setea el id de la propiedad recién creada por el wizard. Lo consume
+   * `PropertiesView` para mostrar el highlight azul de 3s en la card
+   * correspondiente. Spec AC-3.3.
+   */
+  setLastCreatedPropertyId: (id: string | null) => {
+    set({ lastCreatedPropertyId: id });
+  },
+
+  /**
+   * Refetch de SOLO properties. Usado por:
+   *  - `useEffect` de mount en PropertiesView (AC-3.1)
+   *  - `handleFinalize` (AC-3.2: que la nueva aparezca sin F5)
+   *  - invalidaciones manuales vía `invalidatePropertiesList()`
+   *
+   * Reglas:
+   *  - Si `propertiesListStale=true` → siempre refetch.
+   *  - Si `force=true` → siempre refetch.
+   *  - Si no hay stale ni force y los datos son frescos (< 60s) → noop.
+   */
+  fetchProperties: async (opts?: { force?: boolean }) => {
+    const { propertiesListStale, lastPropertiesFetchedAt } = get();
+    const force = opts?.force === true;
+    const isFresh =
+      lastPropertiesFetchedAt !== null &&
+      Date.now() - lastPropertiesFetchedAt < 60_000;
+    if (!force && !propertiesListStale && isFresh) {
+      // Noop — datos frescos y no hay invalidación pendiente.
+      return;
+    }
+    try {
+      const data = (await apiCall("GET", "/api/properties")) as {
+        properties?: any[];
+      };
+      const properties = (data?.properties ?? []).map((p: any) => ({
+        id: p.id,
+        address: p.address,
+        chip: p.chip,
+        folio: p.folio,
+        owner: p.owner_name,
+        ownerName: p.owner_name,
+        ownerId: "", // FK a property_owners: el detalle de la propiedad trae los N owners (ver owners: p.owners)
+        ownerIdNumber: p.owner_id_number,
+        ownerPhone: p.owner_phone,
+        ownerEmail: p.owner_email,
+        status:
+          p.status === "available"
+            ? "Pendiente"
+            : p.status === "rented"
+              ? "Arrendado"
+              : p.status === "maintenance"
+                ? "Inactivo"
+                : p.status,
+        propertyType: p.property_type,
+        driveFolderId: p.drive_folder_id,
+        driveFolderPath: p.drive_folder_path,
+        inventoryPdfUrl: p.inventory_pdf_url,
+        inventoryCaptacionPdfUrl:
+          p.inventario_captacion_pdf_url ??
+          p.inventory_captacion_pdf_url ??
+          null,
+        inventoryColocacionPdfUrl:
+          p.inventario_colocacion_pdf_url ??
+          p.inventory_colocacion_pdf_url ??
+          null,
+        mandatePdfUrl: p.mandato_pdf_url,
+        mandateSignedAt: p.mandato_signed_at,
+        createdAt: p.created_at,
+        inventoryCount: p.inventory_count ?? 0,
+        documents: p.documents ?? {},
+        owners: p.owners ?? [],
+        units: p.units ?? [],
+      }));
+      set({
+        properties,
+        lastPropertiesFetchedAt: Date.now(),
+        propertiesListStale: false,
+      });
+    } catch (err: any) {
+      // No rompemos la app si el refetch falla — solo log.
+      console.warn("[fetchProperties] refetch falló:", err?.message ?? err);
+    }
+  },
 
   hydrate: async () => {
     set({ loading: true, error: null, hydrationPartial: false });

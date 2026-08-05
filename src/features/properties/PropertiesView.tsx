@@ -390,6 +390,33 @@ export function PropertiesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewingProperty?.id]);
 
+  // ── SPEC fix_wizard_docs_persistence.md — AC-3.1 ─────────────────
+  // Al montar el componente PropertiesView, refetcheamos SIEMPRE la lista
+  // de properties para que la cache stale de Zustand no haga que falten
+  // propiedades recién creadas en otro flujo (wizard, archive/restore, etc).
+  // El store decide si es un noop (datos frescos < 60s sin invalidación)
+  // o un refetch real, según el flag `propertiesListStale`.
+  const fetchProperties = useAppStore((s) => s.fetchProperties);
+  useEffect(() => {
+    void fetchProperties();
+  }, [fetchProperties]);
+
+  // ── SPEC AC-3.3 — Highlight de "recién creada" ────────────────────
+  // Cuando el wizard termina OK (handleFinalize setea `lastCreatedPropertyId`),
+  // la card correspondiente muestra un borde azul durante 3 segundos.
+  const lastCreatedPropertyId = useAppStore((s) => s.lastCreatedPropertyId);
+  const [highlightedPropertyId, setHighlightedPropertyId] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (!lastCreatedPropertyId) return;
+    setHighlightedPropertyId(lastCreatedPropertyId);
+    const t = setTimeout(() => {
+      setHighlightedPropertyId(null);
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [lastCreatedPropertyId]);
+
   // ── Autosave del wizard de captación ─────────────────────────────
   // Cada vez que el user modifica algo del wizard (dirección, chip, owners,
   // units, slotKey con doc ya subido), persistimos el state en localStorage
@@ -1784,6 +1811,24 @@ export function PropertiesView({
         inventoryUploaded: inventoryUploadedToDrive,
         totalDocs,
       });
+
+      // SPEC fix_wizard_docs_persistence.md — AC-3.2 + AC-3.3
+      // 1. Invalidamos la lista de properties para que el próximo mount
+      //    de PropertiesView (cuando el user vuelve del wizard) refetchee
+      //    y la propiedad nueva aparezca sin F5.
+      // 2. Seteamos `lastCreatedPropertyId` para disparar el highlight
+      //    azul de 3s en la card correspondiente.
+      // Se hace acá (no en el `finally`) porque si la creación falló, no
+      // queremos "celebrar" una propiedad que no existe.
+      try {
+        useAppStore.getState().invalidatePropertiesList();
+        if (propertyDbId) {
+          useAppStore.getState().setLastCreatedPropertyId(propertyDbId);
+        }
+      } catch (e) {
+        // No crítico — log y seguir.
+        console.warn("[finalize] invalidate/highlight setup:", e);
+      }
     } finally {
       // Garantía: el wizard SIEMPRE cierra, incluso si una excepción escapó los
       // try/catch internos (ej. onAddProperty tirando, o un fallo de React en
@@ -2610,7 +2655,16 @@ export function PropertiesView({
                 <div
                   key={p.id}
                   onClick={() => void openDetailFresh(p)}
-                  className={`rounded-xl border ${statusBg[statusColor]} hover:shadow-md transition-shadow cursor-pointer`}
+                  className={`rounded-xl border ${statusBg[statusColor]} hover:shadow-md transition-shadow cursor-pointer ${
+                    highlightedPropertyId === p.id
+                      ? "ring-2 ring-blue-500 ring-offset-2 shadow-lg"
+                      : ""
+                  }`}
+                  data-testid="property-card"
+                  data-property-id={p.id}
+                  data-highlighted={
+                    highlightedPropertyId === p.id ? "true" : undefined
+                  }
                 >
                   <Card className={`p-4 ${statusBg[statusColor]}`}>
                     {/* Header: dirección + estado */}

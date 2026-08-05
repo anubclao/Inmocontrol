@@ -19,6 +19,7 @@ import type {
 } from "../inventoryTypes";
 import { generateInventoryPDF } from "../inventoryPdf";
 import { useAppStore } from "../../../shared/store/appStore";
+import { useDraftPersistence } from "../../../shared/hooks/useDraftPersistence";
 
 interface StepInventoryProps {
   showToast: (msg: string, type?: "success" | "error") => void;
@@ -85,6 +86,58 @@ export function StepInventory({
 }: StepInventoryProps) {
   const inventoryId = `${propertyId}:${phase}`;
   const [inventory, setInventory] = useState<Inventory | null>(null);
+
+  // SPEC fix_wizard_docs_persistence.md — AC-2: auto-save del inventario
+  // Persiste un "draft" del inventario en localStorage (cambios estructurales
+  // + counters, NO las fotos en base64 para no explotar los 5MB del navegador).
+  // El flush a MySQL es best-effort: si falla, el draft queda en localStorage
+  // y se reintenta en el próximo cambio.
+  //
+  // El draft NO incluye `photos` (dataURL base64) ni `signatures` (PNG base64)
+  // porque ambos pueden pesar MB. La fuente de verdad de esos sigue siendo
+  // IndexedDB (vía `inventoryDB`).
+  type InventoryDraft = {
+    counters: Record<string, number>;
+    customAreas: { id: string; label: string }[];
+    currentAreaIndex: number;
+    stage: Stage;
+    updatedAt: string;
+    version: 1;
+  };
+  const draftKey = `inmocontrol:draft:inventory:${propertyId}:${phase}`;
+  const {
+    value: draft,
+    setValue: setDraft,
+    clear: clearDraft,
+    discard: discardDraft,
+  } = useDraftPersistence<InventoryDraft>({
+    key: draftKey,
+    initialValue: {
+      counters: {},
+      customAreas: [],
+      currentAreaIndex: 0,
+      stage: "config",
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    },
+    // Sin flushTo: el draft de inventario NO se sincroniza a MySQL
+    // hasta que el usuario finaliza el wizard exitosamente. Eso evita
+    // escrituras innecesarias y mantiene la separación "draft local vs
+    // inventario firmado en server". El estado real de "firmado" lo da
+    // `signed_at IS NOT NULL` en la tabla `inventories`.
+    debounceMs: 1000, // 1s es suficiente para UX instantánea
+    onRestore: (restored) => {
+      // Solo informamos — NO pisamos el `inventory` state que ya cargó
+      // desde IndexedDB/MySQL. La idea: si el user cerró la pestaña y
+      // vuelve, ve el toast de "avance restaurado" para saber que su
+      // última versión está guardada. Los counters/customAreas ya
+      // van a estar en el `inventory` cargado por la hidratación normal.
+      showToast(
+        `🔄 Avance del inventario restaurado — última edición: ${new Date(restored.updatedAt).toLocaleString("es-CO")}`,
+        "success",
+      );
+    },
+  });
 
   // Prellenar datos del arrendatario: del prop o del store
   const storeTenants = useAppStore((s) => s.tenants);
@@ -281,6 +334,22 @@ export function StepInventory({
     };
   }, [inventoryId, propertyId, phase, baseInventory?.id]);
 
+  // SPEC AC-2.1: persistir el draft (counters + customAreas + stage) en
+  // localStorage cada vez que cambia. Lo hacemos en un useEffect dedicado
+  // en vez de dentro de `persist()` para no acoplarse al flujo de IndexedDB
+  // (que es para fotos y firmas, mucho más pesadas).
+  useEffect(() => {
+    if (!inventory) return;
+    setDraft({
+      counters: inventory.counters ?? {},
+      customAreas,
+      currentAreaIndex,
+      stage,
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    });
+  }, [inventory?.counters, customAreas, currentAreaIndex, stage, setDraft]);
+
   const persist = async (next: Inventory) => {
     next.updatedAt = new Date().toISOString();
     setInventory(next);
@@ -409,6 +478,11 @@ export function StepInventory({
         `✓ Inventario guardado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${totalItemsEvaluados} ítems`,
         "success",
       );
+      // SPEC AC-2.4: limpiar el draft en localStorage ahora que el inventario
+      // está firmado y persistido. Si no, la próxima vez que el user abra el
+      // wizard para la misma propiedad, le aparecería un toast fantasma
+      // de "avance restaurado" aunque el inventario ya esté completo.
+      clearDraft();
       // Pasamos el inventario final explícitamente para evitar closures stale del padre
       onComplete(finalInv);
     } catch (err) {
