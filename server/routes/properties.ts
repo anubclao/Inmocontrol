@@ -216,6 +216,8 @@ router.post("/", async (req, res) => {
     propertyType,
     mandatePdfUrl,
     mandateSignedAt,
+    inventoryCaptacionPdfUrl,
+    inventoryColocacionPdfUrl,
     status,
     owners,
     units,
@@ -372,7 +374,13 @@ router.post("/", async (req, res) => {
 
     try {
       if (isUpsert) {
-        await pool.query(
+        // FIX 2026-08-05 (bug UPSERT inventario): el server no actualizaba
+        // inventory_captacion_pdf_url ni inventory_colocacion_pdf_url en el
+        // UPSERT, por lo que los PDFs subidos a Drive desde el wizard se
+        // "perdía" en la UI (la DB quedaba en NULL). Agregamos las 2 columnas
+        // con el mismo patron CASE WHEN del mandato, y chequemos
+        // affectedRows para no devolver 200 si el WHERE no matcheo.
+        const [updateResult] = await pool.query<any>(
           `UPDATE properties SET
            address           = COALESCE(?, address),
            chip              = COALESCE(?, chip),
@@ -386,7 +394,9 @@ router.post("/", async (req, res) => {
            property_type     = COALESCE(?, property_type),
            status            = COALESCE(NULLIF(?, ''), status),
            mandato_pdf_url   = CASE WHEN ? IS NULL OR ? = '' THEN mandato_pdf_url ELSE ? END,
-           mandato_signed_at = COALESCE(?, mandato_signed_at)
+           mandato_signed_at = COALESCE(?, mandato_signed_at),
+           inventory_captacion_pdf_url = CASE WHEN ? IS NULL OR ? = '' THEN inventory_captacion_pdf_url ELSE ? END,
+           inventory_colocacion_pdf_url = CASE WHEN ? IS NULL OR ? = '' THEN inventory_colocacion_pdf_url ELSE ? END
          WHERE id = ? AND organization_id = ?`,
           [
             address ?? null,
@@ -404,10 +414,28 @@ router.post("/", async (req, res) => {
             mandatePdfUrl ?? null,
             mandatePdfUrl ?? null,
             dbMandateSignedAt,
+            inventoryCaptacionPdfUrl ?? null,
+            inventoryCaptacionPdfUrl ?? null,
+            inventoryCaptacionPdfUrl ?? null,
+            inventoryColocacionPdfUrl ?? null,
+            inventoryColocacionPdfUrl ?? null,
+            inventoryColocacionPdfUrl ?? null,
             propertyId,
             orgId,
           ],
         );
+        if ((updateResult as any).affectedRows === 0) {
+          console.error(
+            "[POST /api/properties] UPSERT no afectó ninguna fila:",
+            { propertyId, orgId },
+          );
+          res.status(500).json({
+            error:
+              "No se pudo actualizar la propiedad: el id no existe o pertenece a otra organización",
+            code: "UPSERT_NO_MATCH",
+          });
+          return;
+        }
       } else {
         // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
         // (consistente con el fix 4c6a6e9 que rechazó blob/data en
@@ -427,8 +455,8 @@ router.post("/", async (req, res) => {
           `INSERT INTO properties
           (id, organization_id, address, chip, folio, owner_name, owner_id_number, owner_phone, owner_email,
            status, drive_folder_id, drive_folder_path, property_type,
-           mandato_pdf_url, mandato_signed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           mandato_pdf_url, mandato_signed_at, inventory_captacion_pdf_url, inventory_colocacion_pdf_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             propertyId,
             orgId,
@@ -445,6 +473,8 @@ router.post("/", async (req, res) => {
             propertyType || null,
             mandatePdfUrl ?? null,
             dbMandateSignedAt,
+            inventoryCaptacionPdfUrl ?? null,
+            inventoryColocacionPdfUrl ?? null,
           ],
         );
       }
