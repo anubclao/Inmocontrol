@@ -39,7 +39,12 @@ import {
 } from "lucide-react";
 import { Button, Card, Modal } from "../../shared/ui";
 import { ProcessOrderBanner } from "../../shared/ui/ProcessOrderBanner";
-import { formatAddress, isValidCHIP } from "../../utils/validators";
+import {
+  formatAddress,
+  isValidCHIP,
+  isValidEmail,
+  isValidColombianPhone,
+} from "../../utils/validators";
 import {
   createPropertyFolders,
   uploadFileToDrive,
@@ -328,6 +333,10 @@ export function PropertiesView({
     failedUploads: string[];
     inventoryUploaded: boolean;
     totalDocs: number;
+    // FIX BUG-2026-08-05: si el POST #2 al server no persistió los docs
+    // (silent failure en property_documents INSERTs), el modal muestra
+    // un banner rojo explicando qué hacer.
+    persistFailed?: boolean;
   }>(null);
 
   // Galería de fotos del inventario: modal para visualizar las imágenes almacenadas
@@ -1121,6 +1130,27 @@ export function PropertiesView({
         return null;
       }
     }
+    // FIX 2026-08-05: validar formato de email y teléfono también acá.
+    // "Guardar avance" llama a esta función directamente (se salta la
+    // validación de StepBasic.validate()), así que si no validamos acá,
+    // un email "anubclao@gmail" (sin TLD) llega al server y queda
+    // persistido en MySQL. Los campos vacíos siguen siendo válidos.
+    for (const o of validOwners) {
+      if (o.phone.trim() && !isValidColombianPhone(o.phone)) {
+        showToast(
+          `Teléfono "${o.phone}" no tiene formato de celular colombiano (10 dígitos, empieza con 3). Ej: 3001234567`,
+          "error",
+        );
+        return null;
+      }
+      if (o.email.trim() && !isValidEmail(o.email)) {
+        showToast(
+          `Email "${o.email}" no tiene formato válido. Ej: usuario@dominio.com`,
+          "error",
+        );
+        return null;
+      }
+    }
 
     // POST al backend
     const firstOwner = validOwners[0];
@@ -1278,6 +1308,11 @@ export function PropertiesView({
         missingDocs,
       );
     }
+
+    // FIX BUG-2026-08-05: reset del flag global al inicio de cada wizard.
+    // Si el wizard anterior falló silenciosamente y el user reabrió la app,
+    // este flag puede venir true. Lo limpiamos acá para empezar limpio.
+    window.__inmocontrol_docsPersistFailed = false;
 
     // Refactor: garantizar SIEMPRE que el wizard cierre al terminar, incluso si algo
     // tira excepción intermedia. try/finally así el usuario no queda atrapado en step 3.
@@ -1569,6 +1604,11 @@ export function PropertiesView({
           `[finalize] POST #2 OK — documents persistidos en MySQL: ${postDocsCount} keys.`,
         );
         if (postDocsCount === 0 && finalDocsSummary.length > 0) {
+          // FIX BUG-2026-08-05: el server respondió 200 pero ningún doc se persistió.
+          // Eso significa que el server rechazó TODOS los INSERTs (probable: slotKeys
+          // con wizard-* o URL no-Drive). Marcamos un flag para que el flujo siguiente
+          // muestre un error explícito en vez del "toast mentiroso" de éxito.
+          window.__inmocontrol_docsPersistFailed = true;
           console.warn(
             "[finalize] ⚠ El server respondió 200 pero documents_legacy está VACÍO. " +
               "Los INSERT a property_documents fallaron silenciosamente. " +
@@ -1576,9 +1616,15 @@ export function PropertiesView({
           );
         }
       } catch (err: any) {
+        // FIX BUG-2026-08-05: NO tragar el error. Mostrar un modal de error con
+        // instrucciones claras. Antes este catch era silencioso y el wizard
+        // cerraba con toast de éxito aunque los docs no se hubieran guardado.
         console.error("[finalize] backend persist URLs:", err);
+        window.__inmocontrol_docsPersistFailed = true;
+        // No throw — el catch ya loguea y el flag se consulta más abajo.
+        // Pero mostramos un toast claro al agente.
         showToast(
-          `Propiedad guardada, pero falló al persistir URLs en servidor: ${err.message}`,
+          `Propiedad guardada, pero falló al persistir documentos: ${err.message}. Los archivos quedaron solo en Drive. Reintentá desde el Detalle del Inmueble.`,
           "error",
         );
       }
@@ -1831,10 +1877,20 @@ export function PropertiesView({
       const realUnitsCount = wizardUnits.filter((u) => u.label.trim()).length;
       const allDriveOk =
         uploadedToDrive.length === totalDocs && uploadedLocalOnly.length === 0;
-      const shortToast = allDriveOk
-        ? `✓ ¡Propiedad creada! Todo en Drive. Resumen abajo.`
-        : `⚠ Propiedad creada con ${uploadedLocalOnly.length + missingSlotKeys.length} pendiente(s). Resumen abajo.`;
-      showToast(shortToast, allDriveOk ? "success" : "error");
+      // FIX BUG-2026-08-05: el POST #2 puede haber devuelto 200 sin persistir ningún
+      // doc (server rechaza wizard-* o URLs no-Drive). El flag se setea dentro del
+      // catch y dentro del if(postDocsCount===0). Si está activo, NO mostramos el
+      // toast verde de "todo bien" — el agente tiene que saber que algo falló.
+      const persistFailed = window.__inmocontrol_docsPersistFailed === true;
+      const shortToast = persistFailed
+        ? `✗ Propiedad creada pero los documentos NO se guardaron. Reintentá desde el Detalle.`
+        : allDriveOk
+          ? `✓ ¡Propiedad creada! Todo en Drive. Resumen abajo.`
+          : `⚠ Propiedad creada con ${uploadedLocalOnly.length + missingSlotKeys.length} pendiente(s). Resumen abajo.`;
+      showToast(
+        shortToast,
+        persistFailed ? "error" : allDriveOk ? "success" : "error",
+      );
 
       // Guardamos el summary en el state — el modal se renderiza en el JSX abajo.
       setFinalizeSummary({
@@ -1848,6 +1904,9 @@ export function PropertiesView({
         failedUploads,
         inventoryUploaded: inventoryUploadedToDrive,
         totalDocs,
+        // FIX BUG-2026-08-05: si la persistencia en MySQL falló, el modal de
+        // resumen muestra un banner rojo arriba con instrucciones.
+        persistFailed,
       });
 
       // SPEC fix_wizard_docs_persistence.md — AC-3.2 + AC-3.3
@@ -2929,13 +2988,20 @@ export function PropertiesView({
           cuándo cerrarlo (no se auto-dismiss). */}
       <Modal
         isOpen={!!finalizeSummary}
-        onClose={() => setFinalizeSummary(null)}
+        onClose={() => {
+          setFinalizeSummary(null);
+          // FIX BUG-2026-08-05: limpiar el flag global al cerrar el modal.
+          // Si no, el siguiente wizard hereda el estado "persistFailed".
+          window.__inmocontrol_docsPersistFailed = false;
+        }}
         title={
-          finalizeSummary?.uploadedToDrive.length ===
-            finalizeSummary?.totalDocs &&
-          (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
-            ? "✓ Propiedad creada — todo en Drive"
-            : "⚠ Propiedad creada con pendientes"
+          finalizeSummary?.persistFailed
+            ? "✗ Propiedad creada — documentos NO persistidos"
+            : finalizeSummary?.uploadedToDrive.length ===
+                  finalizeSummary?.totalDocs &&
+                (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
+              ? "✓ Propiedad creada — todo en Drive"
+              : "⚠ Propiedad creada con pendientes"
         }
         size="lg"
       >
@@ -2951,6 +3017,36 @@ export function PropertiesView({
                 </p>
               )}
             </div>
+
+            {/* FIX BUG-2026-08-05 — Banner rojo si el server NO persistió los docs.
+                El server devolvió 200 pero ningún INSERT a property_documents se ejecutó
+                (probable: slotKeys con wizard-* que el server rechaza silenciosamente,
+                o URLs blob:/data: que AC-15 filtra). */}
+            {finalizeSummary.persistFailed && (
+              <div className="p-4 bg-red-50 border-2 border-red-300 rounded-lg">
+                <p className="text-sm font-bold text-red-900 flex items-center gap-1.5">
+                  <AlertTriangle className="w-5 h-5" />
+                  Los documentos NO se guardaron en MySQL
+                </p>
+                <p className="text-xs text-red-800 mt-2">
+                  Los archivos quedaron <strong>solo en Google Drive</strong>{" "}
+                  (carpeta <code>Propietario/</code> de esta propiedad) pero el
+                  servidor no pudo registrar las URLs en la base de datos.
+                </p>
+                <p className="text-xs text-red-800 mt-2">
+                  <strong>Qué hacer:</strong> abrí el{" "}
+                  <strong>Detalle del Inmueble</strong>, entrá a la sección{" "}
+                  <em>Propietarios</em> y tocá <em>Subir</em> en cada slot. El
+                  modal de upload detectará que ya están en Drive y los
+                  re-vinculará con un INSERT a <code>property_documents</code>.
+                </p>
+                <p className="text-xs text-red-700 mt-2 font-mono">
+                  Si el problema persiste, mandame una captura de hPanel → Logs
+                  (filtrada por "[docs]") y los logs de DevTools filtrados por
+                  "[finalize]".
+                </p>
+              </div>
+            )}
 
             {/* 🟢 Subidos a Drive */}
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">

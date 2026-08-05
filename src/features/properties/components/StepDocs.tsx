@@ -1,7 +1,25 @@
-import { useState } from 'react';
-import { Users, FileText, Wallet, ClipboardCheck, FileSignature, RefreshCw, Car, Package, Box, User, AlertTriangle, Plus, X, CloudUpload, CloudOff, CheckCircle2, Loader2 } from 'lucide-react';
-import { Button, Card, Modal, Input } from '../../../shared/ui';
-import type { WizardOwner, WizardUnit } from './StepBasic';
+import { useState } from "react";
+import {
+  Users,
+  FileText,
+  Wallet,
+  ClipboardCheck,
+  FileSignature,
+  RefreshCw,
+  Car,
+  Package,
+  Box,
+  User,
+  AlertTriangle,
+  Plus,
+  X,
+  CloudUpload,
+  CloudOff,
+  CheckCircle2,
+  Loader2,
+} from "lucide-react";
+import { Button, Card, Modal, Input } from "../../../shared/ui";
+import type { WizardOwner, WizardUnit } from "./StepBasic";
 
 /**
  * Estado real de un archivo en un slot del wizard.
@@ -9,18 +27,18 @@ import type { WizardOwner, WizardUnit } from './StepBasic';
  * - 'local'   → solo en el navegador (blob: URL) — se subirá a Drive al finalizar el wizard
  * - 'pending' → slot vacío o archivo en tránsito (no aplica cuando hay archivos)
  */
-export type DocStorageState = 'drive' | 'local' | 'pending';
+export type DocStorageState = "drive" | "local" | "pending";
 
 /** Determina el estado real de un archivo a partir de su URL.
  *  - blob: → local (aún no se subió a Drive)
  *  - https://*.googleusercontent.com o https://drive.google.com/ → en Drive
  *  - cualquier otra cosa → local (asumimos fallback) */
 export function getDocStorageState(url: string): DocStorageState {
-  if (!url) return 'pending';
-  if (url.startsWith('blob:')) return 'local';
-  if (/^https:\/\/(drive|docs)\.google\.com\//.test(url)) return 'drive';
-  if (/^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(url)) return 'drive';
-  return 'local';
+  if (!url) return "pending";
+  if (url.startsWith("blob:")) return "local";
+  if (/^https:\/\/(drive|docs)\.google\.com\//.test(url)) return "drive";
+  if (/^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(url)) return "drive";
+  return "local";
 }
 
 /** Llave del slot de un documento en `uploadedDocs`. */
@@ -39,24 +57,29 @@ export type DocSlotKey =
 export type UploadedDocsMap = Record<string, string[]>;
 
 /** Etiqueta humana para mostrar al usuario en cards / toasts / logs. */
-function labelForKey(key: string, owners: WizardOwner[], units: WizardUnit[]): string {
-  if (key === 'predial') return 'Impuesto Predial';
-  if (key === 'mandato') return 'Contrato de Mandato (multi-firmado)';
-  if (key === 'certificado_tradicion:main') return 'Certificado de Tradición (unidad principal)';
-  if (key.startsWith('cedula:')) {
-    const id = key.slice('cedula:'.length);
+function labelForKey(
+  key: string,
+  owners: WizardOwner[],
+  units: WizardUnit[],
+): string {
+  if (key === "predial") return "Impuesto Predial";
+  if (key === "mandato") return "Contrato de Mandato (multi-firmado)";
+  if (key === "certificado_tradicion:main")
+    return "Certificado de Tradición (unidad principal)";
+  if (key.startsWith("cedula:")) {
+    const id = key.slice("cedula:".length);
     const o = owners.find((x) => x.id === id);
-    return o?.name ? `Cédula de ${o.name}` : 'Cédula';
+    return o?.name ? `Cédula de ${o.name}` : "Cédula";
   }
-  if (key.startsWith('rut:')) {
-    const id = key.slice('rut:'.length);
+  if (key.startsWith("rut:")) {
+    const id = key.slice("rut:".length);
     const o = owners.find((x) => x.id === id);
-    return o?.name ? `RUT de ${o.name}` : 'RUT';
+    return o?.name ? `RUT de ${o.name}` : "RUT";
   }
-  if (key.startsWith('certificado_tradicion:')) {
-    const id = key.slice('certificado_tradicion:'.length);
+  if (key.startsWith("certificado_tradicion:")) {
+    const id = key.slice("certificado_tradicion:".length);
     const u = units.find((x) => x.id === id);
-    return u ? `Certificado de ${u.label}` : 'Certificado de Tradición';
+    return u ? `Certificado de ${u.label}` : "Certificado de Tradición";
   }
   return key;
 }
@@ -79,7 +102,7 @@ export interface StepDocsProps {
   // Visor
   viewingDoc: { label: string; url: string } | null;
   setViewingDoc: (v: { label: string; url: string } | null) => void;
-  showToast: (msg: string, type?: 'success' | 'error') => void;
+  showToast: (msg: string, type?: "success" | "error") => void;
   onBack: () => void;
   onContinue: () => void;
   /** Dispara el file picker. El padre maneja la subida (Drive o blob local)
@@ -103,9 +126,12 @@ function countInSlot(map: UploadedDocsMap, slotKey: string): number {
 
 /** Cards que se renderizan en el paso 2. Cada card tiene su slotKey, ícono
  *  y validación de "qué falta para activar la propiedad al 100%". */
-function buildRequiredSlots(owners: WizardOwner[], units: WizardUnit[]): Array<{
+function buildRequiredSlots(
+  owners: WizardOwner[],
+  units: WizardUnit[],
+): Array<{
   slotKey: string;
-  group: 'owner' | 'unit' | 'property';
+  group: "owner" | "unit" | "property";
   ownerId?: string;
   unitId?: string;
   required: boolean;
@@ -113,7 +139,7 @@ function buildRequiredSlots(owners: WizardOwner[], units: WizardUnit[]): Array<{
 }> {
   const slots: Array<{
     slotKey: string;
-    group: 'owner' | 'unit' | 'property';
+    group: "owner" | "unit" | "property";
     ownerId?: string;
     unitId?: string;
     required: boolean;
@@ -125,26 +151,26 @@ function buildRequiredSlots(owners: WizardOwner[], units: WizardUnit[]): Array<{
     if (!o.name.trim()) continue; // owners sin nombre no tienen docs
     slots.push({
       slotKey: `cedula:${o.id}`,
-      group: 'owner',
+      group: "owner",
       ownerId: o.id,
       required: true,
-      helpText: o.idNumber ? `Cédula: ${o.idNumber}` : 'Cédula pendiente',
+      helpText: o.idNumber ? `Cédula: ${o.idNumber}` : "Cédula pendiente",
     });
     slots.push({
       slotKey: `rut:${o.id}`,
-      group: 'owner',
+      group: "owner",
       ownerId: o.id,
       required: false,
-      helpText: 'RUT (opcional)',
+      helpText: "RUT (opcional)",
     });
   }
 
   // Unidad principal: Certificado de Tradición
   slots.push({
-    slotKey: 'certificado_tradicion:main',
-    group: 'unit',
+    slotKey: "certificado_tradicion:main",
+    group: "unit",
     required: true,
-    helpText: 'Matrícula del inmueble principal',
+    helpText: "Matrícula del inmueble principal",
   });
 
   // Cada unidad adicional: Certificado
@@ -152,66 +178,81 @@ function buildRequiredSlots(owners: WizardOwner[], units: WizardUnit[]): Array<{
     if (!u.label.trim()) continue;
     slots.push({
       slotKey: `certificado_tradicion:${u.id}`,
-      group: 'unit',
+      group: "unit",
       unitId: u.id,
       required: true,
-      helpText: u.folioMatricula ? `Matrícula: ${u.folioMatricula}` : `Matrícula de ${u.label}`,
+      helpText: u.folioMatricula
+        ? `Matrícula: ${u.folioMatricula}`
+        : `Matrícula de ${u.label}`,
     });
   }
 
   // Predial (a nivel de propiedad)
   slots.push({
-    slotKey: 'predial',
-    group: 'property',
+    slotKey: "predial",
+    group: "property",
     required: false,
-    helpText: 'Predial del año en curso',
+    helpText: "Predial del año en curso",
   });
 
   // Mandato (a nivel de propiedad, multi-firmado)
   slots.push({
-    slotKey: 'mandato',
-    group: 'property',
+    slotKey: "mandato",
+    group: "property",
     required: true,
-    helpText: 'Firmado por todos los propietarios',
+    helpText: "Firmado por todos los propietarios",
   });
 
   return slots;
 }
 
 export function StepDocs({
-  owners, units,
-  uploadedDocs, setUploadedDocs,
-  uploadingDoc, setUploadingDoc,
-  currentDocLabel, setCurrentDocLabel,
-  ownerIdNumber, setOwnerIdNumber,
-  viewingDoc, setViewingDoc,
-  showToast, onBack, onContinue, triggerFileInput, onSaveDraft,
-  lastUploadedSlot, setLastUploadedSlot,
+  owners,
+  units,
+  uploadedDocs,
+  setUploadedDocs,
+  uploadingDoc,
+  setUploadingDoc,
+  currentDocLabel,
+  setCurrentDocLabel,
+  ownerIdNumber,
+  setOwnerIdNumber,
+  viewingDoc,
+  setViewingDoc,
+  showToast,
+  onBack,
+  onContinue,
+  triggerFileInput,
+  onSaveDraft,
+  lastUploadedSlot,
+  setLastUploadedSlot,
 }: StepDocsProps) {
   const [isIdModalOpen, setIsIdModalOpen] = useState(false);
   const [confirmContinue, setConfirmContinue] = useState(false);
 
   const slots = buildRequiredSlots(owners, units);
-  const isMandatoReady = countInSlot(uploadedDocs, 'mandato') > 0;
+  const isMandatoReady = countInSlot(uploadedDocs, "mandato") > 0;
   // Para activar: todos los slots "required" deben tener al menos 1 archivo.
-  const missingRequired = slots.filter((s) => s.required && countInSlot(uploadedDocs, s.slotKey) === 0);
+  const missingRequired = slots.filter(
+    (s) => s.required && countInSlot(uploadedDocs, s.slotKey) === 0,
+  );
 
   // Agrupar slots por sección visual
-  const ownerSlots = slots.filter((s) => s.group === 'owner');
-  const unitSlots = slots.filter((s) => s.group === 'unit');
-  const propertySlots = slots.filter((s) => s.group === 'property');
+  const ownerSlots = slots.filter((s) => s.group === "owner");
+  const unitSlots = slots.filter((s) => s.group === "unit");
+  const propertySlots = slots.filter((s) => s.group === "property");
 
   // Helper: ícono según slotKey
   function iconForKey(key: string, group: string, unitId?: string) {
-    if (key === 'predial') return Wallet;
-    if (key === 'mandato') return FileSignature;
-    if (key.startsWith('cedula:') || key.startsWith('rut:')) return Users;
-    if (key.startsWith('certificado_tradicion:')) {
-      if (group === 'unit' && unitId) {
+    if (key === "predial") return Wallet;
+    if (key === "mandato") return FileSignature;
+    if (key.startsWith("cedula:") || key.startsWith("rut:")) return Users;
+    if (key.startsWith("certificado_tradicion:")) {
+      if (group === "unit" && unitId) {
         const u = units.find((x) => x.id === unitId);
-        if (u?.type === 'parking') return Car;
-        if (u?.type === 'storage') return Package;
-        if (u?.type === 'other') return Box;
+        if (u?.type === "parking") return Car;
+        if (u?.type === "storage") return Package;
+        if (u?.type === "other") return Box;
       }
       return FileText;
     }
@@ -230,31 +271,37 @@ export function StepDocs({
     <Card className="p-8">
       <h3 className="font-bold text-lg mb-2">2. Carga de Documentos Legales</h3>
       <p className="text-xs text-slate-500 mb-6">
-        Subí los documentos por propietario y por unidad. <strong>Todos los documentos son opcionales</strong>:
-        podés subir los que tengas a mano ahora y completar los que falten después desde
-        el Detalle del Inmueble. El <strong>Contrato de Mandato</strong> firmado por todos los
-        propietarios es el que activa el inmueble al 100% (estado <em>Activo</em>).
+        Subí los documentos por propietario y por unidad.{" "}
+        <strong>Todos los documentos son opcionales</strong>: podés subir los
+        que tengas a mano ahora y completar los que falten después desde el
+        Detalle del Inmueble. El <strong>Contrato de Mandato</strong> firmado
+        por todos los propietarios es el que activa el inmueble al 100% (estado{" "}
+        <em>Activo</em>).
       </p>
 
       {/* Banner del check de validación: el contrato de mandato desbloquea el 100% */}
       <div
         className={`mb-6 p-3 rounded-lg border text-xs flex items-start gap-2 ${
           isMandatoReady
-            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-            : 'bg-amber-50 border-amber-200 text-amber-800'
+            ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+            : "bg-amber-50 border-amber-200 text-amber-800"
         }`}
       >
         <FileSignature className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <div>
           {isMandatoReady ? (
             <>
-              <strong>Mandato firmado listo.</strong> Al finalizar el registro, el inmueble quedará en estado
+              <strong>Mandato firmado listo.</strong> Al finalizar el registro,
+              el inmueble quedará en estado
               <strong> Activo (100%)</strong>.
             </>
           ) : (
             <>
-              <strong>Falta el Contrato de Mandato firmado por todos los propietarios.</strong> Mientras no subas
-              el PDF, el inmueble quedará en estado <strong>Pendiente</strong>.
+              <strong>
+                Falta el Contrato de Mandato firmado por todos los propietarios.
+              </strong>{" "}
+              Mientras no subas el PDF, el inmueble quedará en estado{" "}
+              <strong>Pendiente</strong>.
             </>
           )}
         </div>
@@ -266,51 +313,78 @@ export function StepDocs({
           <div className="flex items-center gap-2 mb-3">
             <User className="w-4 h-4 text-slate-500" />
             <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Documentos por Propietario ({ownerSlots.length / 2} propietario{ownerSlots.length / 2 === 1 ? '' : 's'})
+              Documentos por Propietario ({ownerSlots.length / 2} propietario
+              {ownerSlots.length / 2 === 1 ? "" : "s"})
             </p>
           </div>
           <div className="space-y-3">
-            {owners.filter((o) => o.name.trim()).map((o) => {
-              const cedulaKey = `cedula:${o.id}`;
-              const rutKey = `rut:${o.id}`;
-              return (
-                <div key={o.id} className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg">
-                  <p className="text-xs font-bold text-slate-700 mb-2">
-                    {o.name}{' '}
-                    {o.ownershipPct && (
-                      <span className="text-[10px] text-blue-600 font-normal">({o.ownershipPct}%)</span>
-                    )}
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {[
-                      { slotKey: cedulaKey, label: 'Cédula', icon: Users, required: true },
-                      { slotKey: rutKey, label: 'RUT', icon: ClipboardCheck, required: false },
-                    ].map(({ slotKey, label, icon: Icon, required }) => (
-                      <DocCard
-                        key={slotKey}
-                        docKey={slotKey}
-                        label={`${label} de ${o.name}`}
-                        Icon={Icon}
-                        files={uploadedDocs[slotKey] ?? []}
-                        required={required}
-                        isMandato={false}
-                        uploading={uploadingDoc === slotKey}
-                        onPick={() => {
-                          if (slotKey === cedulaKey && !ownerIdNumber && !o.idNumber) {
-                            // heredamos el idNumber del owner si está
-                            if (o.idNumber) setOwnerIdNumber(o.idNumber);
+            {owners
+              .filter((o) => o.name.trim())
+              .map((o) => {
+                const cedulaKey = `cedula:${o.id}`;
+                const rutKey = `rut:${o.id}`;
+                return (
+                  <div
+                    key={o.id}
+                    className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg"
+                  >
+                    <p className="text-xs font-bold text-slate-700 mb-2">
+                      {o.name}{" "}
+                      {o.ownershipPct && (
+                        <span className="text-[10px] text-blue-600 font-normal">
+                          ({o.ownershipPct}%)
+                        </span>
+                      )}
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {[
+                        {
+                          slotKey: cedulaKey,
+                          label: "Cédula",
+                          icon: Users,
+                          required: true,
+                        },
+                        {
+                          slotKey: rutKey,
+                          label: "RUT",
+                          icon: ClipboardCheck,
+                          required: false,
+                        },
+                      ].map(({ slotKey, label, icon: Icon, required }) => (
+                        <DocCard
+                          key={slotKey}
+                          docKey={slotKey}
+                          label={`${label} de ${o.name}`}
+                          Icon={Icon}
+                          files={uploadedDocs[slotKey] ?? []}
+                          required={required}
+                          isMandato={false}
+                          uploading={uploadingDoc === slotKey}
+                          onPick={() => {
+                            if (
+                              slotKey === cedulaKey &&
+                              !ownerIdNumber &&
+                              !o.idNumber
+                            ) {
+                              // heredamos el idNumber del owner si está
+                              if (o.idNumber) setOwnerIdNumber(o.idNumber);
+                            }
+                            triggerFileInput(slotKey);
+                          }}
+                          onAddAnother={() => triggerFileInput(slotKey)}
+                          onRemove={(i) => removeFileFromSlot(slotKey, i)}
+                          onView={(url) =>
+                            setViewingDoc({
+                              label: labelForKey(slotKey, owners, units),
+                              url,
+                            })
                           }
-                          triggerFileInput(slotKey);
-                        }}
-                        onAddAnother={() => triggerFileInput(slotKey)}
-                        onRemove={(i) => removeFileFromSlot(slotKey, i)}
-                        onView={(url) => setViewingDoc({ label: labelForKey(slotKey, owners, units), url })}
-                      />
-                    ))}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         </div>
       )}
@@ -321,7 +395,8 @@ export function StepDocs({
           <div className="flex items-center gap-2 mb-3">
             <FileText className="w-4 h-4 text-slate-500" />
             <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Certificados de Tradición ({unitSlots.length} unidad{unitSlots.length === 1 ? '' : 'es'})
+              Certificados de Tradición ({unitSlots.length} unidad
+              {unitSlots.length === 1 ? "" : "es"})
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -339,7 +414,12 @@ export function StepDocs({
                 onPick={() => triggerFileInput(s.slotKey)}
                 onAddAnother={() => triggerFileInput(s.slotKey)}
                 onRemove={(i) => removeFileFromSlot(s.slotKey, i)}
-                onView={(url) => setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
+                onView={(url) =>
+                  setViewingDoc({
+                    label: labelForKey(s.slotKey, owners, units),
+                    url,
+                  })
+                }
               />
             ))}
           </div>
@@ -358,7 +438,7 @@ export function StepDocs({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {propertySlots.map((s) => {
               const Icon = iconForKey(s.slotKey, s.group, s.unitId);
-              const isMandato = s.slotKey === 'mandato';
+              const isMandato = s.slotKey === "mandato";
               return (
                 <DocCard
                   key={s.slotKey}
@@ -373,7 +453,12 @@ export function StepDocs({
                   onPick={() => triggerFileInput(s.slotKey)}
                   onAddAnother={() => triggerFileInput(s.slotKey)}
                   onRemove={(i) => removeFileFromSlot(s.slotKey, i)}
-                  onView={(url) => setViewingDoc({ label: labelForKey(s.slotKey, owners, units), url })}
+                  onView={(url) =>
+                    setViewingDoc({
+                      label: labelForKey(s.slotKey, owners, units),
+                      url,
+                    })
+                  }
                 />
               );
             })}
@@ -383,24 +468,26 @@ export function StepDocs({
 
       {/* ── Acciones ── */}
       <div className="flex flex-col sm:flex-row gap-3 mt-8">
-        <Button variant="outline" className="flex-1" onClick={onBack}>Atrás</Button>
+        <Button variant="outline" className="flex-1" onClick={onBack}>
+          Atrás
+        </Button>
         <Button
           variant="outline"
           className="flex-1 gap-2"
           onClick={() => {
+            // El padre (PropertiesView) muestra el toast honesto tras
+            // ensurePropertyPersisted(). NO disparamos un toast mentiroso
+            // acá (sería un segundo toast contradictorio — fix de bug
+            // reportado el 2026-08-05).
             onSaveDraft();
-            showToast('✓ Avance guardado en este navegador. Se sube al servidor al finalizar el wizard.', 'success');
           }}
         >
           💾 Guardar avance (este equipo)
         </Button>
-        <Button
-          className="flex-1"
-          onClick={() => setConfirmContinue(true)}
-        >
+        <Button className="flex-1" onClick={() => setConfirmContinue(true)}>
           {missingRequired.length > 0
             ? `Continuar con ${missingRequired.length} pendiente(s)`
-            : 'Continuar a Inventario'}
+            : "Continuar a Inventario"}
         </Button>
       </div>
 
@@ -408,51 +495,95 @@ export function StepDocs({
           Migración 011+: si faltan documentos requeridos, muestra la lista
           explícita + un checkbox de "Entiendo los pendientes" para que el
           user no se cuele por error. */}
-      <Modal isOpen={confirmContinue} onClose={() => setConfirmContinue(false)} title="¿Continuar al Inventario?">
+      <Modal
+        isOpen={confirmContinue}
+        onClose={() => setConfirmContinue(false)}
+        title="¿Continuar al Inventario?"
+      >
         <div className="space-y-4">
           {missingRequired.length > 0 && (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 space-y-2">
               <p className="font-semibold flex items-center gap-1.5">
                 <AlertTriangle className="w-4 h-4" />
-                Vas a finalizar con {missingRequired.length} documento(s) pendiente(s)
+                Vas a finalizar con {missingRequired.length} documento(s)
+                pendiente(s)
               </p>
               <ul className="text-xs space-y-1 list-disc pl-5">
                 {missingRequired.map((m) => (
-                  <li key={m.slotKey}>{labelForKey(m.slotKey, owners, units)}</li>
+                  <li key={m.slotKey}>
+                    {labelForKey(m.slotKey, owners, units)}
+                  </li>
                 ))}
               </ul>
               <p className="text-xs text-amber-800">
-                La propiedad quedará en estado <strong>Pendiente</strong> y los docs faltantes se podrán
-                subir después desde el <strong>Detalle del Inmueble</strong>.
+                La propiedad quedará en estado <strong>Pendiente</strong> y los
+                docs faltantes se podrán subir después desde el{" "}
+                <strong>Detalle del Inmueble</strong>.
               </p>
             </div>
           )}
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
-            <p>Una vez en el inventario no podrá modificar los documentos desde aquí.</p>
+            <p>
+              Una vez en el inventario no podrá modificar los documentos desde
+              aquí.
+            </p>
             <p className="text-xs text-slate-500 mt-1">
-              Si después detecta un error en algún PDF, puede entrar al Detalle del Inmueble
-              y reemplazarlo manualmente.
+              Si después detecta un error en algún PDF, puede entrar al Detalle
+              del Inmueble y reemplazarlo manualmente.
             </p>
           </div>
           <div className="flex gap-3 pt-2">
-            <Button variant="outline" className="flex-1" onClick={() => setConfirmContinue(false)}>
-              {missingRequired.length > 0 ? 'Subir los pendientes' : 'Revisar documentos'}
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setConfirmContinue(false)}
+            >
+              {missingRequired.length > 0
+                ? "Subir los pendientes"
+                : "Revisar documentos"}
             </Button>
-            <Button className="flex-1" onClick={() => { setConfirmContinue(false); onContinue(); }}>
-              {missingRequired.length > 0 ? `Sí, continuar con ${missingRequired.length} pendiente(s)` : 'Sí, continuar'}
+            <Button
+              className="flex-1"
+              onClick={() => {
+                setConfirmContinue(false);
+                onContinue();
+              }}
+            >
+              {missingRequired.length > 0
+                ? `Sí, continuar con ${missingRequired.length} pendiente(s)`
+                : "Sí, continuar"}
             </Button>
           </div>
         </div>
       </Modal>
 
-      <Modal isOpen={isIdModalOpen} onClose={() => setIsIdModalOpen(false)} title="Número de Cédula de Ciudadanía">
+      <Modal
+        isOpen={isIdModalOpen}
+        onClose={() => setIsIdModalOpen(false)}
+        title="Número de Cédula de Ciudadanía"
+      >
         <div className="space-y-4">
-          <p className="text-sm text-slate-500">Ingrese el número de identificación del propietario.</p>
-          <Input label="Número de Cédula" placeholder="Ej: 1.023.456.789" value={ownerIdNumber} onChange={(e) => setOwnerIdNumber(e.target.value)} />
-          <Button className="w-full mt-6" onClick={() => {
-            if (!ownerIdNumber) { showToast('Debe ingresar el número de cédula', 'error'); return; }
-            setIsIdModalOpen(false);
-          }}>Guardar y Continuar</Button>
+          <p className="text-sm text-slate-500">
+            Ingrese el número de identificación del propietario.
+          </p>
+          <Input
+            label="Número de Cédula"
+            placeholder="Ej: 1.023.456.789"
+            value={ownerIdNumber}
+            onChange={(e) => setOwnerIdNumber(e.target.value)}
+          />
+          <Button
+            className="w-full mt-6"
+            onClick={() => {
+              if (!ownerIdNumber) {
+                showToast("Debe ingresar el número de cédula", "error");
+                return;
+              }
+              setIsIdModalOpen(false);
+            }}
+          >
+            Guardar y Continuar
+          </Button>
         </div>
       </Modal>
 
@@ -470,19 +601,21 @@ export function StepDocs({
           <p className="text-sm text-slate-600">
             {lastUploadedSlot && (
               <>
-                Subiste <strong>1 archivo</strong> a
-                {' '}<strong>{labelForKey(lastUploadedSlot, owners, units)}</strong>.
+                Subiste <strong>1 archivo</strong> a{" "}
+                <strong>{labelForKey(lastUploadedSlot, owners, units)}</strong>.
               </>
             )}
           </p>
           <p className="text-xs text-slate-500">
-            Si este documento tiene varias hojas (ej: cara y respaldo de la cédula,
-            o varias páginas del RUT), podés subir más archivos del mismo tipo acá mismo.
-            Cuando termines, presioná <strong>"No, ya está"</strong> para volver a la lista.
+            Si este documento tiene varias hojas (ej: cara y respaldo de la
+            cédula, o varias páginas del RUT), podés subir más archivos del
+            mismo tipo acá mismo. Cuando termines, presioná{" "}
+            <strong>"No, ya está"</strong> para volver a la lista.
           </p>
           {lastUploadedSlot && (
             <div className="p-2 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600">
-              <strong>Archivos subidos hasta ahora:</strong> {countInSlot(uploadedDocs, lastUploadedSlot)}
+              <strong>Archivos subidos hasta ahora:</strong>{" "}
+              {countInSlot(uploadedDocs, lastUploadedSlot)}
             </div>
           )}
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
@@ -508,7 +641,6 @@ export function StepDocs({
           </div>
         </div>
       </Modal>
-
     </Card>
   );
 }
@@ -536,68 +668,105 @@ interface DocCardProps {
   onView: (url: string) => void;
 }
 function DocCard(props: DocCardProps) {
-  const { docKey, label, Icon, files, required, isMandato, helpText, uploading, onPick, onAddAnother, onRemove, onView } = props;
+  const {
+    docKey,
+    label,
+    Icon,
+    files,
+    required,
+    isMandato,
+    helpText,
+    uploading,
+    onPick,
+    onAddAnother,
+    onRemove,
+    onView,
+  } = props;
   const hasFiles = files.length > 0;
   // Estado del almacenamiento: derivado de la URL real de cada archivo.
   // Si TODOS están en Drive → 'drive'. Si al menos uno es local → 'local'.
-  const allDrive = hasFiles && files.every((u) => getDocStorageState(u) === 'drive');
-  const anyLocal = hasFiles && files.some((u) => getDocStorageState(u) === 'local');
-  const storageState: DocStorageState | null = !hasFiles ? null : (allDrive ? 'drive' : anyLocal ? 'local' : 'pending');
+  const allDrive =
+    hasFiles && files.every((u) => getDocStorageState(u) === "drive");
+  const anyLocal =
+    hasFiles && files.some((u) => getDocStorageState(u) === "local");
+  const storageState: DocStorageState | null = !hasFiles
+    ? null
+    : allDrive
+      ? "drive"
+      : anyLocal
+        ? "local"
+        : "pending";
 
   return (
     <div
       className={`p-4 border-2 border-dashed rounded-xl transition-all group relative ${
-        isMandato && storageState === 'drive'
-          ? 'border-emerald-300 bg-emerald-50/30'
-          : storageState === 'drive'
-            ? 'border-emerald-200 bg-emerald-50/20'
-            : storageState === 'local'
-              ? 'border-amber-200 bg-amber-50/20'
-              : 'border-slate-200 hover:border-blue-400'
+        isMandato && storageState === "drive"
+          ? "border-emerald-300 bg-emerald-50/30"
+          : storageState === "drive"
+            ? "border-emerald-200 bg-emerald-50/20"
+            : storageState === "local"
+              ? "border-amber-200 bg-amber-50/20"
+              : "border-slate-200 hover:border-blue-400"
       }`}
       data-testid={`doc-card-${docKey}`}
     >
       <div className="flex justify-between items-start">
-        <Icon className={`w-6 h-6 ${storageState === 'drive' ? 'text-emerald-500' : uploading ? 'text-blue-500 animate-pulse' : storageState === 'local' ? 'text-amber-500' : 'text-slate-400 group-hover:text-blue-500'} mb-2`} />
-        {storageState === 'drive' && (
-          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 flex items-center gap-1" title="Archivo ya está en Google Drive">
+        <Icon
+          className={`w-6 h-6 ${storageState === "drive" ? "text-emerald-500" : uploading ? "text-blue-500 animate-pulse" : storageState === "local" ? "text-amber-500" : "text-slate-400 group-hover:text-blue-500"} mb-2`}
+        />
+        {storageState === "drive" && (
+          <span
+            className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5 flex items-center gap-1"
+            title="Archivo ya está en Google Drive"
+          >
             <CheckCircle2 className="w-3 h-3" />
             En Drive
           </span>
         )}
-        {storageState === 'local' && (
-          <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1" title="Archivo solo en este navegador — se subirá a Drive al finalizar el wizard">
+        {storageState === "local" && (
+          <span
+            className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1"
+            title="Archivo solo en este navegador — se subirá a Drive al finalizar el wizard"
+          >
             <CloudUpload className="w-3 h-3" />
             Pendiente → Drive
           </span>
         )}
         {!storageState && hasFiles && (
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-slate-50 border border-slate-200 rounded-full px-2 py-0.5">
-            {files.length} {files.length === 1 ? 'archivo' : 'archivos'}
+            {files.length} {files.length === 1 ? "archivo" : "archivos"}
           </span>
         )}
       </div>
       <p className="text-sm font-semibold text-slate-700">{label}</p>
-      {helpText && <p className="text-[10px] text-slate-500 mt-0.5">{helpText}</p>}
+      {helpText && (
+        <p className="text-[10px] text-slate-500 mt-0.5">{helpText}</p>
+      )}
       <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
         {uploading ? (
           <>
             <Loader2 className="w-3 h-3 animate-spin" />
             Subiendo a Drive...
           </>
-        ) : storageState === 'drive' ? (
-          isMandato ? 'PDF firmado — propiedad al 100%' : 'Documento en Google Drive'
-        ) : storageState === 'local' ? (
-          isMandato
-            ? 'Firmado, falta subir a Drive al finalizar'
-            : 'Listo localmente. Se sube a Drive al finalizar el wizard'
+        ) : storageState === "drive" ? (
+          isMandato ? (
+            "PDF firmado — propiedad al 100%"
+          ) : (
+            "Documento en Google Drive"
+          )
+        ) : storageState === "local" ? (
+          isMandato ? (
+            "Firmado, falta subir a Drive al finalizar"
+          ) : (
+            "Listo localmente. Se sube a Drive al finalizar el wizard"
+          )
         ) : required ? (
           <>
             <CloudOff className="w-3 h-3" />
             Pendiente (opcional, no bloquea)
           </>
         ) : (
-          'Click para subir PDF (opcional)'
+          "Click para subir PDF (opcional)"
         )}
       </p>
 
