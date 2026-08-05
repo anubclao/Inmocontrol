@@ -206,10 +206,8 @@ router.post("/", async (req, res) => {
   });
   const {
     localId,
-    address,
     chip,
     folio,
-    ownerName,
     ownerIdNumber,
     ownerPhone,
     ownerEmail,
@@ -224,6 +222,11 @@ router.post("/", async (req, res) => {
     documents,
   } = req.body as Record<string, any>;
 
+  // FIX 2026-08-05: en el caso "doc-only update" (POST con localId + documents
+  // pero sin address/ownerName), re-leemos los valores del row existente más
+  // abajo y los metemos en estas variables. Necesitamos `let` para reasignar.
+  let { address, ownerName } = req.body as Record<string, any>;
+
   // FIX 2026-07-22: top-level try/catch para garantizar respuesta JSON.
   // Antes, si algo throw-eaba entre los try/catch internos (ej: el Drive
   // folder creation, el ensureDefaultOrg, o algo en el body parsing),
@@ -233,15 +236,58 @@ router.post("/", async (req, res) => {
   // colgado con "el botón no hace nada".
   try {
     const isUpsert = !!(localId && !String(localId).startsWith("wizard-"));
-    // Validación: address + ownerName son SIEMPRE requeridos (INSERT y UPSERT).
-    // Antes, validar solo en INSERT permitía bypasear con un localId cualquiera
-    // no-wizard-* y crear filas con address NULL (verifier 2026-08-05).
+    // Validación: address + ownerName son requeridos SOLO para INSERT.
+    // Para UPSERT, son opcionales — el cliente que sube un doc desde la
+    // card del Detalle del Inmueble (sub-flujo) manda solo `documents` y
+    // `localId`. Leemos address/ownerName del row existente en ese caso.
     if (!address || !ownerName) {
-      res.status(400).json({
-        error: "Faltan campos requeridos: address, ownerName",
-        code: "MISSING_REQUIRED_FIELDS",
-      });
-      return;
+      if (isUpsert) {
+        // FIX 2026-08-05 (bug card Detalle): la card de upload del Detalle
+        // manda POST con `localId` y SOLO `documents`. NO trae address porque
+        // la propiedad ya existe. Validamos ahora (con localId y sin
+        // propertyId declarado todavía) que la propiedad EXISTE; los valores
+        // de address/ownerName se re-leen más abajo, después de declarar
+        // propertyId + orgId.
+        try {
+          const [existingRows] = await pool.query<any[]>(
+            "SELECT id, organization_id FROM properties WHERE id = ?",
+            [localId],
+          );
+          if (existingRows.length === 0) {
+            res.status(404).json({
+              error: `No se encontró la propiedad con id=${localId}.`,
+              code: "PROPERTY_NOT_FOUND",
+            });
+            return;
+          }
+          console.log(
+            `[POST /api/properties] doc-only update detectado (localId=${localId}, sin address/ownerName). OK — se re-leen del row existente abajo.`,
+          );
+          // Marcamos el modo "doc-only" en un flag para que la sección
+          // posterior NO requiera estos campos de nuevo.
+          if (!address && !ownerName) {
+            // (no asignamos nada — los re-leemos más abajo cuando
+            //  ya tengamos propertyId y orgId en scope)
+          }
+        } catch (lookupErr: any) {
+          console.error(
+            "[POST /api/properties] no se pudo validar la propiedad existente:",
+            lookupErr.message,
+          );
+          res.status(500).json({
+            error: "No se pudo validar la propiedad existente.",
+            code: "LOOKUP_FAILED",
+          });
+          return;
+        }
+      } else {
+        // INSERT puro: sin localId y sin address → 400.
+        res.status(400).json({
+          error: "Faltan campos requeridos: address, ownerName",
+          code: "MISSING_REQUIRED_FIELDS",
+        });
+        return;
+      }
     }
 
     // ── 1. Crear carpeta en Drive SOLO en INSERT (no en UPSERT) ────────
@@ -333,6 +379,32 @@ router.post("/", async (req, res) => {
         ? localId
         : crypto.randomUUID();
     const dbStatus = status || "Pendiente";
+
+    // FIX 2026-08-05 (bug card Detalle): si es UPSERT y NO nos mandaron
+    // address/ownerName (sub-flujo: card de upload del Detalle), re-leemos
+    // los valores del row existente. Sin esto, los INSERTs a tablas
+    // relacionadas (property_owners.firstOwnerId lookup, validaciones
+    // internas) pueden fallar o insertar NULL donde no deben.
+    if (isUpsert && (!address || !ownerName)) {
+      try {
+        const [existingForFill] = await pool.query<any[]>(
+          "SELECT address, owner_name FROM properties WHERE id = ?",
+          [propertyId],
+        );
+        if (existingForFill.length > 0) {
+          address = address || existingForFill[0].address;
+          ownerName = ownerName || existingForFill[0].owner_name;
+          console.log(
+            `[POST /api/properties] re-llenado address/ownerName desde row existente: address="${address}", ownerName="${ownerName}"`,
+          );
+        }
+      } catch (fillErr: any) {
+        console.warn(
+          "[POST /api/properties] no se pudo re-llenar address/ownerName del row:",
+          fillErr.message,
+        );
+      }
+    }
 
     const toMysqlDateTime = (iso: string | null | undefined): string | null => {
       if (!iso) return null;
