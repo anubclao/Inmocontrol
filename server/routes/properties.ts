@@ -230,12 +230,15 @@ router.post("/", async (req, res) => {
   // frontend puede mostrarlo en consola y el usuario no se queda
   // colgado con "el botón no hace nada".
   try {
-    // Validación: address + ownerName son requeridos solo en INSERT.
     const isUpsert = !!(localId && !String(localId).startsWith("wizard-"));
-    if (!isUpsert && (!address || !ownerName)) {
-      res
-        .status(400)
-        .json({ error: "Faltan campos requeridos: address, ownerName" });
+    // Validación: address + ownerName son SIEMPRE requeridos (INSERT y UPSERT).
+    // Antes, validar solo en INSERT permitía bypasear con un localId cualquiera
+    // no-wizard-* y crear filas con address NULL (verifier 2026-08-05).
+    if (!address || !ownerName) {
+      res.status(400).json({
+        error: "Faltan campos requeridos: address, ownerName",
+        code: "MISSING_REQUIRED_FIELDS",
+      });
       return;
     }
 
