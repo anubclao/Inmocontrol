@@ -1326,9 +1326,27 @@ export function PropertiesView({
             label: u.label,
             type: u.type,
           }));
+        } else {
+          console.warn(
+            `[finalize] GET /api/properties/${propertyDbId} devolvió ${r.status} — ownerIdMap quedará vacío y los slotKeys con wizard-* serán rechazados por el server`,
+          );
         }
       } catch (err) {
         console.warn("[finalize] no se pudieron leer los UUIDs reales:", err);
+      }
+      // DIAG: si realOwners viene vacío, el slotKey realSlotKey devuelve el wizard-id
+      // y el server rechaza silenciosamente el INSERT en property_documents.
+      // Estos logs son seguros en prod (no tocan datos, solo console).
+      if (realOwners.length === 0 && validOwners.length > 0) {
+        console.warn(
+          `[finalize] ⚠ realOwners está vacío pero hay ${validOwners.length} owners válidos. ` +
+            `Esto va a hacer que el server rechace los INSERT a property_documents porque ` +
+            `los slotKeys tendrán ids "wizard-*". Esperado 1 POST GET al server para refrescar.`,
+        );
+      } else {
+        console.log(
+          `[finalize] realOwners=${realOwners.length}, realUnits=${realUnits.length}, validOwners=${validOwners.length}`,
+        );
       }
       const ownerIdMap = new Map<string, string>();
       validOwners.forEach((wOwner, i) => {
@@ -1488,6 +1506,15 @@ export function PropertiesView({
       const status = mandateSubido ? "Activo" : "Pendiente";
 
       // 3. Persistir URLs reales + mandate + owners/units en MySQL (segundo POST = UPSERT)
+      // DIAG: loggear qué keys de documents se están enviando y si tienen URLs de Drive.
+      const finalDocsSummary = Object.entries(finalDocuments).map(([k, v]) => {
+        const url = typeof v === "string" ? v : v?.primary;
+        const isDrive = url && /^https:\/\/.*\.google\.com\//.test(url);
+        return `${k}=${isDrive ? "DRIVE" : "LOCAL"}${v && typeof v === "object" ? `(+${v.extras?.length ?? 0} extras)` : ""}`;
+      });
+      console.log(
+        `[finalize] POST /api/properties documents: ${JSON.stringify(finalDocsSummary)}`,
+      );
       try {
         const res = await fetch("/api/properties", {
           method: "POST",
@@ -1534,9 +1561,20 @@ export function PropertiesView({
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error ?? `HTTP ${res.status}`);
         }
+        const postResp = await res.json().catch(() => null);
+        const postDocs =
+          postResp?.documents_legacy ?? postResp?.documents ?? {};
+        const postDocsCount = Object.keys(postDocs).length;
         console.log(
-          "[finalize] POST #2 OK — mandate, documents, owners, units persistidos en MySQL",
+          `[finalize] POST #2 OK — documents persistidos en MySQL: ${postDocsCount} keys.`,
         );
+        if (postDocsCount === 0 && finalDocsSummary.length > 0) {
+          console.warn(
+            "[finalize] ⚠ El server respondió 200 pero documents_legacy está VACÍO. " +
+              "Los INSERT a property_documents fallaron silenciosamente. " +
+              "Mirar logs del server (hPanel → Logs) para ver el [docs] rechazando wizard-*.",
+          );
+        }
       } catch (err: any) {
         console.error("[finalize] backend persist URLs:", err);
         showToast(
