@@ -68,6 +68,8 @@ import { PhotoGalleryModal } from "./components/PhotoGalleryModal";
 // Commit 2 refactor #5b: modal de detalle del inmueble extraído.
 import { PropertyDetailModal } from "./components/PropertyDetailModal";
 // helpers puros salieron al módulo ./utils/allDocsComplete (Commit 2 #5b).
+// Commit 1 #5c: state de modales extraido.
+import { useModalsState } from "./hooks/useModalsState";
 // Commit 3 refactor #5: slotKeyHelpers extraído del monolito.
 import { slotKeyToLabel, slotKeyToFilename } from "./utils/slotKeyHelpers";
 // Commit 2 refactor #5b: allDocsComplete extraído del monolito.
@@ -193,61 +195,43 @@ export function PropertiesView({
   const [wizardDriveFolderPath, setWizardDriveFolderPath] = useState<
     string | null
   >(null);
-  const [viewingDoc, setViewingDoc] = useState<{
-    label: string;
-    url: string;
-  } | null>(null);
-  const [viewingProperty, setViewingProperty] = useState<any>(null);
+  // Commit 1 #5c: state de modales consolidados en un solo hook.
+  const {
+    viewingProperty,
+    setViewingProperty,
+    viewingDoc,
+    setViewingDoc,
+    inventoryModalProperty,
+    setInventoryModalProperty,
+    inventoryPhase,
+    setInventoryPhase,
+    baseInventory,
+    setBaseInventory,
+    comparingProperty,
+    setComparingProperty,
+    confirmDiscardDraft,
+    setConfirmDiscardDraft,
+    pendingDelete,
+    setPendingDelete,
+    deleting,
+    setDeleting,
+    uploadingMandatoPropertyId,
+    setUploadingMandatoPropertyId,
+    uploadingDocPropertyId,
+    setUploadingDocPropertyId,
+    detailRefreshing,
+    setDetailRefreshing,
+    finalizeSummary,
+    setFinalizeSummary,
+    photoGallery,
+    setPhotoGallery,
+    photoGalleryLoading,
+    setPhotoGalleryLoading,
+  } = useModalsState();
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
   const [currentDocLabel, setCurrentDocLabel] = useState<string | null>(null);
-  const [inventoryModalProperty, setInventoryModalProperty] = useState<
-    any | null
-  >(null);
-  const [inventoryPhase, setInventoryPhase] = useState<
-    "inicial" | "final" | null
-  >(null);
-  const [baseInventory, setBaseInventory] = useState<Inventory | null>(null);
-  const [comparingProperty, setComparingProperty] = useState<any | null>(null);
-  /** Modal: confirmar descarte del draft del wizard. TRUE = mostrar el modal. */
-  const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  /** Pista: qué propiedad del detalle estamos actualizando con el mandato firmado. */
-  const [uploadingMandatoPropertyId, setUploadingMandatoPropertyId] = useState<
-    string | null
-  >(null);
   const mandatoFileInputRef = useRef<HTMLInputElement>(null);
-  /** Pista: qué propiedad del detalle estamos actualizando con un doc legal. */
-  const [uploadingDocPropertyId, setUploadingDocPropertyId] = useState<
-    string | null
-  >(null);
-  /** Propiedad pendiente de confirmación para eliminar (solo si NO tiene inventario). */
-  const [pendingDelete, setPendingDelete] = useState<any | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [detailRefreshing, setDetailRefreshing] = useState(false);
-
-  /**
-   * Resumen estructurado que se muestra en el modal al finalizar el wizard.
-   * Tipo + constructor puro viven en `./utils/finalizeSummary.ts` (Commit 4).
-   * Este useState solo persiste el resultado para que el modal lo renderice.
-   */
-  const [finalizeSummary, setFinalizeSummary] =
-    useState<null | FinalizeSummary>(null);
-
-  // Galería de fotos del inventario: modal para visualizar las imágenes almacenadas
-  // en IndexedDB agrupadas por área. Cada foto se ve en tamaño completo con lightbox.
-  const [photoGallery, setPhotoGallery] = useState<null | {
-    propertyId: string;
-    address: string;
-    photos: Array<{
-      id: string;
-      areaId: string;
-      areaLabel: string;
-      dataUrl: string;
-      phase: "inicial" | "final";
-    }>;
-  }>(null);
-  const [photoGalleryLoading, setPhotoGalleryLoading] = useState(false);
-  // Commit 3 #5b: lightboxIndex ahora vive dentro de PhotoGalleryModal.
 
   /** Confirma el borrado de una propiedad sin inventario. */
   const handleConfirmDelete = async () => {
