@@ -21,6 +21,11 @@ import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import pool, { ensureDefaultOrg } from '../db.js';
+import {
+  rateLimit,
+  recordAttempt,
+  clearFailedAttempts,
+} from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -87,68 +92,84 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
  * → 200 { user: {...} } + cookie httpOnly
  * → 401 si credenciales inválidas
  */
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body as { email?: string; password?: string };
+router.post(
+  '/login',
+  // fix-issue-rate-limit-auth-login: dos middlewares (per-IP+email y per-IP).
+  rateLimit({ windowSeconds: 15 * 60, maxAttempts: 5, scope: 'ip+email' }),
+  rateLimit({ windowSeconds: 15 * 60, maxAttempts: 20, scope: 'ip' }),
+  async (req, res) => {
+    const { email, password } = req.body as { email?: string; password?: string };
+    const ip = req.ip ?? '0.0.0.0';
 
-  if (!email || !password) {
-    return res.status(400).json({ error: 'email y password son requeridos', code: 'MISSING_FIELDS' });
-  }
-
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query<any[]>(
-      `SELECT id, organization_id, display_name, email, role, password_hash
-       FROM profiles
-       WHERE email = ? AND organization_id = ?
-       LIMIT 1`,
-      [email.toLowerCase().trim(), orgId]
-    );
-
-    if (rows.length === 0) {
-      // No revelamos si el email existe o no (mitiga enumeración)
-      return res.status(401).json({ error: 'Credenciales inválidas', code: 'INVALID_CREDENTIALS' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'email y password son requeridos', code: 'MISSING_FIELDS' });
     }
 
-    const user = rows[0];
-    if (!user.password_hash) {
-      // Usuario sin password (legacy OAuth). Para el piloto, no aceptamos login sin password.
-      console.warn(`[auth] Usuario ${email} sin password_hash — login rechazado`);
-      return res.status(401).json({ error: 'Credenciales inválidas', code: 'NO_PASSWORD_SET' });
-    }
+    const normalizedEmail = email.toLowerCase().trim();
 
-    const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) {
-      return res.status(401).json({ error: 'Credenciales inválidas', code: 'INVALID_CREDENTIALS' });
-    }
+    try {
+      const orgId = await ensureDefaultOrg();
+      const [rows] = await pool.query<any[]>(
+        `SELECT id, organization_id, display_name, email, role, password_hash
+         FROM profiles
+         WHERE email = ? AND organization_id = ?
+         LIMIT 1`,
+        [normalizedEmail, orgId]
+      );
 
-    // Crear sesión
-    const sessionId = crypto.randomUUID();
-    sessions.set(sessionId, {
-      profileId: user.id,
-      organizationId: user.organization_id,
-      email: user.email,
-      displayName: user.display_name,
-      role: user.role,
-      createdAt: Date.now(),
-    });
+      if (rows.length === 0) {
+        // No revelamos si el email existe o no (mitiga enumeración)
+        await recordAttempt(ip, normalizedEmail, false);
+        return res.status(401).json({ error: 'Credenciales inválidas', code: 'INVALID_CREDENTIALS' });
+      }
 
-    setSessionCookie(res, sessionId);
+      const user = rows[0];
+      if (!user.password_hash) {
+        // Usuario sin password (legacy OAuth). Para el piloto, no aceptamos login sin password.
+        console.warn(`[auth] Usuario ${email} sin password_hash — login rechazado`);
+        await recordAttempt(ip, normalizedEmail, false);
+        return res.status(401).json({ error: 'Credenciales inválidas', code: 'NO_PASSWORD_SET' });
+      }
 
-    console.log(`[auth] Login OK: ${email} (role=${user.role})`);
-    return res.json({
-      user: {
-        id: user.id,
+      const ok = await bcrypt.compare(password, user.password_hash);
+      if (!ok) {
+        await recordAttempt(ip, normalizedEmail, false);
+        return res.status(401).json({ error: 'Credenciales inválidas', code: 'INVALID_CREDENTIALS' });
+      }
+
+      // Login OK: resetear contadores previos + insertar success=1
+      await clearFailedAttempts(ip, normalizedEmail);
+      await recordAttempt(ip, normalizedEmail, true);
+
+      // Crear sesión
+      const sessionId = crypto.randomUUID();
+      sessions.set(sessionId, {
+        profileId: user.id,
+        organizationId: user.organization_id,
         email: user.email,
         displayName: user.display_name,
         role: user.role,
-        organizationId: user.organization_id,
-      },
-    });
-  } catch (err: any) {
-    console.error('[auth] login error:', err.message);
-    return res.status(500).json({ error: 'Error interno', code: 'INTERNAL' });
-  }
-});
+        createdAt: Date.now(),
+      });
+
+      setSessionCookie(res, sessionId);
+
+      console.log(`[auth] Login OK: ${email} (role=${user.role})`);
+      return res.json({
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.display_name,
+          role: user.role,
+          organizationId: user.organization_id,
+        },
+      });
+    } catch (err: any) {
+      console.error('[auth] login error:', err.message);
+      return res.status(500).json({ error: 'Error interno', code: 'INTERNAL' });
+    }
+  },
+);
 
 /**
  * POST /api/auth/logout
