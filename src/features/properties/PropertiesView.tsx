@@ -57,8 +57,21 @@ import {
 } from "./components/StepBasic";
 import { StepDocs, type UploadedDocsMap } from "./components/StepDocs";
 import { StepInventory } from "./components/StepInventory";
+// Commit 1 refactor #5b: modal de resumen del wizard extraído.
+import { FinalizeSummaryModal } from "./components/FinalizeSummaryModal";
+// Commit 4 refactor #5b: confirm de descarte extraído (orden: chico primero).
+import { DiscardDraftModal } from "./components/DiscardDraftModal";
+// Commit 5 refactor #5b: visor de documento extraído.
+import { DocViewerModal } from "./components/DocViewerModal";
+// Commit 3 refactor #5b: galería de fotos del inventario extraída.
+import { PhotoGalleryModal } from "./components/PhotoGalleryModal";
+// Commit 2 refactor #5b: modal de detalle del inmueble extraído.
+import { PropertyDetailModal } from "./components/PropertyDetailModal";
+// helpers puros salieron al módulo ./utils/allDocsComplete (Commit 2 #5b).
 // Commit 3 refactor #5: slotKeyHelpers extraído del monolito.
 import { slotKeyToLabel, slotKeyToFilename } from "./utils/slotKeyHelpers";
+// Commit 2 refactor #5b: allDocsComplete extraído del monolito.
+import { allDocsComplete } from "./utils/allDocsComplete";
 // Commit 4 refactor #5: finalizeSummary tipo + constructor puro extraídos.
 import {
   buildFinalizeSummary,
@@ -107,35 +120,7 @@ const CERT_MAIN_KEY = "certificado_tradicion:main";
 /** slotKey del Predial (1 por propiedad). */
 const PREDIAL_KEY = "predial";
 
-/** Verifica si la propiedad tiene todos los documentos obligatorios + mandato firmado.
- *  Migración 010+: itera por cada owner y por cada unit, además de los docs a nivel
- *  de propiedad (Predial + Certificado principal + Mandato). */
-function allDocsComplete(p: any): boolean {
-  if (!p) return false;
-  // Mandato y Predial: a nivel de propiedad
-  if (!p.mandatePdfUrl) return false;
-  if (!p.documents_property?.predial && !p.documents?.["Impuesto Predial"]) {
-    // Sin predial — opcional, no bloquea
-  }
-  // Certificado principal
-  const hasMainCert =
-    !!p.documents_property?.certificado_tradicion ||
-    !!p.documents?.["Certificado de Tradición"];
-  if (!hasMainCert) return false;
-  // CC por cada owner con nombre
-  const owners = p.owners ?? [];
-  for (const o of owners) {
-    if (!o.name?.trim()) continue;
-    if (!o.documents?.cedula) return false;
-  }
-  // Cert por cada unit con label
-  const units = p.units ?? [];
-  for (const u of units) {
-    if (!u.label?.trim()) continue;
-    if (!u.documents?.certificado_tradicion) return false;
-  }
-  return true;
-}
+// allDocsComplete + slotKeyToLabel + slotKeyToFilename se importan de utils/ (Commits refactor #5 + #5b).
 
 // slotKeyToLabel y slotKeyToFilename se importan de ./utils/slotKeyHelpers (Commit 3 refactor #5).
 
@@ -262,7 +247,7 @@ export function PropertiesView({
     }>;
   }>(null);
   const [photoGalleryLoading, setPhotoGalleryLoading] = useState(false);
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // Commit 3 #5b: lightboxIndex ahora vive dentro de PhotoGalleryModal.
 
   /** Confirma el borrado de una propiedad sin inventario. */
   const handleConfirmDelete = async () => {
@@ -2187,10 +2172,90 @@ export function PropertiesView({
         address: property.address,
         photos,
       });
-      setLightboxIndex(null);
     } catch (err: any) {
       console.error("[gallery] load photos:", err);
       showToast("Error cargando fotos del inventario", "error");
+    } finally {
+      setPhotoGalleryLoading(false);
+    }
+  };
+
+  /**
+   * Re-hidrata IndexedDB desde MySQL cuando la galería local está vacía
+   * (caso típico: limpieza de caché, IndexedDB stale post-self-heal). Se
+   * mantiene en el shell porque orquesta `openPhotoGallery` para reabrir
+   * la galería con las fotos recuperadas.
+   * Commit 3 #5b: el botón ahora vive en `PhotoGalleryModal` pero la
+   * lógica sigue acá (intenta no romper state acoplado).
+   */
+  const handleRecoverGalleryFromServer = async () => {
+    if (!photoGallery?.propertyId) return;
+    setPhotoGalleryLoading(true);
+    try {
+      const res = await fetch(
+        `/api/inventories?propertyId=${encodeURIComponent(photoGallery.propertyId)}`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const remote = (data.inventories ?? []).find(
+        (i: any) => i.phase === "inicial" || i.phase === "final",
+      );
+      if (!remote) {
+        showToast("No se encontró inventario en el servidor", "error");
+        return;
+      }
+      const remotePhotos = normalizePhotosArray(remote.photos);
+      if (remotePhotos.length === 0) {
+        showToast(
+          "El servidor tampoco tiene fotos para este inventario",
+          "error",
+        );
+        return;
+      }
+      // Re-hidratar IndexedDB
+      const inv = {
+        id: remote.id,
+        propertyId: remote.property_id,
+        phase: remote.phase,
+        propertyType: remote.property_type,
+        counters: remote.counters ?? {},
+        areas: remote.areas ?? [],
+        photos: remotePhotos,
+        signatures: remote.signatures ?? [],
+        customAreas: remote.custom_areas ?? [],
+        signedAt: remote.signed_at,
+        createdAt: remote.created_at,
+        updatedAt: remote.updated_at,
+      };
+      await inventoryDB.saveInventory(inv as any);
+      for (const p of remotePhotos) {
+        if ((p as any)?.dataUrl) {
+          await inventoryDB.savePhoto({
+            id: (p as any).id,
+            inventoryId: remote.id,
+            dataUrl: (p as any).dataUrl,
+            areaId: (p as any).areaId,
+            fileName: (p as any).fileName,
+            takenAt: (p as any).takenAt,
+          });
+        }
+      }
+      showToast(
+        `✓ ${remotePhotos.length} fotos recuperadas del servidor`,
+        "success",
+      );
+      // Cerrar y reabrir la galería para que se muestren
+      setPhotoGallery(null);
+      void openPhotoGallery(
+        {
+          id: photoGallery.propertyId,
+          address: photoGallery.address,
+        },
+        remote.phase as "inicial" | "final",
+      );
+    } catch (err: any) {
+      console.error("[gallery] manual re-hydrate failed:", err);
+      showToast(`Error recuperando fotos: ${err?.message ?? err}`, "error");
     } finally {
       setPhotoGalleryLoading(false);
     }
@@ -2895,1045 +2960,65 @@ export function PropertiesView({
       </Modal>
 
       {/* ── Modal: resumen post-finalize del wizard ──
-          Se muestra automáticamente al terminar el wizard de captación. Lista
-          explícitamente qué documentos se subieron a Drive, cuáles quedaron
-          solo en local, cuáles faltaron y si hubo errores. El usuario decide
-          cuándo cerrarlo (no se auto-dismiss). */}
-      <Modal
+          Commit 1 #5b: extraído a `components/FinalizeSummaryModal.tsx`. */}
+      <FinalizeSummaryModal
         isOpen={!!finalizeSummary}
+        summary={finalizeSummary}
+        wizardOwners={wizardOwners}
+        wizardUnits={wizardUnits}
         onClose={() => {
           setFinalizeSummary(null);
           // FIX BUG-2026-08-05: limpiar el flag global al cerrar el modal.
           // Si no, el siguiente wizard hereda el estado "persistFailed".
           window.__inmocontrol_docsPersistFailed = false;
         }}
-        title={
-          finalizeSummary?.persistFailed
-            ? "✗ Propiedad creada — documentos NO persistidos"
-            : finalizeSummary?.uploadedToDrive.length ===
-                  finalizeSummary?.totalDocs &&
-                (finalizeSummary?.uploadedLocalOnly.length ?? 0) === 0
-              ? "✓ Propiedad creada — todo en Drive"
-              : "⚠ Propiedad creada con pendientes"
-        }
-        size="lg"
-      >
-        {finalizeSummary && (
-          <div className="space-y-4">
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700">
-              <p>
-                <strong>{finalizeSummary.address}</strong>
-              </p>
-              {finalizeSummary.driveFolderPath && (
-                <p className="text-xs text-slate-500 mt-1">
-                  📁 Drive: Mi unidad / {finalizeSummary.driveFolderPath}/
-                </p>
-              )}
-            </div>
+      />
 
-            {/* FIX BUG-2026-08-05 — Banner rojo si el server NO persistió los docs.
-                El server devolvió 200 pero ningún INSERT a property_documents se ejecutó
-                (probable: slotKeys con wizard-* que el server rechaza silenciosamente,
-                o URLs blob:/data: que AC-15 filtra). */}
-            {finalizeSummary.persistFailed && (
-              <div className="p-4 bg-red-50 border-2 border-red-300 rounded-lg">
-                <p className="text-sm font-bold text-red-900 flex items-center gap-1.5">
-                  <AlertTriangle className="w-5 h-5" />
-                  Los documentos NO se guardaron en MySQL
-                </p>
-                <p className="text-xs text-red-800 mt-2">
-                  Los archivos quedaron <strong>solo en Google Drive</strong>{" "}
-                  (carpeta <code>Propietario/</code> de esta propiedad) pero el
-                  servidor no pudo registrar las URLs en la base de datos.
-                </p>
-                <p className="text-xs text-red-800 mt-2">
-                  <strong>Qué hacer:</strong> abrí el{" "}
-                  <strong>Detalle del Inmueble</strong>, entrá a la sección{" "}
-                  <em>Propietarios</em> y tocá <em>Subir</em> en cada slot. El
-                  modal de upload detectará que ya están en Drive y los
-                  re-vinculará con un INSERT a <code>property_documents</code>.
-                </p>
-                <p className="text-xs text-red-700 mt-2 font-mono">
-                  Si el problema persiste, mandame una captura de hPanel → Logs
-                  (filtrada por "[docs]") y los logs de DevTools filtrados por
-                  "[finalize]".
-                </p>
-              </div>
-            )}
-
-            {/* 🟢 Subidos a Drive */}
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-              <p className="text-sm font-semibold text-emerald-900 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4" />
-                En Google Drive ({finalizeSummary.uploadedToDrive.length})
-              </p>
-              {finalizeSummary.uploadedToDrive.length > 0 ? (
-                <ul className="text-xs text-emerald-800 mt-2 space-y-0.5 list-disc pl-5">
-                  {finalizeSummary.uploadedToDrive.map((k) => (
-                    <li key={k}>
-                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
-                    </li>
-                  ))}
-                  {finalizeSummary.inventoryUploaded && (
-                    <li>PDF de Inventario de captación</li>
-                  )}
-                </ul>
-              ) : (
-                <p className="text-xs text-emerald-700 mt-1">Ninguno.</p>
-              )}
-            </div>
-
-            {/* 🟠 Solo local (se perdió al cerrar el navegador) */}
-            {finalizeSummary.uploadedLocalOnly.length > 0 && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <p className="text-sm font-semibold text-amber-900 flex items-center gap-1.5">
-                  <CloudOff className="w-4 h-4" />
-                  Solo en este navegador (
-                  {finalizeSummary.uploadedLocalOnly.length})
-                </p>
-                <p className="text-xs text-amber-800 mt-1">
-                  {finalizeSummary.driveConnected
-                    ? "Falló la subida a Drive. Reintentá desde el Detalle del Inmueble."
-                    : "Drive no estaba conectado. Reintentá desde el Detalle del Inmueble."}
-                </p>
-                <ul className="text-xs text-amber-800 mt-2 space-y-0.5 list-disc pl-5">
-                  {finalizeSummary.uploadedLocalOnly.map((k) => (
-                    <li key={k}>
-                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* ❌ Faltantes (no se subieron ni local ni a Drive) */}
-            {finalizeSummary.missingDocs.length > 0 && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm font-semibold text-red-900 flex items-center gap-1.5">
-                  <AlertTriangle className="w-4 h-4" />
-                  Faltantes — no subiste ({finalizeSummary.missingDocs.length})
-                </p>
-                <p className="text-xs text-red-800 mt-1">
-                  Quedan como <strong>pendientes</strong>. La propiedad queda en
-                  estado
-                  <strong> Pendiente</strong> hasta que subas el Contrato de
-                  Mandato. Subilos desde el Detalle del Inmueble.
-                </p>
-                <ul className="text-xs text-red-800 mt-2 space-y-0.5 list-disc pl-5">
-                  {finalizeSummary.missingDocs.map((k) => (
-                    <li key={k}>
-                      {slotKeyToLabel(k, wizardOwners, wizardUnits)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* 🔴 Errores de subida */}
-            {finalizeSummary.failedUploads.length > 0 && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-sm font-semibold text-red-900 flex items-center gap-1.5">
-                  <X className="w-4 h-4" />
-                  Errores durante la subida
-                </p>
-                <ul className="text-xs text-red-800 mt-2 space-y-0.5 list-disc pl-5">
-                  {finalizeSummary.failedUploads.map((msg, i) => (
-                    <li key={i}>{msg}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              {finalizeSummary.driveFolderId && (
-                <Button
-                  variant="outline"
-                  className="flex-1 gap-2"
-                  onClick={() => {
-                    window.open(
-                      `https://drive.google.com/drive/folders/${finalizeSummary.driveFolderId}`,
-                      "_blank",
-                      "noopener,noreferrer",
-                    );
-                  }}
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  Ver carpeta en Drive
-                </Button>
-              )}
-              <Button
-                className="flex-1"
-                onClick={() => setFinalizeSummary(null)}
-              >
-                Cerrar
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* ── Modal Detalle del Inmueble — montado ANTES del viewer para que
-          el viewer (siguiente) quede ENCIMA en el stacking order. */}
-      <Modal
+      {/* ── Modal Detalle del Inmueble — Commit 2 #5b extraído. ── */}
+      <PropertyDetailModal
         isOpen={!!viewingProperty}
+        viewingProperty={viewingProperty}
         onClose={() => setViewingProperty(null)}
-        title="Detalle del Inmueble"
-      >
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">
-                Dirección
-              </p>
-              <p className="text-sm font-semibold">
-                {viewingProperty?.address}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">
-                CHIP
-              </p>
-              <p className="text-sm font-semibold">{viewingProperty?.chip}</p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">
-                Creado
-              </p>
-              <p className="text-sm font-semibold">
-                {viewingProperty?.createdAt
-                  ? new Date(viewingProperty.createdAt).toLocaleDateString(
-                      "es-CO",
-                      { day: "2-digit", month: "short", year: "numeric" },
-                    )
-                  : "—"}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 uppercase">
-                Propietarios ({viewingProperty?.owners?.length ?? 1})
-              </p>
-              <p className="text-sm font-semibold truncate">
-                {(viewingProperty?.owners ?? [])
-                  .map((o: any) => o.name)
-                  .join(", ") ||
-                  viewingProperty?.owner ||
-                  "—"}
-              </p>
-            </div>
-            <div className="col-span-2">
-              <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">
-                Estado del Inmueble
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {(
-                  ["Pendiente", "Activo", "Arrendado", "Inactivo"] as const
-                ).map((status) => {
-                  const isCurrent = viewingProperty?.status === status;
-                  let disabled = false;
-                  let reason = "";
-                  const docsComplete = allDocsComplete(viewingProperty);
-                  const hasActiveContract = contracts.some(
-                    (c: any) =>
-                      c.propertyId === viewingProperty?.id &&
-                      c.status === "active",
-                  );
+        onLocalUpdate={setViewingProperty}
+        onUpdateProperty={onUpdateProperty}
+        showToast={showToast}
+        onViewDoc={(label, url) => setViewingDoc({ label, url })}
+        triggerDetailDocUpload={triggerDetailDocUpload}
+        triggerUnitDocUpload={triggerUnitDocUpload}
+        triggerPropertyDocUpload={triggerPropertyDocUpload}
+        triggerMandatoUpload={triggerMandatoUpload}
+        handleDownloadMandato={handleDownloadMandato}
+        onOpenInventory={(p, phase) => {
+          setInventoryModalProperty(p);
+          setInventoryPhase(phase);
+        }}
+        openPhotoGallery={openPhotoGallery}
+        photoGalleryLoading={photoGalleryLoading}
+        onCompareInventories={(p) => setComparingProperty(p)}
+        detailRefreshing={detailRefreshing}
+        contracts={contracts}
+      />
 
-                  if (!isCurrent) {
-                    if (status === "Activo") {
-                      if (!docsComplete) {
-                        disabled = true;
-                        reason = "Faltan documentos o mandato";
-                      }
-                    } else if (status === "Arrendado") {
-                      if (!docsComplete) {
-                        disabled = true;
-                        reason = "Docs incompletos";
-                      } else if (!hasActiveContract) {
-                        disabled = true;
-                        reason = "Sin contrato activo";
-                      }
-                    }
-                  }
 
-                  const colors =
-                    status === "Activo"
-                      ? {
-                          on: "bg-emerald-500 text-white border-emerald-500",
-                          off: "bg-white text-emerald-600 border-emerald-200 hover:border-emerald-400",
-                        }
-                      : status === "Pendiente"
-                        ? {
-                            on: "bg-amber-500 text-white border-amber-500",
-                            off: "bg-white text-amber-600 border-amber-200 hover:border-amber-400",
-                          }
-                        : status === "Arrendado"
-                          ? {
-                              on: "bg-blue-500 text-white border-blue-500",
-                              off: "bg-white text-blue-600 border-blue-200 hover:border-blue-400",
-                            }
-                          : {
-                              on: "bg-slate-500 text-white border-slate-500",
-                              off: "bg-white text-slate-500 border-slate-200 hover:border-slate-400",
-                            };
-
-                  return (
-                    <button
-                      key={status}
-                      disabled={disabled}
-                      onClick={() => {
-                        onUpdateProperty(viewingProperty.id, { status });
-                        setViewingProperty({ ...viewingProperty, status });
-                        showToast(`Estado actualizado a ${status}`);
-                      }}
-                      title={disabled ? reason : ""}
-                      className={`text-[10px] font-bold px-3 py-1.5 rounded-lg uppercase transition-all border ${isCurrent ? colors.on : colors.off} ${disabled ? "opacity-50 cursor-not-allowed" : ""} shadow-sm`}
-                    >
-                      {status}
-                    </button>
-                  );
-                })}
-              </div>
-              {!allDocsComplete(viewingProperty) && (
-                <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
-                  <p className="text-[9px] font-bold text-amber-700 uppercase mb-1">
-                    Lo que falta
-                  </p>
-                  <ul className="space-y-0.5">
-                    {!viewingProperty?.mandatePdfUrl && (
-                      <li className="text-[9px] text-amber-600 flex items-center gap-1">
-                        <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
-                        Contrato de Mandato
-                      </li>
-                    )}
-                    {(viewingProperty?.owners ?? [])
-                      .filter((o: any) => o.name && !o.documents?.cedula)
-                      .map((o: any) => (
-                        <li
-                          key={o.id}
-                          className="text-[9px] text-amber-600 flex items-center gap-1"
-                        >
-                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
-                          Cédula de {o.name}
-                        </li>
-                      ))}
-                    {!viewingProperty?.documents_property
-                      ?.certificado_tradicion &&
-                      !viewingProperty?.documents?.[
-                        "Certificado de Tradición"
-                      ] && (
-                        <li className="text-[9px] text-amber-600 flex items-center gap-1">
-                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
-                          Certificado de Tradición (unidad principal)
-                        </li>
-                      )}
-                    {(viewingProperty?.units ?? [])
-                      .filter(
-                        (u: any) =>
-                          u.label && !u.documents?.certificado_tradicion,
-                      )
-                      .map((u: any) => (
-                        <li
-                          key={u.id}
-                          className="text-[9px] text-amber-600 flex items-center gap-1"
-                        >
-                          <span className="w-1 h-1 rounded-full bg-amber-400 inline-block" />
-                          Certificado de {u.label}
-                        </li>
-                      ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Propietarios (migración 010+) ── */}
-          {(viewingProperty?.owners?.length ?? 0) > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2 flex-1">
-                  Propietarios ({viewingProperty.owners.length})
-                </p>
-                {detailRefreshing && (
-                  <span className="text-[10px] text-blue-500 animate-pulse">
-                    Actualizando…
-                  </span>
-                )}
-              </div>
-              <div className="space-y-2">
-                {viewingProperty.owners.map((o: any, idx: number) => (
-                  <div
-                    key={o.id}
-                    className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg"
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold">
-                        {idx + 1}
-                      </div>
-                      <p className="text-xs font-bold text-slate-800 flex-1">
-                        {o.name}
-                      </p>
-                      {o.ownershipPct != null && (
-                        <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
-                          {o.ownershipPct}%
-                        </span>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {[
-                        {
-                          slotKey: `cedula:${o.id}`,
-                          label: "Cédula",
-                          url: o.documents?.cedula,
-                        },
-                        {
-                          slotKey: `rut:${o.id}`,
-                          label: "RUT",
-                          url: o.documents?.rut,
-                        },
-                      ].map(({ slotKey, label, url }) => {
-                        // FIX AC-15 (jul-2026): si la URL es blob: o data: (fila
-                        // zombie de un upload previo sin Drive), NO mostramos
-                        // "Ver" verde — el visor no podría abrir el archivo.
-                        // En su lugar, mostramos "Re-subir" para que el agente
-                        // reemplace la fila con un PDF válido.
-                        const isBlob =
-                          !!url &&
-                          (url.startsWith("blob:") || url.startsWith("data:"));
-                        if (url && !isBlob) {
-                          return (
-                            <button
-                              key={slotKey}
-                              onClick={() =>
-                                setViewingDoc({
-                                  label: `${label} de ${o.name}`,
-                                  url,
-                                })
-                              }
-                              className="flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
-                            >
-                              <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">
-                                {label}
-                              </span>
-                              <span className="text-[9px] font-bold text-emerald-700">
-                                Ver
-                              </span>
-                            </button>
-                          );
-                        }
-                        return (
-                          <button
-                            key={slotKey}
-                            onClick={() =>
-                              triggerDetailDocUpload(
-                                viewingProperty.id,
-                                slotKey,
-                              )
-                            }
-                            className={`flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
-                              isBlob
-                                ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
-                                : "bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50"
-                            }`}
-                            title={
-                              isBlob
-                                ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
-                                : undefined
-                            }
-                          >
-                            <Upload
-                              className={`w-3 h-3 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
-                            />
-                            <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
-                              {isBlob ? `${label} (re-subir)` : label}
-                            </span>
-                            <span
-                              className={`text-[9px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
-                            >
-                              {isBlob ? "Re-subir" : "Subir"}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Unidades adicionales (migración 010+) ── */}
-          {(viewingProperty?.units?.length ?? 0) > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
-                Unidades Adicionales ({viewingProperty.units.length})
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {viewingProperty.units.map((u: any) => {
-                  const certUrl = u.documents?.certificado_tradicion;
-                  const Icon =
-                    u.type === "parking"
-                      ? Car
-                      : u.type === "storage"
-                        ? Package
-                        : Box;
-                  return (
-                    <div
-                      key={u.id}
-                      className="p-3 bg-slate-50/50 border border-slate-200 rounded-lg"
-                    >
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <Icon className="w-3.5 h-3.5 text-blue-600" />
-                        <p className="text-xs font-bold text-slate-800 flex-1 truncate">
-                          {u.label}
-                        </p>
-                      </div>
-                      {u.folioMatricula && (
-                        <p className="text-[9px] text-slate-500 mb-1.5">
-                          Matrícula: {u.folioMatricula}
-                        </p>
-                      )}
-                      {(() => {
-                        // FIX AC-15: si certUrl es blob:, no es un archivo real —
-                        // mostramos "Re-subir" para que el agente reemplace la fila.
-                        const isBlob =
-                          !!certUrl &&
-                          (certUrl.startsWith("blob:") ||
-                            certUrl.startsWith("data:"));
-                        if (certUrl && !isBlob) {
-                          return (
-                            <button
-                              onClick={() =>
-                                setViewingDoc({
-                                  label: `Certificado de ${u.label}`,
-                                  url: certUrl,
-                                })
-                              }
-                              className="w-full flex items-center gap-1.5 p-2 bg-emerald-50 border border-emerald-200 rounded text-left hover:bg-emerald-100"
-                            >
-                              <FileText className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                              <span className="text-[10px] font-medium text-slate-800 truncate flex-1">
-                                Certificado de Tradición
-                              </span>
-                              <span className="text-[9px] font-bold text-emerald-700">
-                                Ver
-                              </span>
-                            </button>
-                          );
-                        }
-                        return (
-                          <button
-                            onClick={() =>
-                              triggerUnitDocUpload(viewingProperty.id, u.id)
-                            }
-                            className={`w-full flex items-center gap-1.5 p-2 rounded border border-dashed text-left ${
-                              isBlob
-                                ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
-                                : "bg-white border-slate-200 hover:border-blue-400 hover:bg-blue-50"
-                            }`}
-                            title={
-                              isBlob
-                                ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
-                                : undefined
-                            }
-                          >
-                            <Upload
-                              className={`w-3 h-3 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
-                            />
-                            <span className="text-[10px] font-medium truncate flex-1 text-slate-700">
-                              {isBlob
-                                ? "Certificado (re-subir)"
-                                : "Certificado de Tradición"}
-                            </span>
-                            <span
-                              className={`text-[9px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
-                            >
-                              {isBlob ? "Re-subir" : "Subir"}
-                            </span>
-                          </button>
-                        );
-                      })()}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ── Documentos a nivel de propiedad (Predial + Certificado principal) ── */}
-          <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
-              Documentos de la Propiedad
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {(() => {
-                const items = [
-                  {
-                    slotKey: "predial",
-                    label: "Impuesto Predial",
-                    url:
-                      viewingProperty?.documents_property?.predial ??
-                      viewingProperty?.documents?.["Impuesto Predial"],
-                  },
-                  {
-                    slotKey: "certificado_tradicion:main",
-                    label: "Certificado de Tradición",
-                    url:
-                      viewingProperty?.documents_property
-                        ?.certificado_tradicion ??
-                      viewingProperty?.documents?.["Certificado de Tradición"],
-                  },
-                ];
-                return items.map((item) => {
-                  // FIX AC-15: si la URL es blob:, no es un archivo real —
-                  // mostramos "Re-subir" para que el agente reemplace la fila.
-                  const isBlob =
-                    !!item.url &&
-                    (item.url.startsWith("blob:") ||
-                      item.url.startsWith("data:"));
-                  if (item.url && !isBlob) {
-                    return (
-                      <button
-                        key={item.slotKey}
-                        onClick={() =>
-                          setViewingDoc({ label: item.label, url: item.url! })
-                        }
-                        className="flex items-center gap-2 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 hover:border-emerald-400 transition-colors text-left group"
-                        data-testid={`view-doc-${item.slotKey}`}
-                      >
-                        <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                        <span className="text-xs font-medium text-slate-800 truncate flex-1">
-                          {item.label}
-                        </span>
-                        <span className="text-[10px] font-bold text-emerald-700 group-hover:underline">
-                          Ver
-                        </span>
-                      </button>
-                    );
-                  }
-                  return (
-                    <button
-                      key={item.slotKey}
-                      onClick={() =>
-                        triggerPropertyDocUpload(
-                          viewingProperty.id,
-                          item.slotKey as
-                            | "predial"
-                            | "certificado_tradicion:main",
-                        )
-                      }
-                      className={`flex items-center gap-2 p-2.5 rounded-lg border border-dashed transition-colors text-left ${
-                        isBlob
-                          ? "bg-amber-50 border-amber-300 hover:border-amber-500 hover:bg-amber-100"
-                          : "bg-slate-50 border-slate-200 hover:border-blue-400 hover:bg-blue-50"
-                      }`}
-                      title={
-                        isBlob
-                          ? "Archivo previo perdido (URL local expirada) — re-subí para acceder"
-                          : undefined
-                      }
-                    >
-                      <Upload
-                        className={`w-4 h-4 flex-shrink-0 ${isBlob ? "text-amber-600" : "text-slate-400"}`}
-                      />
-                      <span
-                        className={`text-[11px] font-medium truncate flex-1 ${isBlob ? "text-slate-700" : "text-slate-500"}`}
-                      >
-                        {isBlob ? `${item.label} (re-subir)` : item.label}
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold ${isBlob ? "text-amber-700" : "text-blue-600"}`}
-                      >
-                        {isBlob ? "Re-subir" : "Subir"}
-                      </span>
-                    </button>
-                  );
-                });
-              })()}
-              {/* NOTA: Contrato de Mandato se muestra SOLO en la sección "Contratos" abajo. */}
-            </div>
-          </div>
-
-          {/* Contratos */}
-          <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
-              Contratos
-            </p>
-            <div className="grid grid-cols-1 gap-2">
-              <div className="w-full p-3 border border-blue-200 bg-blue-50/40 rounded-lg flex items-center gap-2">
-                <FileSignature className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                <div className="flex-1 text-left min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold text-slate-900">
-                      Contrato de Mandato
-                    </p>
-                    {(() => {
-                      // FIX AC-15: si mandatePdfUrl es blob:, NO mostrar "Firmado"
-                      // (sería mentira). Mostrar "⚠ Archivo perdido" en color
-                      // rojo para que el agente sepa que tiene que re-subir.
-                      const mandateUrl = viewingProperty?.mandatePdfUrl;
-                      const isBlobMandate =
-                        !!mandateUrl &&
-                        (mandateUrl.startsWith("blob:") ||
-                          mandateUrl.startsWith("data:"));
-                      if (isBlobMandate) {
-                        return (
-                          <span
-                            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-red-100 text-red-700"
-                            title="El PDF del mandato se perdió (URL local expirada). Re-subilo para activar la propiedad."
-                          >
-                            <AlertTriangle className="w-3 h-3" /> Archivo
-                            perdido
-                          </span>
-                        );
-                      }
-                      if (mandateUrl) {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                            <ClipboardCheck className="w-3 h-3" /> Firmado
-                          </span>
-                        );
-                      }
-                      return (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                          Pendiente
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    {viewingProperty?.mandateSignedAt
-                      ? `Firmado el ${new Date(viewingProperty.mandateSignedAt).toLocaleDateString("es-CO")}`
-                      : "No se subió durante la creación de la propiedad"}
-                  </p>
-                </div>
-                <div className="flex flex-col gap-1">
-                  {(() => {
-                    const mandateUrl = viewingProperty?.mandatePdfUrl;
-                    const isBlobMandate =
-                      !!mandateUrl &&
-                      (mandateUrl.startsWith("blob:") ||
-                        mandateUrl.startsWith("data:"));
-                    if (mandateUrl && !isBlobMandate) {
-                      // PDF firmado válido en Drive: Ver + Descargar + Reemplazar
-                      return (
-                        <>
-                          <button
-                            onClick={() =>
-                              setViewingDoc({
-                                label: "Contrato de Mandato",
-                                url: mandateUrl,
-                              })
-                            }
-                            className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
-                            title="Ver PDF firmado"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-slate-600" />
-                          </button>
-                          <button
-                            onClick={() =>
-                              handleDownloadMandato(viewingProperty)
-                            }
-                            className="p-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-100"
-                            title="Descargar PDF"
-                          >
-                            <Download className="w-3.5 h-3.5 text-blue-600" />
-                          </button>
-                          <button
-                            onClick={() =>
-                              triggerMandatoUpload(viewingProperty.id)
-                            }
-                            className="p-1.5 bg-white border border-amber-200 rounded-md hover:bg-amber-50"
-                            title="Reemplazar PDF (si quedó mal)"
-                            data-testid="replace-mandato"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
-                          </button>
-                        </>
-                      );
-                    }
-                    if (isBlobMandate) {
-                      // FIX AC-15: blob URL detectada. Sin botón "Ver" (no abriría
-                      // nada). Mostrar "Re-subir" prominentemente para arreglar.
-                      return (
-                        <>
-                          <button
-                            onClick={() =>
-                              triggerMandatoUpload(viewingProperty.id)
-                            }
-                            className="px-2 py-1.5 bg-amber-50 border border-amber-300 rounded-md hover:bg-amber-100 text-[10px] font-bold text-amber-700 flex items-center gap-1"
-                            title="El PDF se perdió (URL local expirada) — re-subilo desde tu equipo"
-                            data-testid="replace-mandato"
-                          >
-                            <RefreshCw className="w-3 h-3" /> Re-subir
-                          </button>
-                          <span className="text-[9px] text-red-600 text-right max-w-[120px] leading-tight">
-                            PDF previo perdido
-                          </span>
-                        </>
-                      );
-                    }
-                    // Sin mandato (caso normal): no ofrecer subir desde el detalle
-                    // (FIX WORKFLOW previo). El mandato se sube solo en el wizard.
-                    return (
-                      <div className="text-[10px] text-slate-400 italic text-right max-w-[140px] leading-tight">
-                        Subir solo durante la creación
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Acciones de Inventario */}
-          <div className="space-y-3">
-            <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
-              Inventarios
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => {
-                  setInventoryModalProperty(viewingProperty);
-                  setInventoryPhase("inicial");
-                }}
-              >
-                <ClipboardCheck className="w-4 h-4" />
-                Inicial
-              </Button>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => {
-                  setInventoryModalProperty(viewingProperty);
-                  setInventoryPhase("final");
-                }}
-              >
-                <ClipboardCheck className="w-4 h-4" />
-                Final
-              </Button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() =>
-                  void openPhotoGallery(viewingProperty, "inicial")
-                }
-                disabled={photoGalleryLoading}
-                data-testid={`view-photos-inicial-${viewingProperty?.id}`}
-              >
-                <Camera className="w-4 h-4" />
-                {photoGalleryLoading ? "Cargando…" : "Fotos captación"}
-              </Button>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={() => void openPhotoGallery(viewingProperty, "final")}
-                disabled={photoGalleryLoading}
-                data-testid={`view-photos-final-${viewingProperty?.id}`}
-              >
-                <Camera className="w-4 h-4" />
-                Fotos colocación
-              </Button>
-            </div>
-            <Button
-              className="w-full gap-2"
-              onClick={() => setComparingProperty(viewingProperty)}
-            >
-              <GitCompare className="w-4 h-4" />
-              Comparar Inicial vs Final
-            </Button>
-
-            {/* PDFs del inventario subidos a Drive — links directos */}
-            {(viewingProperty?.inventoryPdfUrl ||
-              viewingProperty?.inventory_captacion_pdf_url) && (
-              <div className="space-y-1.5 pt-1">
-                <p className="text-[10px] font-bold text-slate-400 uppercase">
-                  PDFs en Drive
-                </p>
-                {viewingProperty?.inventory_captacion_pdf_url && (
-                  <a
-                    href={driveDownloadUrl(
-                      viewingProperty.inventory_captacion_pdf_url,
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
-                    data-testid={`pdf-captacion-${viewingProperty.id}`}
-                  >
-                    <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-emerald-900 truncate">
-                      PDF Inventario de Captación
-                    </span>
-                    <Download className="w-3 h-3 text-emerald-600 ml-auto flex-shrink-0" />
-                  </a>
-                )}
-                {viewingProperty?.inventory_colocacion_pdf_url && (
-                  <a
-                    href={driveDownloadUrl(
-                      viewingProperty.inventory_colocacion_pdf_url,
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
-                    data-testid={`pdf-colocacion-${viewingProperty.id}`}
-                  >
-                    <FileText className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                    <span className="text-[11px] font-medium text-blue-900 truncate">
-                      PDF Inventario de Colocación
-                    </span>
-                    <Download className="w-3 h-3 text-blue-600 ml-auto flex-shrink-0" />
-                  </a>
-                )}
-                {viewingProperty?.inventoryPdfUrl &&
-                  !viewingProperty?.inventory_captacion_pdf_url && (
-                    <a
-                      href={driveDownloadUrl(viewingProperty.inventoryPdfUrl)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
-                    >
-                      <FileText className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                      <span className="text-[11px] font-medium text-emerald-900 truncate">
-                        PDF Inventario
-                      </span>
-                      <Download className="w-3 h-3 text-emerald-600 ml-auto flex-shrink-0" />
-                    </a>
-                  )}
-              </div>
-            )}
-
-            <p className="text-[10px] text-slate-500">
-              El Inicial se hace al captar la propiedad. El Final se hace al
-              entregar/devolver el inmueble. La comparativa genera el Acta de
-              Entrega.
-            </p>
-          </div>
-
-          {viewingProperty?.inventoryPhotos && (
-            <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-900 border-b border-slate-100 pb-2">
-                Inventario Fotográfico (legacy)
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {Object.entries(viewingProperty.inventoryPhotos).map(
-                  ([area, urls]: [string, any]) => (
-                    <div
-                      key={area}
-                      className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-100"
-                    >
-                      <Image className="w-4 h-4 text-emerald-500" />
-                      <span className="text-[10px] font-medium">
-                        {area} ({urls.length})
-                      </span>
-                    </div>
-                  ),
-                )}
-              </div>
-            </div>
-          )}
-
-          <Button
-            className="w-full mt-4"
-            onClick={() => setViewingProperty(null)}
-          >
-            Cerrar
-          </Button>
-        </div>
-      </Modal>
-
-      {/* ── Modal: confirmar descarte del draft del wizard ── */}
-      <Modal
+      {/* ── Modal: confirmar descarte del draft del wizard ── Commit 4 #5b. ── */}
+      <DiscardDraftModal
         isOpen={confirmDiscardDraft}
-        onClose={() => setConfirmDiscardDraft(false)}
-        title="¿Descartar el borrador?"
-        size="md"
-      >
-        <div className="space-y-4">
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-900">
-            <p className="font-semibold mb-1">
-              Vas a perder todo el progreso actual del wizard.
-            </p>
-            <p className="text-xs text-red-700">
-              Se borran: dirección, CHIP, folio, propietarios, unidades,
-              archivos subidos, fotos del inventario y observaciones. Esta
-              acción no se puede deshacer.
-            </p>
-          </div>
-          <p className="text-sm text-slate-600">
-            Si solo querés cerrar el wizard y volver después, usá el botón
-            <span className="font-semibold">
-              {" "}
-              "← Ver Inmuebles (guardar borrador)"{" "}
-            </span>
-            en la parte superior. El borrador se preserva automáticamente.
-          </p>
-          <div className="flex gap-3 pt-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => setConfirmDiscardDraft(false)}
-            >
-              Cancelar
-            </Button>
-            <Button variant="danger" className="flex-1" onClick={discardDraft}>
-              Sí, descartar borrador
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        hasPersistedProperty={!!wizardPropertyDbId}
+        onConfirm={discardDraft}
+        onCancel={() => setConfirmDiscardDraft(false)}
+      />
 
-      {/* ── Modal visor de documento ──
-          Montado DESPUÉS del Detalle del Inmueble para que aparezca ENCIMA
-          del detalle cuando el usuario hace click en "Ver". Al cerrar el
-          viewer, el detalle sigue abierto detrás — no hay que reabrirlo. */}
-      <Modal
+      {/* ── Modal visor de documento ── Commit 5 #5b extraído. ── */}
+      <DocViewerModal
         isOpen={!!viewingDoc}
+        label={viewingDoc?.label ?? ""}
+        url={viewingDoc?.url ?? null}
         onClose={() => {
           // BUG-021: helper central.
           revokeIfBlob(viewingDoc?.url);
           setViewingDoc(null);
         }}
-        title={`Visualizando: ${viewingDoc?.label}`}
-      >
-        <div className="w-full bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
-          {!viewingDoc?.url ? (
-            <div className="h-[40vh] flex items-center justify-center text-slate-400 text-sm">
-              No hay documento para mostrar
-            </div>
-          ) : viewingDoc.url.startsWith("blob:") ? (
-            <iframe
-              src={viewingDoc.url}
-              title={viewingDoc.label}
-              className="w-full h-[70vh]"
-            />
-          ) : (
-            // FIX Drive "Necesitas acceso": en vez de cargar directamente
-            // https://drive.google.com/file/d/X/view (que muestra login si la
-            // sesión de Google del browser ≠ la del OAuth de la app),
-            // pasamos por /api/drive/file que usa el token guardado en MySQL
-            // para servir el archivo. El browser lo trata como contenido propio.
-            <iframe
-              src={driveProxyUrl(viewingDoc.url)}
-              title={viewingDoc.label}
-              className="w-full h-[70vh]"
-            />
-          )}
-        </div>
-        <Button
-          className="w-full mt-4"
-          onClick={() => {
-            // BUG-021: helper central.
-            revokeIfBlob(viewingDoc?.url);
-            setViewingDoc(null);
-          }}
-        >
-          Cerrar
-        </Button>
-      </Modal>
+      />
 
       {/* Modal grande para Inventario Inicial/Final */}
       <Modal
@@ -3986,296 +3071,20 @@ export function PropertiesView({
 
       {/* ── Galería de fotos del inventario ──────────────────────────
           Carga fotos desde IndexedDB (donde se guardan hoy) agrupadas por área.
-          Click en miniatura → lightbox a pantalla completa con navegación. */}
-      <Modal
+          Click en miniatura → lightbox a pantalla completa con navegación.
+          Commit 3 #5b: extraído a `components/PhotoGalleryModal.tsx`. */}
+      <PhotoGalleryModal
         isOpen={!!photoGallery}
-        onClose={() => {
-          setPhotoGallery(null);
-          setLightboxIndex(null);
-        }}
-        title={`📷 Fotos del Inventario — ${photoGallery?.address ?? ""}`}
-        size="xl"
-      >
-        {photoGallery && (
-          <div className="space-y-5">
-            {photoGallery.photos.length === 0 ? (
-              <div className="p-8 text-center bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                <Camera className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-                <p className="text-sm text-slate-500">
-                  No hay fotos guardadas para este inventario.
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  Las fotos se guardan en el navegador (IndexedDB). Si limpiaste
-                  la caché del navegador, podés volver a tomarlas desde el botón
-                  "Inicial" / "Final".
-                </p>
-                {/* FIX Karpathy (jul-2026): si MySQL tiene las fotos (caso típico:
-                    IndexedDB stale post-self-heal o limpieza de caché), este
-                    botón re-hidrata manualmente. La galería SI ya intentó
-                    re-hidratarse al abrir — este botón es para reintento. */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setPhotoGalleryLoading(true);
-                    try {
-                      const res = await fetch(
-                        `/api/inventories?propertyId=${encodeURIComponent(photoGallery.propertyId)}`,
-                      );
-                      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                      const data = await res.json();
-                      const remote = (data.inventories ?? []).find(
-                        (i: any) =>
-                          i.phase === "inicial" || i.phase === "final",
-                      );
-                      if (!remote) {
-                        showToast(
-                          "No se encontró inventario en el servidor",
-                          "error",
-                        );
-                        return;
-                      }
-                      const remotePhotos = normalizePhotosArray(remote.photos);
-                      if (remotePhotos.length === 0) {
-                        showToast(
-                          "El servidor tampoco tiene fotos para este inventario",
-                          "error",
-                        );
-                        return;
-                      }
-                      // Re-hidratar IndexedDB
-                      const inv = {
-                        id: remote.id,
-                        propertyId: remote.property_id,
-                        phase: remote.phase,
-                        propertyType: remote.property_type,
-                        counters: remote.counters ?? {},
-                        areas: remote.areas ?? [],
-                        photos: remotePhotos,
-                        signatures: remote.signatures ?? [],
-                        customAreas: remote.custom_areas ?? [],
-                        signedAt: remote.signed_at,
-                        createdAt: remote.created_at,
-                        updatedAt: remote.updated_at,
-                      };
-                      await inventoryDB.saveInventory(inv as any);
-                      for (const p of remotePhotos) {
-                        if ((p as any)?.dataUrl) {
-                          await inventoryDB.savePhoto({
-                            id: (p as any).id,
-                            inventoryId: remote.id,
-                            dataUrl: (p as any).dataUrl,
-                            areaId: (p as any).areaId,
-                            fileName: (p as any).fileName,
-                            takenAt: (p as any).takenAt,
-                          });
-                        }
-                      }
-                      showToast(
-                        `✓ ${remotePhotos.length} fotos recuperadas del servidor`,
-                        "success",
-                      );
-                      // Cerrar y reabrir la galería para que se muestren
-                      setPhotoGallery(null);
-                      void openPhotoGallery(
-                        {
-                          id: photoGallery.propertyId,
-                          address: photoGallery.address,
-                        },
-                        remote.phase as "inicial" | "final",
-                      );
-                    } catch (err: any) {
-                      console.error("[gallery] manual re-hydrate failed:", err);
-                      showToast(
-                        `Error recuperando fotos: ${err?.message ?? err}`,
-                        "error",
-                      );
-                    } finally {
-                      setPhotoGalleryLoading(false);
-                    }
-                  }}
-                  disabled={photoGalleryLoading}
-                  className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors disabled:opacity-50"
-                  data-testid="gallery-recover-from-mysql"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${photoGalleryLoading ? "animate-spin" : ""}`}
-                  />
-                  Recuperar fotos del servidor
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-slate-500">
-                    <strong>{photoGallery.photos.length}</strong> fotos en total
-                    — click para ver en grande.
-                  </p>
-                  <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
-                    Almacenamiento local del navegador
-                  </p>
-                </div>
-                {/* Agrupar fotos por área. `photoGallery.photos` siempre es array
-                    (normalizado en `openPhotoGallery` via `normalizePhotosArray`),
-                    pero usamos `?? []` por defensa contra cualquier race futuro. */}
-                {Object.entries(
-                  (photoGallery.photos ?? []).reduce<Record<string, any[]>>(
-                    (acc, p) => {
-                      (acc[p.areaLabel] ??= []).push(p);
-                      return acc;
-                    },
-                    {} as Record<string, any[]>,
-                  ),
-                ).map(([areaLabel, photos]: [string, any[]]) => (
-                  <div key={areaLabel} className="space-y-2">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-1">
-                      <p className="text-xs font-bold text-slate-700 uppercase">
-                        {areaLabel}
-                      </p>
-                      <span className="text-[10px] text-slate-400">
-                        {photos.length} foto{photos.length !== 1 ? "s" : ""}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {photos.map((photo, i) => {
-                        const globalIndex = photoGallery.photos.findIndex(
-                          (p) => p.id === photo.id,
-                        );
-                        return (
-                          <button
-                            key={photo.id}
-                            onClick={() => setLightboxIndex(globalIndex)}
-                            className="relative aspect-square overflow-hidden rounded-lg border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group bg-slate-100"
-                            title={`${areaLabel} — foto ${i + 1}`}
-                          >
-                            <img
-                              src={photo.dataUrl}
-                              alt={`${areaLabel} ${i + 1}`}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                              loading="lazy"
-                            />
-                            <span className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">
-                              {i + 1}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                setPhotoGallery(null);
-                setLightboxIndex(null);
-              }}
-            >
-              Cerrar
-            </Button>
-          </div>
-        )}
-      </Modal>
-
-      {/* ── Lightbox para ver foto a tamaño completo ───────────────── */}
-      {lightboxIndex !== null &&
-        photoGallery &&
-        photoGallery.photos[lightboxIndex] && (
-          <div
-            className="fixed inset-0 z-[300] bg-black/90 flex items-center justify-center p-4"
-            onClick={() => setLightboxIndex(null)}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setLightboxIndex(null);
-              }}
-              className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-              title="Cerrar (Esc)"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            {lightboxIndex > 0 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxIndex(lightboxIndex - 1);
-                }}
-                className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-                title="Anterior (←)"
-              >
-                <ChevronLeft className="w-7 h-7" />
-              </button>
-            )}
-            {lightboxIndex < photoGallery.photos.length - 1 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxIndex(lightboxIndex + 1);
-                }}
-                className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
-                title="Siguiente (→)"
-              >
-                <ChevronRight className="w-7 h-7" />
-              </button>
-            )}
-            <div
-              className="max-w-[90vw] max-h-[85vh] flex flex-col items-center"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img
-                src={photoGallery.photos[lightboxIndex].dataUrl}
-                alt={photoGallery.photos[lightboxIndex].areaLabel}
-                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
-              />
-              <div className="mt-3 px-4 py-2 bg-white/10 rounded-lg text-white text-sm">
-                <strong>{photoGallery.photos[lightboxIndex].areaLabel}</strong>
-                {" · "}
-                foto {lightboxIndex + 1} de {photoGallery.photos.length}
-              </div>
-            </div>
-            {/* Navegación con teclado */}
-          </div>
-        )}
-      {/* Listener de teclado para flechas/Esc en el lightbox */}
-      {lightboxIndex !== null && (
-        <KeyboardHandler
-          onPrev={() =>
-            setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i))
-          }
-          onNext={() =>
-            setLightboxIndex((i) =>
-              i !== null && photoGallery && i < photoGallery.photos.length - 1
-                ? i + 1
-                : i,
-            )
-          }
-          onClose={() => setLightboxIndex(null)}
-        />
-      )}
+        propertyId={photoGallery?.propertyId ?? null}
+        address={photoGallery?.address ?? ""}
+        photos={photoGallery?.photos ?? []}
+        loading={photoGalleryLoading}
+        onClose={() => setPhotoGallery(null)}
+        onRecoverFromServer={handleRecoverGalleryFromServer}
+      />
     </>
   );
 }
 
-/** Listener global de teclado para el lightbox (Esc cierra, ←/→ navega). */
-function KeyboardHandler({
-  onPrev,
-  onNext,
-  onClose,
-}: {
-  onPrev: () => void;
-  onNext: () => void;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      else if (e.key === "ArrowLeft") onPrev();
-      else if (e.key === "ArrowRight") onNext();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onPrev, onNext, onClose]);
-  return null;
-}
+// KeyboardHandler eliminado en Commit 3 refactor #5b (la navegación por
+// teclado del lightbox ahora vive dentro de `PhotoGalleryModal`).
