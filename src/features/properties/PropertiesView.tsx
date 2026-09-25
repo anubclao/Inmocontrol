@@ -57,6 +57,8 @@ import {
 } from "./components/StepBasic";
 import { StepDocs, type UploadedDocsMap } from "./components/StepDocs";
 import { StepInventory } from "./components/StepInventory";
+// Commit 3 refactor #5: slotKeyHelpers extraído del monolito.
+import { slotKeyToLabel, slotKeyToFilename } from "./utils/slotKeyHelpers";
 import { revokeIfBlob, createBlobUrl } from "../../shared/lib/blob";
 import { Role } from "../auth/permissions";
 import { useContractStore } from "../contracts/contractStore";
@@ -130,86 +132,7 @@ function allDocsComplete(p: any): boolean {
   return true;
 }
 
-/** Etiqueta humana de un slotKey para mostrar al usuario. Helper para los
- *  handlers que vienen del flujo de file upload (donde ya no tenemos el
- *  contexto de owners/units a mano). */
-function slotKeyToLabel(
-  slotKey: string,
-  owners?: WizardOwner[] | PropertyOwner[],
-  units?: WizardUnit[] | PropertyUnit[],
-): string {
-  if (slotKey === "predial") return "Impuesto Predial";
-  if (slotKey === "mandato") return "Contrato de Mandato";
-  if (slotKey === "certificado_tradicion:main")
-    return "Certificado de Tradición";
-  if (slotKey.startsWith("cedula:")) {
-    const id = slotKey.slice("cedula:".length);
-    const o = owners?.find?.((x) => x.id === id);
-    return o ? `Cédula de ${o.name}` : "Cédula";
-  }
-  if (slotKey.startsWith("rut:")) {
-    const id = slotKey.slice("rut:".length);
-    const o = owners?.find?.((x) => x.id === id);
-    return o ? `RUT de ${o.name}` : "RUT";
-  }
-  if (slotKey.startsWith("certificado_tradicion:")) {
-    const id = slotKey.slice("certificado_tradicion:".length);
-    const u = units?.find?.((x) => x.id === id);
-    return u ? `Certificado de ${u.label}` : "Certificado de Tradición";
-  }
-  return slotKey;
-}
-
-/** Normaliza un texto para usarlo como nombre de archivo:
- *  - Quita tildes y eñes
- *  - Reemplaza espacios y caracteres no-alfanuméricos por _
- *  - Trim de _ al inicio/final
- *  - Colapsa múltiples _ en uno solo
- *  Ej: "Cédula de Tatiana Prieto" → "Cedula_de_Tatiana_Prieto" */
-function normalizeFilename(input: string): string {
-  return input
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quitar diacríticos
-    .replace(/ñ/gi, "n") // ñ/Ñ → n
-    .replace(/[^a-zA-Z0-9]+/g, "_") // no-alfanumérico → _
-    .replace(/_+/g, "_") // colapsar __
-    .replace(/^_|_$/g, ""); // trim _
-}
-
-/** Genera el nombre del archivo PDF para un slotKey, incluyendo el nombre
- *  del owner o unit asociado. Se usa al subir a Drive para que el archivo
- *  quede "bautizado" con info legible (no como "cedula_uuid.pdf").
- *  Siempre termina en .pdf. */
-function slotKeyToFilename(
-  slotKey: string,
-  owners?: WizardOwner[] | PropertyOwner[],
-  units?: WizardUnit[] | PropertyUnit[],
-): string {
-  // Casos directos: a nivel de propiedad (sin owner/unit).
-  if (slotKey === "predial") return "Predial.pdf";
-  if (slotKey === "mandato") return "Contrato_Mandato.pdf";
-  if (slotKey === "certificado_tradicion:main")
-    return "Certificado_Unidad_Principal.pdf";
-
-  if (slotKey.startsWith("cedula:")) {
-    const id = slotKey.slice("cedula:".length);
-    const o = owners?.find?.((x) => x.id === id);
-    return o ? `Cedula_${normalizeFilename(o.name)}.pdf` : "Cedula.pdf";
-  }
-  if (slotKey.startsWith("rut:")) {
-    const id = slotKey.slice("rut:".length);
-    const o = owners?.find?.((x) => x.id === id);
-    return o ? `RUT_${normalizeFilename(o.name)}.pdf` : "RUT.pdf";
-  }
-  if (slotKey.startsWith("certificado_tradicion:")) {
-    const id = slotKey.slice("certificado_tradicion:".length);
-    const u = units?.find?.((x) => x.id === id);
-    return u
-      ? `Certificado_${normalizeFilename(u.label)}.pdf`
-      : "Certificado_Tradicion.pdf";
-  }
-  return `${normalizeFilename(slotKey)}.pdf`;
-}
+// slotKeyToLabel y slotKeyToFilename se importan de ./utils/slotKeyHelpers (Commit 3 refactor #5).
 
 export function PropertiesView({
   showToast,

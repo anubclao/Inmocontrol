@@ -20,7 +20,7 @@
     "clean": "node scripts/clean.mjs",
     "lint": "tsc --noEmit",
     "start": "NODE_ENV=production node dist-server/server.js",
-    "test": "node --test --import tsx tests/settlement.test.ts tests/numeroALetras.test.ts tests/permissions-matrix.test.ts",
+    "test": "node --test --import tsx tests/settlement.test.ts tests/numeroALetras.test.ts tests/permissions-matrix.test.ts tests/slotKeyHelpers.test.ts",
     "smoke": "node --import tsx scripts/smoke-test-e2e.mjs",
     "test:auth": "node scripts/test-auth-e2e.mjs",
     "backup": "node scripts/backup-db.mjs",
