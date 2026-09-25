@@ -1,56 +1,62 @@
 /**
- * Definición de roles y permisos para InmoControl (cliente).
+ * server/lib/permissions.ts — Matriz de permisos server-side.
  *
- * Esta matriz DEBE estar sincronizada con `server/lib/permissions.ts`.
- * El test `tests/permissions-matrix.test.ts` compara ambas y falla si
- * difieren (drift detection).
+ * Single source of truth para `requireRole(action)` en el backend.
+ * El frontend (src/features/auth/permissions.ts) mantiene una copia
+ * sincronizada. El test `tests/permissions-matrix.test.ts` compara ambas
+ * matrices y falla si difieren (drift detection).
  *
- * Si cambiás un permiso acá, cambiálo también en el server (o viceversa).
+ * Si cambiás un permiso acá, cambiálo también en el frontend (o al revés).
  *
  * Spec: docs/specs/fix-issue-permissions-by-endpoint.md
+ * Verifier: tests/verifiers/fix-issue-permissions-by-endpoint.md
  */
 
 export type Role = 'admin' | 'propietario' | 'inquilino';
 
-export interface RolePermissions {
+/**
+ * Catálogo completo de acciones. Si agregás una acción nueva, agregá
+ * un campo acá Y en `src/features/auth/permissions.ts`. El test de
+ * drift va a fallar si difieren.
+ */
+export type Action =
   // Properties
-  canAddProperty: boolean;
-  canEditProperty: boolean;
-  canDeleteProperty: boolean;
+  | 'canAddProperty'
+  | 'canEditProperty'
+  | 'canDeleteProperty'
   // Tenants
-  canAddTenant: boolean;
-  canEditTenant: boolean;
-  canDeleteTenant: boolean;
+  | 'canAddTenant'
+  | 'canEditTenant'
+  | 'canDeleteTenant'
   // Financial
-  canAddFinancial: boolean;
-  canDeleteFinancial: boolean;
+  | 'canAddFinancial'
+  | 'canDeleteFinancial'
   // Contracts
-  canAddContract: boolean;
-  canEditContract: boolean;
-  canDeleteContract: boolean;
+  | 'canAddContract'
+  | 'canEditContract'
+  | 'canDeleteContract'
   // Inventory
-  canAddInventory: boolean;
-  canEditInventory: boolean;
-  canDeleteInventory: boolean;
+  | 'canAddInventory'
+  | 'canEditInventory'
+  | 'canDeleteInventory'
   // Billing
-  canSendInvoice: boolean;
-  canRegisterPayment: boolean;
+  | 'canSendInvoice'
+  | 'canRegisterPayment'
   // Owner statement
-  canViewOwnerStatement: boolean;
-  canRegisterOwnerPayout: boolean;
+  | 'canViewOwnerStatement'
+  | 'canRegisterOwnerPayout'
   // Drive
-  canManageDrive: boolean;
+  | 'canManageDrive'
   // Notifications
-  canManageNotifications: boolean;
+  | 'canManageNotifications'
   // SaaS billing
-  canManageSaasBilling: boolean;
+  | 'canManageSaasBilling'
   // Reports
-  canViewReports: boolean;
+  | 'canViewReports'
   // Settings
-  canViewSettings: boolean;
-}
+  | 'canViewSettings';
 
-export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
+export const ROLE_PERMISSIONS: Record<Role, Record<Action, boolean>> = {
   admin: {
     canAddProperty: true,
     canEditProperty: true,
@@ -128,8 +134,12 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
   },
 };
 
-/** Helper de uso: `can(role, 'canAddProperty')` */
-export const can = (role: Role | null | undefined, action: keyof RolePermissions): boolean => {
+/**
+ * Helper: chequea si un role tiene permiso para una acción.
+ * Default deny: si el role es null/undefined o la acción no existe,
+ * devuelve false.
+ */
+export function can(role: Role | null | undefined, action: Action): boolean {
   if (!role) return false;
   return ROLE_PERMISSIONS[role]?.[action] ?? false;
-};
+}

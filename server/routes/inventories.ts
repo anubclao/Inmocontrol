@@ -37,6 +37,12 @@ function withTimeout<T = any>(
 
 const router = express.Router();
 
+// FIX #1/#2 (P0 seguridad): requireAuth en todas las rutas de inventories.
+import { requireAuth } from "./auth.js";
+// fix-issue-permissions-by-endpoint: requireRole valida acción específica.
+import { requireRole } from "../middleware/requireRole.js";
+router.use(requireAuth);
+
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -106,40 +112,36 @@ async function getOrCreateSubfolder(
  * GET /api/inventories?propertyId=...
  * Lista los inventarios (inicial y final) de una propiedad.
  */
-router.get("/", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get("/", asyncHandler(async (req, res) => {
   const { propertyId } = req.query as Record<string, string>;
   if (!propertyId) {
     res.status(400).json({ error: "Falta propertyId" });
     return;
   }
-  try {
-    // FIX: el JSON `photos` puede pesar >500KB por fila (base64). MySQL
-    // "Out of sort memory" cuando ORDER BY usa una columna de tamaño comparable.
-    // Solución: primero listar IDs (liviano), luego traer las filas completas
-    // sin ORDER BY (solo 1 fila por phase normalmente).
-    const [idRows] = await pool.query<any[]>(
-      `SELECT id, phase FROM inventories WHERE property_id = ? ORDER BY id DESC`,
-      [propertyId],
-    );
-    if (idRows.length === 0) {
-      res.json({ inventories: [] });
-      return;
-    }
-    const ids = idRows.map((r) => r.id);
-    const [rows] = await pool.query<any[]>(
-      `SELECT id, property_id, contract_id, phase, property_type, counters, areas, photos,
-              signatures, custom_areas, signed_at, created_at, updated_at
-       FROM inventories
-       WHERE id IN (${ids.map(() => "?").join(",")})`,
-      ids,
-    );
-    // mysql2 ya devuelve JSON como parsed object
-    res.json({ inventories: rows });
-  } catch (err: any) {
-    console.error("[GET /api/inventories]", err.message);
-    res.status(500).json({ error: err.message });
+  // FIX: el JSON `photos` puede pesar >500KB por fila (base64). MySQL
+  // "Out of sort memory" cuando ORDER BY usa una columna de tamaño comparable.
+  // Solución: primero listar IDs (liviano), luego traer las filas completas
+  // sin ORDER BY (solo 1 fila por phase normalmente).
+  const [idRows] = await pool.query<any[]>(
+    `SELECT id, phase FROM inventories WHERE property_id = ? ORDER BY id DESC`,
+    [propertyId],
+  );
+  if (idRows.length === 0) {
+    res.json({ inventories: [] });
+    return;
   }
-});
+  const ids = idRows.map((r) => r.id);
+  const [rows] = await pool.query<any[]>(
+    `SELECT id, property_id, contract_id, phase, property_type, counters, areas, photos,
+            signatures, custom_areas, signed_at, created_at, updated_at
+     FROM inventories
+     WHERE id IN (${ids.map(() => "?").join(",")})`,
+    ids,
+  );
+  // mysql2 ya devuelve JSON como parsed object
+  res.json({ inventories: rows });
+}));
 
 /**
  * POST /api/inventories
@@ -149,6 +151,7 @@ router.get("/", async (req, res) => {
  */
 router.post(
   "/",
+  requireRole("canAddInventory"),
   asyncHandler(async (req, res) => {
     const body = req.body as {
       id?: string;
@@ -226,7 +229,8 @@ router.post(
  * El frontend sigue guardando las fotos en IndexedDB como cache local de
  * lectura rápida, pero Drive queda como fuente de verdad (cross-device).
  */
-router.post("/upload-photos", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post("/upload-photos", requireRole("canAddInventory"), asyncHandler(async (req, res) => {
   const { propertyId, phase, photos } = req.body as {
     propertyId: string;
     phase: "inicial" | "final";
@@ -329,7 +333,7 @@ router.post("/upload-photos", async (req, res) => {
     uploaded,
     failed,
   });
-});
+}));
 
 /**
  * POST /api/inventories/upload-pdf
@@ -337,7 +341,8 @@ router.post("/upload-photos", async (req, res) => {
  * Body: { propertyId, phase ('inicial'|'final'), base64Data, inventoryDate (YYYY-MM-DD)? }
  * Guarda la URL en la propiedad (drive_folder_path) para referencia futura.
  */
-router.post("/upload-pdf", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post("/upload-pdf", requireRole("canAddInventory"), asyncHandler(async (req, res) => {
   const { propertyId, phase, base64Data, inventoryDate } = req.body as {
     propertyId: string;
     phase: "inicial" | "final";
@@ -446,6 +451,6 @@ router.post("/upload-pdf", async (req, res) => {
     webViewLink: uploaded.data.webViewLink,
     folderPath: `${propRows[0].drive_folder_path ?? ""}/Inventarios`,
   });
-});
+}));
 
 export default router;

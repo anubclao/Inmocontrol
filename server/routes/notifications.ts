@@ -35,8 +35,14 @@
  */
 
 import { Router } from 'express';
+// FIX #2 (P0 seguridad): requireAuth en notificaciones (Twilio WhatsApp + email).
+import { requireAuth } from './auth.js';
+// fix-issue-permissions-by-endpoint: gestión de canales requiere canManageNotifications.
+import { requireRole } from '../middleware/requireRole.js';
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 const router = Router();
+router.use(requireAuth);
 
 interface TwilioConfig {
   accountSid: string;
@@ -84,7 +90,8 @@ function normalizeColombianPhone(input: string): string | null {
 }
 
 // ─── GET /whatsapp/status ────────────────────────────────────────────────
-router.get('/whatsapp/status', async (_req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/whatsapp/status', asyncHandler(async (_req, res) => {
   const cfg = readTwilioConfig();
   if (!cfg) {
     return res.json({
@@ -110,10 +117,11 @@ router.get('/whatsapp/status', async (_req, res) => {
     from: cfg.whatsappFrom,
     message: 'Conectado. Listo para enviar.',
   });
-});
+}));
 
 // ─── POST /whatsapp (uso interno del engine de notificaciones) ──────────
-router.post('/whatsapp', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/whatsapp', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
   const { to, body, alertId } = req.body as { to?: string; body?: string; alertId?: string };
   if (!to || !body) {
     return res.status(400).json({ error: 'Faltan campos: to, body' });
@@ -136,13 +144,13 @@ router.post('/whatsapp', async (req, res) => {
     console.info(`[notifications/whatsapp] alert=${alertId ?? 'n/a'} to=${phone} sid=${msg.sid} status=${msg.status}`);
     res.json({ ok: true, sid: msg.sid, status: msg.status, to: phone });
   } catch (err: any) {
-    console.error('[notifications/whatsapp] Error:', err.message);
     res.status(500).json({ error: err.message ?? 'Twilio error', code: err.code });
   }
-});
+}));
 
 // ─── POST /whatsapp/test (botón "Probar" del modal de Configuración) ───
-router.post('/whatsapp/test', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/whatsapp/test', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
   const { to } = req.body as { to?: string };
   if (!to) return res.status(400).json({ error: 'Falta campo: to' });
   const phone = normalizeColombianPhone(to);
@@ -162,7 +170,7 @@ router.post('/whatsapp/test', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message ?? 'Twilio error', code: err.code });
   }
-});
+}));
 
 // ════════════════════════════════════════════════════════════════════════════
 // EMAIL (Fase 7)
@@ -267,7 +275,8 @@ function readEmailFallback(): NonNullable<EmailRequestBody['mailbox']> | null {
 }
 
 // ─── GET /email/status ────────────────────────────────────────────────────
-router.get('/email/status', async (_req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/email/status', asyncHandler(async (_req, res) => {
   const nodemailer = await getNodemailer();
   const fallback = readEmailFallback();
   res.json({
@@ -280,11 +289,12 @@ router.get('/email/status', async (_req, res) => {
       ? 'Sin fallback centralizado. Configura los buzones en Settings → Integraciones.'
       : 'Listo. Puedes usar buzones por agencia o el fallback centralizado.',
   });
-});
+}));
 
 // ─── POST /email/verify ───────────────────────────────────────────────────
 /** Verifica la conexión SMTP/SendGrid de un mailbox. No envía. */
-router.post('/email/verify', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/email/verify', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
   const nodemailer = await getNodemailer();
   if (!nodemailer) {
     return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED', message: 'Ejecuta `npm install`' });
@@ -298,14 +308,14 @@ router.post('/email/verify', async (req, res) => {
     await transporter.verify();
     res.json({ ok: true, message: 'Conexión SMTP/SendGrid verificada correctamente.' });
   } catch (err: any) {
-    console.error('[notifications/email/verify] Error:', err.message);
     res.status(400).json({ ok: false, error: err.message ?? 'Verify failed', code: err.code });
   }
-});
+}));
 
 // ─── POST /email/test ─────────────────────────────────────────────────────
 /** Envía un email de prueba al destinatario que diga el form. */
-router.post('/email/test', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/email/test', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
   const nodemailer = await getNodemailer();
   if (!nodemailer) {
     return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED' });
@@ -335,13 +345,13 @@ router.post('/email/test', async (req, res) => {
     console.info(`[notifications/email/test] to=${to} provider=${providerLabel} messageId=${info.messageId}`);
     res.json({ ok: true, messageId: info.messageId, to, provider: providerLabel });
   } catch (err: any) {
-    console.error('[notifications/email/test] Error:', err.message);
     res.status(500).json({ ok: false, error: err.message ?? 'Send failed', code: err.code });
   }
-});
+}));
 
 // ─── POST /email/send (uso interno del engine) ────────────────────────────
-router.post('/email/send', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/email/send', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
   const nodemailer = await getNodemailer();
   if (!nodemailer) {
     return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED' });
@@ -378,10 +388,9 @@ router.post('/email/send', async (req, res) => {
     console.info(`[notifications/email/send] alert=${alertId ?? 'n/a'} to=${to} provider=${providerLabel} messageId=${info.messageId}`);
     res.json({ ok: true, messageId: info.messageId, to, provider: providerLabel });
   } catch (err: any) {
-    console.error('[notifications/email/send] Error:', err.message);
     res.status(500).json({ ok: false, error: err.message ?? 'Send failed', code: err.code });
   }
-});
+}));
 
 /** Escapa HTML básico para evitar inyecciones en el subject/body. */
 function escapeHtml(s: string): string {

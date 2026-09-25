@@ -5,9 +5,20 @@ import { google } from 'googleapis';
 import crypto from 'crypto';
 import { Readable } from 'stream';
 import pool, { checkDb } from '../db.js';
+// FIX #2 (P0 seguridad): requireAuth en endpoints privados de Google (upload-pdf, file proxy).
+// Las rutas de OAuth callback NO requieren auth (usuario no logueado todavía).
+import { requireAuth } from './auth.js';
+// fix-issue-permissions-by-endpoint: uploads a Drive requieren canManageDrive.
+import { requireRole } from '../middleware/requireRole.js';
 
 const router = express.Router();
 import { isTokenExpiringSoon } from '../lib/googleAuth.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
+
+// FIX #2 (P0 seguridad): las rutas de OAuth callback (`/auth/google`,
+// `/auth/google/callback`) NO requieren auth — el usuario todavía no está
+// logueado cuando inicia el flujo OAuth. Las rutas de Drive SÍ requieren
+// auth (se aplican individualmente más abajo).
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -45,7 +56,9 @@ const FRONTEND_REDIRECT_BASE = (
 ).replace(/\/+$/, '');  // sin slash final para concatenar limpio
 
 /** Callback de Google — intercambia code por tokens y guarda en MySQL. */
-router.get('/auth/google/callback', async (req, res) => {
+// BUG-029: migrado a asyncHandler. Conserva el redirect en error en vez de 500 HTML,
+// porque el browser está esperando un redirect, no un JSON.
+router.get('/auth/google/callback', asyncHandler(async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
   console.log('[OAuth] Callback recibido:', { error, hasCode: !!code, codePreview: code ? code.slice(0, 20) + '...' : null });
 
@@ -99,98 +112,95 @@ router.get('/auth/google/callback', async (req, res) => {
     const detail = err?.response?.data?.error || err?.message || 'token_exchange_failed';
     res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_error=${encodeURIComponent(detail)}`);
   }
-});
+}));
 
-/** Subir un archivo PDF al Drive del usuario autenticado. */
-router.post('/upload/google-drive', async (req, res) => {
-  try {
-    const { propertyId, docType, fileName, base64Data } = req.body as {
-      propertyId: string;
-      docType: string;
-      fileName: string;
-      base64Data: string;
-    };
+// FIX #2: las rutas privadas de Google Drive requieren auth.
+// BUG-029: migrado a asyncHandler.
+router.post('/upload/google-drive', requireAuth, requireRole('canManageDrive'), asyncHandler(async (req, res) => {
+  const { propertyId, docType, fileName, base64Data } = req.body as {
+    propertyId: string;
+    docType: string;
+    fileName: string;
+    base64Data: string;
+  };
 
-    if (!propertyId || !docType || !base64Data) {
-      res.status(400).json({ error: 'Faltan campos requeridos: propertyId, docType, base64Data' });
-      return;
-    }
-
-    // Obtiene los tokens del usuario desde MySQL
-    // Por ahora usamos 'default_user' — cuando haya auth real, usar el user_id real
-    const userId = 'default_user';
-    const [rows] = await pool.query<any[]>(
-      'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-      [userId, 'google_drive'],
-    );
-
-    if (!rows.length || !rows[0].access_token) {
-      res.status(401).json({ error: 'No connected to Google Drive. Please connect first.' });
-      return;
-    }
-
-    const { access_token, refresh_token, expiry_date, drive_folder_id } = rows[0];
-
-    // Recrea el cliente con los tokens guardados
-    oauth2Client.setCredentials({
-      access_token,
-      refresh_token: refresh_token ?? undefined,
-      expiry_date: expiry_date ?? undefined,
-    });
-
-    // Renueva token si está próximo a expirar
-    if (isTokenExpiringSoon(expiry_date)) {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      oauth2Client.setCredentials(credentials);
-      // Actualiza tokens renovados en MySQL
-      await pool.query(
-        'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
-        [credentials.access_token, credentials.expiry_date, userId, 'google_drive'],
-      );
-    }
-
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-    // Subcarpeta por propiedad: "InmoControl / {propertyId}"
-    const propFolderId = await getOrCreatePropertyFolder(drive, drive_folder_id, propertyId);
-
-    // Limpia el base64 y sube
-    const buffer = Buffer.from(base64Data.replace(/^data:application\/pdf;base64,/, ''), 'base64');
-    const mimeType = 'application/pdf';
-    const finalFileName = `${docType}_${fileName}`;
-
-    const uploadedFile = await drive.files.create({
-      requestBody: {
-        name: finalFileName,
-        parents: [propFolderId],
-      },
-      media: { mimeType, body: buffer },
-      fields: 'id, name, webViewLink',
-    });
-
-    // Hacer el archivo públicamente visible (el usuario puede compartir el link)
-    await drive.permissions.create({
-      fileId: uploadedFile.data.id!,
-      requestBody: {
-        role: 'reader',
-        type: 'anyone',
-      },
-    });
-
-    res.json({
-      success: true,
-      fileId: uploadedFile.data.id,
-      fileName: uploadedFile.data.name,
-      webViewLink: uploadedFile.data.webViewLink,
-    });
-  } catch (err: any) {
-    console.error('[Google Drive] Upload error:', err);
-    res.status(500).json({ error: err.message });
+  if (!propertyId || !docType || !base64Data) {
+    res.status(400).json({ error: 'Faltan campos requeridos: propertyId, docType, base64Data' });
+    return;
   }
-});
+
+  // Obtiene los tokens del usuario desde MySQL
+  // Por ahora usamos 'default_user' — cuando haya auth real, usar el user_id real
+  const userId = 'default_user';
+  const [rows] = await pool.query<any[]>(
+    'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
+    [userId, 'google_drive'],
+  );
+
+  if (!rows.length || !rows[0].access_token) {
+    res.status(401).json({ error: 'No connected to Google Drive. Please connect first.' });
+    return;
+  }
+
+  const { access_token, refresh_token, expiry_date, drive_folder_id } = rows[0];
+
+  // Recrea el cliente con los tokens guardados
+  oauth2Client.setCredentials({
+    access_token,
+    refresh_token: refresh_token ?? undefined,
+    expiry_date: expiry_date ?? undefined,
+  });
+
+  // Renueva token si está próximo a expirar
+  if (isTokenExpiringSoon(expiry_date)) {
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    oauth2Client.setCredentials(credentials);
+    // Actualiza tokens renovados en MySQL
+    await pool.query(
+      'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
+      [credentials.access_token, credentials.expiry_date, userId, 'google_drive'],
+    );
+  }
+
+  const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+  // Subcarpeta por propiedad: "InmoControl / {propertyId}"
+  const propFolderId = await getOrCreatePropertyFolder(drive, drive_folder_id, propertyId);
+
+  // Limpia el base64 y sube
+  const buffer = Buffer.from(base64Data.replace(/^data:application\/pdf;base64,/, ''), 'base64');
+  const mimeType = 'application/pdf';
+  const finalFileName = `${docType}_${fileName}`;
+
+  const uploadedFile = await drive.files.create({
+    requestBody: {
+      name: finalFileName,
+      parents: [propFolderId],
+    },
+    media: { mimeType, body: buffer },
+    fields: 'id, name, webViewLink',
+  });
+
+  // Hacer el archivo públicamente visible (el usuario puede compartir el link)
+  await drive.permissions.create({
+    fileId: uploadedFile.data.id!,
+    requestBody: {
+      role: 'reader',
+      type: 'anyone',
+    },
+  });
+
+  res.json({
+    success: true,
+    fileId: uploadedFile.data.id,
+    fileName: uploadedFile.data.name,
+    webViewLink: uploadedFile.data.webViewLink,
+  });
+}));
 
 /** Estado de conexión del usuario. */
-router.get('/status/google-drive', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/status/google-drive', requireAuth, asyncHandler(async (req, res) => {
   const userId = 'default_user';
   const [rows] = await pool.query<any[]>(
     `SELECT drive_folder_id, access_token, refresh_token, expiry_date
@@ -235,21 +245,23 @@ router.get('/status/google-drive', async (req, res) => {
   }
 
   res.json({ connected: true, folderId: rows[0].drive_folder_id });
-});
+}));
 
 /** Desconectar Google Drive (borra tokens). */
-router.delete('/auth/google-drive', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.delete('/auth/google-drive', requireAuth, requireRole('canManageDrive'), asyncHandler(async (req, res) => {
   const userId = 'default_user';
   await pool.query('DELETE FROM user_oauth_tokens WHERE user_id = ? AND provider = ?', [userId, 'google_drive']);
   res.json({ success: true });
-});
+}));
 
 /**
  * Sube un archivo a una subcarpeta de Drive.
  * POST /api/drive/upload-file
  * Body: { propertyId, folderId, subfolder, fileName, base64Data }
  */
-router.get('/drive/create-property-folders', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/drive/create-property-folders', requireAuth, asyncHandler(async (req, res) => {
   const { propertyId, propertyName } = req.query as Record<string, string>;
   if (!propertyId || !propertyName) {
     res.status(400).json({ error: 'Faltan propertyId o propertyName' });
@@ -328,14 +340,15 @@ router.get('/drive/create-property-folders', async (req, res) => {
 
   console.log(`[Drive] Carpetas creadas para "${propertyName}": ${propertyFolderId}`);
   res.json({ propertyFolderId });
-});
+}));
 
 /**
  * Sube un archivo a una subcarpeta de Drive.
  * POST /api/drive/upload-file
  * Body: { propertyId, folderId, subfolder, fileName, base64Data }
  */
-router.post('/drive/upload-file', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/drive/upload-file', requireAuth, requireRole('canManageDrive'), asyncHandler(async (req, res) => {
   const { propertyId, folderId, subfolder, fileName, base64Data } = req.body as {
     propertyId: string;
     folderId: string;
@@ -399,7 +412,7 @@ router.post('/drive/upload-file', async (req, res) => {
 
   console.log(`[Drive] Archivo "${fileName}" subido a "${subfolder}" para propiedad ${propertyId}`);
   res.json({ fileId: uploaded.data.id, webViewLink: uploaded.data.webViewLink });
-});
+}));
 
 /**
  * Sube un PDF a una subcarpeta ARBITRARIA de Drive (crea la subcarpeta si no existe).
@@ -419,7 +432,8 @@ router.post('/drive/upload-file', async (req, res) => {
  *   base64Data: string
  * }
  */
-router.post('/drive/upload-pdf', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.post('/drive/upload-pdf', requireAuth, requireRole('canManageDrive'), asyncHandler(async (req, res) => {
   const { parentFolderId, parentKind, subfolder, fileName, base64Data } = req.body as {
     parentFolderId: string;
     parentKind?: 'property' | 'tenant' | 'custom';
@@ -433,65 +447,60 @@ router.post('/drive/upload-pdf', async (req, res) => {
     return;
   }
 
-  try {
-    const drive = await getFreshDriveClientPublic();
-    if (!drive) {
-      res.status(503).json({ error: 'Google Drive no conectado' });
-      return;
-    }
-
-    // 1. Buscar o crear la subcarpeta (genérica, no restringida a un set fijo)
-    const subfolderRes = await drive.files.list({
-      q: `name='${subfolder.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentFolderId}' in parents and trashed=false`,
-      fields: 'files(id)',
-      spaces: 'drive',
-    });
-
-    let subfolderId = subfolderRes.data.files?.[0]?.id;
-    if (!subfolderId) {
-      const created = await drive.files.create({
-        requestBody: {
-          name: subfolder,
-          mimeType: 'application/vnd.google-apps.folder',
-          parents: [parentFolderId],
-        },
-        fields: 'id',
-      });
-      subfolderId = created.data.id!;
-      console.log(`[Drive] Subcarpeta "${subfolder}/" creada para parent ${parentKind ?? parentFolderId}`);
-    }
-
-    // 2. Subir el PDF
-    const fileBuffer = Buffer.from(base64Data, 'base64');
-    const uploaded = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [subfolderId],
-      },
-      media: {
-        mimeType: 'application/pdf',
-        body: Readable.from(fileBuffer),
-      },
-      fields: 'id, webViewLink',
-    });
-
-    // 3. Hacer accesible públicamente (mismo patrón que los demás endpoints)
-    await drive.permissions.create({
-      fileId: uploaded.data.id!,
-      requestBody: { role: 'reader', type: 'anyone' },
-    });
-
-    console.log(`[Drive] PDF "${fileName}" → ${parentKind ?? 'parent'}/${subfolder}/`);
-    res.json({
-      fileId: uploaded.data.id,
-      webViewLink: uploaded.data.webViewLink,
-      subfolder,
-    });
-  } catch (err: any) {
-    console.error('[Drive] Error en /upload-pdf:', err.message);
-    res.status(500).json({ error: 'Error subiendo a Drive: ' + err.message });
+  const drive = await getFreshDriveClientPublic();
+  if (!drive) {
+    res.status(503).json({ error: 'Google Drive no conectado' });
+    return;
   }
-});
+
+  // 1. Buscar o crear la subcarpeta (genérica, no restringida a un set fijo)
+  const subfolderRes = await drive.files.list({
+    q: `name='${subfolder.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentFolderId}' in parents and trashed=false`,
+    fields: 'files(id)',
+    spaces: 'drive',
+  });
+
+  let subfolderId = subfolderRes.data.files?.[0]?.id;
+  if (!subfolderId) {
+    const created = await drive.files.create({
+      requestBody: {
+        name: subfolder,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [parentFolderId],
+      },
+      fields: 'id',
+    });
+    subfolderId = created.data.id!;
+    console.log(`[Drive] Subcarpeta "${subfolder}/" creada para parent ${parentKind ?? parentFolderId}`);
+  }
+
+  // 2. Subir el PDF
+  const fileBuffer = Buffer.from(base64Data, 'base64');
+  const uploaded = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      parents: [subfolderId],
+    },
+    media: {
+      mimeType: 'application/pdf',
+      body: Readable.from(fileBuffer),
+    },
+    fields: 'id, webViewLink',
+  });
+
+  // 3. Hacer accesible públicamente (mismo patrón que los demás endpoints)
+  await drive.permissions.create({
+    fileId: uploaded.data.id!,
+    requestBody: { role: 'reader', type: 'anyone' },
+  });
+
+  console.log(`[Drive] PDF "${fileName}" → ${parentKind ?? 'parent'}/${subfolder}/`);
+  res.json({
+    fileId: uploaded.data.id,
+    webViewLink: uploaded.data.webViewLink,
+    subfolder,
+  });
+}));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -560,7 +569,8 @@ async function getOrCreatePropertyFolder(drive: any, parentId: string, propertyI
  * Para imágenes, el cliente puede preferir `/api/drive/thumb` que usa
  * `thumbnailLink` directo (más liviano y con Content-Type correcto).
  */
-router.get('/drive/file', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/drive/file', requireAuth, asyncHandler(async (req, res) => {
   const { fileId, download } = req.query as Record<string, string>;
   if (!fileId) {
     res.status(400).json({ error: 'Falta fileId' });
@@ -593,16 +603,17 @@ router.get('/drive/file', async (req, res) => {
     res.setHeader('Cache-Control', 'private, max-age=300');
     (dl.data as Readable).pipe(res);
   } catch (err: any) {
-    console.error('[drive/file proxy]', err.message);
     if (err.code === 404) {
       res.status(404).json({ error: 'Archivo no encontrado en Drive' });
-    } else if (err.code === 403) {
-      res.status(403).json({ error: 'Sin permisos para acceder al archivo' });
-    } else {
-      res.status(500).json({ error: 'Error al obtener archivo: ' + err.message });
+      return;
     }
+    if (err.code === 403) {
+      res.status(403).json({ error: 'Sin permisos para acceder al archivo' });
+      return;
+    }
+    throw err; // BUG-029: propagar al errorHandler central
   }
-});
+}));
 
 /**
  * GET /api/drive/thumb?fileId=XXX&sz=w800
@@ -610,36 +621,32 @@ router.get('/drive/file', async (req, res) => {
  * Miniatura/cacheable para imágenes y PDFs. Usa el `thumbnailLink` que Drive
  * ya genera server-side. Si no hay thumbnailLink, redirige al endpoint /file.
  */
-router.get('/drive/thumb', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/drive/thumb', requireAuth, asyncHandler(async (req, res) => {
   const { fileId, sz } = req.query as Record<string, string>;
   const sizeSuffix = sz && /^w\d+$/.test(sz) ? sz : 'w800';
   if (!fileId) {
     res.status(400).json({ error: 'Falta fileId' });
     return;
   }
-  try {
-    const drive = await getFreshDriveClientPublic();
-    if (!drive) {
-      res.status(503).json({ error: 'Google Drive no conectado.' });
-      return;
-    }
-    const meta = await drive.files.get({
-      fileId,
-      fields: 'id, name, mimeType, thumbnailLink',
-      supportsAllDrives: false,
-    });
-    const thumb = meta.data.thumbnailLink;
-    if (thumb) {
-      const sized = thumb.replace(/=s\d+(-c)?$/, `=${sizeSuffix}$1`);
-      res.redirect(302, sized);
-    } else {
-      res.redirect(302, `/api/drive/file?fileId=${encodeURIComponent(fileId)}`);
-    }
-  } catch (err: any) {
-    console.error('[drive/thumb]', err.message);
-    res.status(500).json({ error: 'Error al obtener thumbnail: ' + err.message });
+  const drive = await getFreshDriveClientPublic();
+  if (!drive) {
+    res.status(503).json({ error: 'Google Drive no conectado.' });
+    return;
   }
-});
+  const meta = await drive.files.get({
+    fileId,
+    fields: 'id, name, mimeType, thumbnailLink',
+    supportsAllDrives: false,
+  });
+  const thumb = meta.data.thumbnailLink;
+  if (thumb) {
+    const sized = thumb.replace(/=s\d+(-c)?$/, `=${sizeSuffix}$1`);
+    res.redirect(302, sized);
+  } else {
+    res.redirect(302, `/api/drive/file?fileId=${encodeURIComponent(fileId)}`);
+  }
+}));
 
 /** Wrapper público de getFreshDriveClient para los proxies. Refresca el access_token
  *  si está por expirar y lo persiste. Devuelve null si no hay tokens. */

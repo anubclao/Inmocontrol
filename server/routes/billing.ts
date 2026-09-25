@@ -37,6 +37,10 @@ import type { PoolConnection } from "mysql2/promise";
 import pool, { ensureDefaultOrg } from "../db.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { withTransaction } from "../lib/withTransaction.js";
+// FIX #2 (P0 seguridad): requireAuth en todas las rutas de billing.
+import { requireAuth } from "./auth.js";
+// fix-issue-permissions-by-endpoint: requireRole valida acción específica.
+import { requireRole } from "../middleware/requireRole.js";
 // Reutilizamos los cálculos del cliente. tsx resuelve TS, no hay problema.
 import {
   generateAmortization,
@@ -58,6 +62,7 @@ import type {
 } from "../../src/features/billing/types.js";
 
 const router = Router();
+router.use(requireAuth);
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -165,19 +170,17 @@ function rowToAmortization(r: any) {
 
 // ─── BillingPolicy ─────────────────────────────────────────────────────
 
-router.get("/policies/:propertyId", async (req, res) => {
-  try {
-    const orgId = await ensureDefaultOrg();
-    const policy = await loadPolicy(orgId, req.params.propertyId);
-    if (!policy) return res.status(404).json({ error: "not found" });
-    res.json(policy);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler. Errores se propagan al errorHandler central.
+router.get("/policies/:propertyId", asyncHandler(async (req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const policy = await loadPolicy(orgId, req.params.propertyId);
+  if (!policy) return res.status(404).json({ error: "not found" });
+  res.json(policy);
+}));
 
 router.put(
   "/policies/:propertyId",
+  requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
     const orgId = await ensureDefaultOrg();
     const propertyId = req.params.propertyId;
@@ -234,6 +237,7 @@ router.put(
 
 router.post(
   "/amortization/generate",
+  requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
     const orgId = await ensureDefaultOrg();
     const { contract, policy } = req.body as {
@@ -245,6 +249,53 @@ router.post(
         .status(400)
         .json({ error: "contract y policy son requeridos" });
     }
+
+    // BUG-036: validar FK de contract antes de tocar amortization_rows.
+    // Sin este check, si el cliente manda un contract.id que NO está en MySQL
+    // (caso típico: ID local de Zustand "contract-1782492025953" del caché viejo),
+    // el INSERT explota con ER_NO_REFERENCED_ROW_2 y el user ve un 500 opaco
+    // con stack trace de MySQL. Mejor 400 con mensaje accionable.
+    const [contractRows] = await pool.query<any[]>(
+      `SELECT id, organization_id, property_id, status
+       FROM contracts
+       WHERE id = ?
+       LIMIT 1`,
+      [contract.id],
+    );
+    if (contractRows.length === 0) {
+      return res.status(400).json({
+        error:
+          "El contrato con id=" +
+          contract.id +
+          " no existe en el servidor. Recargá la página para sincronizar.",
+        code: "CONTRACT_NOT_FOUND",
+        contractId: contract.id,
+      });
+    }
+    // AC-2: validar que el contrato pertenece al org actual (defensa
+    // cross-tenant para cuando llegue multi-tenant).
+    if (
+      contractRows[0].organization_id &&
+      contractRows[0].organization_id !== orgId
+    ) {
+      return res.status(403).json({
+        error: "El contrato pertenece a otra organización.",
+        code: "CONTRACT_WRONG_ORG",
+      });
+    }
+    // AC-3: validar que la propiedad del contrato existe.
+    const [propertyRows] = await pool.query<any[]>(
+      `SELECT id FROM properties WHERE id = ? AND organization_id = ? LIMIT 1`,
+      [contract.propertyId, orgId],
+    );
+    if (propertyRows.length === 0) {
+      return res.status(400).json({
+        error:
+          "La propiedad asociada al contrato no existe. Recargá la página.",
+        code: "PROPERTY_NOT_FOUND",
+      });
+    }
+
     const [incRows] = await pool.query(
       `SELECT * FROM rent_increases WHERE contract_id = ? ORDER BY effective_from ASC`,
       [contract.id],
@@ -329,20 +380,17 @@ router.post(
   }),
 );
 
-router.get("/amortization/:contractId", async (req, res) => {
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query(
-      `SELECT * FROM amortization_rows
-       WHERE contract_id = ? AND organization_id = ?
-       ORDER BY month_number ASC`,
-      [req.params.contractId, orgId],
-    );
-    res.json((rows as any[]).map(rowToAmortization));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get("/amortization/:contractId", asyncHandler(async (req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM amortization_rows
+     WHERE contract_id = ? AND organization_id = ?
+     ORDER BY month_number ASC`,
+    [req.params.contractId, orgId],
+  );
+  res.json((rows as any[]).map(rowToAmortization));
+}));
 
 // ─── GET /api/billing/amortization ───────────────────────────────────────
 // Lista TODA la amortización del org. Usado por el frontend en hydrate
@@ -353,25 +401,23 @@ router.get("/amortization/:contractId", async (req, res) => {
 // Devuelve: { rows: AmortizationRow[] } con TODAS las filas del org, sin
 // agrupar por contrato (el frontend agrupa por contractId).
 
-router.get("/amortization", async (_req, res) => {
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query(
-      `SELECT * FROM amortization_rows
-       WHERE organization_id = ?
-       ORDER BY contract_id, month_number ASC`,
-      [orgId],
-    );
-    res.json({ rows: (rows as any[]).map(rowToAmortization) });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get("/amortization", asyncHandler(async (_req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM amortization_rows
+     WHERE organization_id = ?
+     ORDER BY contract_id, month_number ASC`,
+    [orgId],
+  );
+  res.json({ rows: (rows as any[]).map(rowToAmortization) });
+}));
 
 // ─── Pagos ─────────────────────────────────────────────────────────────
 
 router.post(
   "/payments",
+  requireRole("canRegisterPayment"),
   asyncHandler(async (req, res) => {
     const { contractId, rowId, paidOnDayOfMonth } = req.body as {
       contractId: string;
@@ -533,10 +579,8 @@ const CHARGE_COLS = `(id, organization_id, property_id, period, type,
                        description, amount, charged_to, applies_to_invoice,
                        attachment_url, recorded_by)`;
 
-router.post("/charges", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() se llama DENTRO del try para que cualquier
-  // error (MySQL caído, schema drift, FK corrupta) devuelva JSON 500
-  // en vez del HTML 500 del default error handler de Express.
+// BUG-029: migrado a asyncHandler. Errores se propagan al errorHandler central.
+router.post("/charges", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
   const c = req.body as {
     id: string;
     propertyId: string;
@@ -549,80 +593,68 @@ router.post("/charges", async (req, res) => {
     attachmentUrl?: string;
     recordedBy: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
-    await pool.query(
-      `INSERT INTO property_charges
-         ${CHARGE_COLS}
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         type = VALUES(type),
-         description = VALUES(description),
-         amount = VALUES(amount),
-         charged_to = VALUES(charged_to),
-         applies_to_invoice = VALUES(applies_to_invoice),
-         attachment_url = VALUES(attachment_url)`,
-      [
-        c.id,
-        orgId,
-        c.propertyId,
-        c.period,
-        c.type,
-        c.description,
-        Number(c.amount),
-        c.chargedTo ?? "owner",
-        c.appliesToInvoice === false ? 0 : 1,
-        c.attachmentUrl ?? null,
-        c.recordedBy,
-      ],
-    );
-    res.json({ ok: true, id: c.id });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  await pool.query(
+    `INSERT INTO property_charges
+       ${CHARGE_COLS}
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       type = VALUES(type),
+       description = VALUES(description),
+       amount = VALUES(amount),
+       charged_to = VALUES(charged_to),
+       applies_to_invoice = VALUES(applies_to_invoice),
+       attachment_url = VALUES(attachment_url)`,
+    [
+      c.id,
+      orgId,
+      c.propertyId,
+      c.period,
+      c.type,
+      c.description,
+      Number(c.amount),
+      c.chargedTo ?? "owner",
+      c.appliesToInvoice === false ? 0 : 1,
+      c.attachmentUrl ?? null,
+      c.recordedBy,
+    ],
+  );
+  res.json({ ok: true, id: c.id });
+}));
 
-router.get("/charges", async (req, res) => {
-  // BUG-006: mismo fix — ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/charges", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const where: string[] = ["organization_id = ?"];
-    const args: any[] = [orgId];
-    if (propertyId) {
-      where.push("property_id = ?");
-      args.push(propertyId);
-    }
-    if (period) {
-      where.push("period = ?");
-      args.push(period);
-    }
-    const [rows] = await pool.query(
-      `SELECT * FROM property_charges
-       WHERE ${where.join(" AND ")}
-       ORDER BY period DESC, recorded_at DESC`,
-      args,
-    );
-    res.json((rows as any[]).map(rowToCharge));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  const orgId = await ensureDefaultOrg();
+  const where: string[] = ["organization_id = ?"];
+  const args: any[] = [orgId];
+  if (propertyId) {
+    where.push("property_id = ?");
+    args.push(propertyId);
   }
-});
+  if (period) {
+    where.push("period = ?");
+    args.push(period);
+  }
+  const [rows] = await pool.query(
+    `SELECT * FROM property_charges
+     WHERE ${where.join(" AND ")}
+     ORDER BY period DESC, recorded_at DESC`,
+    args,
+  );
+  res.json((rows as any[]).map(rowToCharge));
+}));
 
-router.delete("/charges/:id", async (req, res) => {
-  // BUG-006: mismo fix — ensureDefaultOrg() adentro del try.
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [result] = await pool.query(
-      `DELETE FROM property_charges WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId],
-    );
-    res.json({ ok: true, deleted: (result as any).affectedRows });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.delete("/charges/:id", requireRole("canDeleteFinancial"), asyncHandler(async (req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const [result] = await pool.query(
+    `DELETE FROM property_charges WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId],
+  );
+  res.json({ ok: true, deleted: (result as any).affectedRows });
+}));
 
 /**
  * GET /api/billing/charges/invoice-summary?propertyId=&period=
@@ -632,7 +664,8 @@ router.delete("/charges/:id", async (req, res) => {
  * El front lo usa para pintar la sección "Otros cargos del mes" del PDF
  * y para saber cuánto sumar al subtotal.
  */
-router.get("/charges/invoice-summary", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get("/charges/invoice-summary", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string;
   const period = req.query.period as string;
   if (!propertyId || !period) {
@@ -640,26 +673,21 @@ router.get("/charges/invoice-summary", async (req, res) => {
       .status(400)
       .json({ error: "propertyId y period son requeridos" });
   }
-  // BUG-006: ensureDefaultOrg() adentro del try.
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query(
-      `SELECT * FROM property_charges
-       WHERE organization_id = ?
-         AND property_id = ?
-         AND period = ?
-         AND applies_to_invoice = 1
-         AND charged_to IN ('tenant','both')
-       ORDER BY recorded_at ASC`,
-      [orgId, propertyId, period],
-    );
-    const charges = (rows as any[]).map(rowToCharge);
-    const total = charges.reduce((s, c) => s + c.amount, 0);
-    res.json({ propertyId, period, total, charges });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM property_charges
+     WHERE organization_id = ?
+       AND property_id = ?
+       AND period = ?
+       AND applies_to_invoice = 1
+       AND charged_to IN ('tenant','both')
+     ORDER BY recorded_at ASC`,
+    [orgId, propertyId, period],
+  );
+  const charges = (rows as any[]).map(rowToCharge);
+  const total = charges.reduce((s, c) => s + c.amount, 0);
+  res.json({ propertyId, period, total, charges });
+}));
 
 // ─── Descuentos (LEGACY — compat con /api/billing/discounts) ───────────
 // Mantener el endpoint viejo para que cualquier llamada existente siga
@@ -667,8 +695,8 @@ router.get("/charges/invoice-summary", async (req, res) => {
 // `charged_to='owner'` (el modelo unificado) Y en `property_discounts`
 // (tabla histórica) para mantener trazabilidad legacy.
 
-router.post("/discounts", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.post("/discounts", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
   const d = req.body as {
     id: string;
     propertyId: string;
@@ -679,86 +707,76 @@ router.post("/discounts", async (req, res) => {
     attachmentUrl?: string;
     recordedBy: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
-    await pool.query(
-      `INSERT INTO property_discounts
-         (id, organization_id, property_id, type, description, amount, month_period, attachment_url, recorded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         type = VALUES(type),
-         description = VALUES(description),
-         amount = VALUES(amount),
-         attachment_url = VALUES(attachment_url)`,
-      [
-        d.id,
-        orgId,
-        d.propertyId,
-        d.type,
-        d.description,
-        Number(d.amount),
-        d.monthPeriod,
-        d.attachmentUrl ?? null,
-        d.recordedBy,
-      ],
-    );
-    // Mirror en property_charges con charged_to='owner' — modelo unificado.
-    // Usamos el mismo `id` si es posible (CHAR(36) lo permite); si el id
-    // viejo no calza (más de 36 chars), generamos uno local.
-    const chargeId =
-      d.id && String(d.id).length <= 36 ? d.id : `disc-${d.id}-${Date.now()}`;
-    await pool.query(
-      `INSERT INTO property_charges
-         (id, organization_id, property_id, period, type, description,
-          amount, charged_to, applies_to_invoice, attachment_url, recorded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'owner', 0, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         type = VALUES(type),
-         description = VALUES(description),
-         amount = VALUES(amount),
-         attachment_url = VALUES(attachment_url)`,
-      [
-        chargeId,
-        orgId,
-        d.propertyId,
-        d.monthPeriod,
-        d.type,
-        d.description,
-        Number(d.amount),
-        d.attachmentUrl ?? null,
-        d.recordedBy,
-      ],
-    );
-    res.json({ ok: true, id: d.id });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  await pool.query(
+    `INSERT INTO property_discounts
+       (id, organization_id, property_id, type, description, amount, month_period, attachment_url, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       type = VALUES(type),
+       description = VALUES(description),
+       amount = VALUES(amount),
+       attachment_url = VALUES(attachment_url)`,
+    [
+      d.id,
+      orgId,
+      d.propertyId,
+      d.type,
+      d.description,
+      Number(d.amount),
+      d.monthPeriod,
+      d.attachmentUrl ?? null,
+      d.recordedBy,
+    ],
+  );
+  // Mirror en property_charges con charged_to='owner' — modelo unificado.
+  const chargeId =
+    d.id && String(d.id).length <= 36 ? d.id : `disc-${d.id}-${Date.now()}`;
+  await pool.query(
+    `INSERT INTO property_charges
+       (id, organization_id, property_id, period, type, description,
+        amount, charged_to, applies_to_invoice, attachment_url, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'owner', 0, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       type = VALUES(type),
+       description = VALUES(description),
+       amount = VALUES(amount),
+       attachment_url = VALUES(attachment_url)`,
+    [
+      chargeId,
+      orgId,
+      d.propertyId,
+      d.monthPeriod,
+      d.type,
+      d.description,
+      Number(d.amount),
+      d.attachmentUrl ?? null,
+      d.recordedBy,
+    ],
+  );
+  res.json({ ok: true, id: d.id });
+}));
 
-router.get("/discounts", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/discounts", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = propertyId
-      ? await pool.query(
-          `SELECT * FROM property_discounts WHERE property_id = ? AND organization_id = ? ORDER BY recorded_at DESC`,
-          [propertyId, orgId],
-        )
-      : await pool.query(
-          `SELECT * FROM property_discounts WHERE organization_id = ? ORDER BY recorded_at DESC`,
-          [orgId],
-        );
-    res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const [rows] = propertyId
+    ? await pool.query(
+        `SELECT * FROM property_discounts WHERE property_id = ? AND organization_id = ? ORDER BY recorded_at DESC`,
+        [propertyId, orgId],
+      )
+    : await pool.query(
+        `SELECT * FROM property_discounts WHERE organization_id = ? ORDER BY recorded_at DESC`,
+        [orgId],
+      );
+  res.json(rows);
+}));
 
 // ─── Aumentos (al inquilino) ────────────────────────────────────────────
 
-router.post("/increases", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.post("/increases", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
   const i = req.body as {
     id: string;
     propertyId: string;
@@ -769,123 +787,111 @@ router.post("/increases", async (req, res) => {
     effectiveFrom: string;
     recordedBy: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
-    await pool.query(
-      `INSERT INTO rent_increases
-         (id, organization_id, property_id, contract_id, type, description, amount, effective_from, recorded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         type = VALUES(type),
-         description = VALUES(description),
-         amount = VALUES(amount),
-         effective_from = VALUES(effective_from)`,
-      [
-        i.id,
-        orgId,
-        i.propertyId,
-        i.contractId,
-        i.type,
-        i.description,
-        Number(i.amount),
-        i.effectiveFrom,
-        i.recordedBy,
-      ],
-    );
-    res.json({ ok: true, id: i.id });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  await pool.query(
+    `INSERT INTO rent_increases
+       (id, organization_id, property_id, contract_id, type, description, amount, effective_from, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       type = VALUES(type),
+       description = VALUES(description),
+       amount = VALUES(amount),
+       effective_from = VALUES(effective_from)`,
+    [
+      i.id,
+      orgId,
+      i.propertyId,
+      i.contractId,
+      i.type,
+      i.description,
+      Number(i.amount),
+      i.effectiveFrom,
+      i.recordedBy,
+    ],
+  );
+  res.json({ ok: true, id: i.id });
+}));
 
-router.get("/increases", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/increases", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = propertyId
-      ? await pool.query(
-          `SELECT * FROM rent_increases WHERE property_id = ? AND organization_id = ? ORDER BY effective_from ASC`,
-          [propertyId, orgId],
-        )
-      : await pool.query(
-          `SELECT * FROM rent_increases WHERE organization_id = ? ORDER BY effective_from ASC`,
-          [orgId],
-        );
-    res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const [rows] = propertyId
+    ? await pool.query(
+        `SELECT * FROM rent_increases WHERE property_id = ? AND organization_id = ? ORDER BY effective_from ASC`,
+        [propertyId, orgId],
+      )
+    : await pool.query(
+        `SELECT * FROM rent_increases WHERE organization_id = ? ORDER BY effective_from ASC`,
+        [orgId],
+      );
+  res.json(rows);
+}));
 
 // ─── Estado de cuenta ─────────────────────────────────────────────────
 
-router.get("/account-statement", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/account-statement", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string;
   const period = req.query.period as string; // 'YYYY-MM'
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [paidRows] = await pool.query(
-      `SELECT COALESCE(SUM(total), 0) AS gross
-       FROM amortization_rows
-       WHERE property_id = ? AND status = 'paid'
-         AND period_start LIKE ?`,
-      [propertyId, `${period}%`],
-    );
-    const grossIncome = Number((paidRows as any[])[0]?.gross ?? 0);
+  const orgId = await ensureDefaultOrg();
+  const [paidRows] = await pool.query(
+    `SELECT COALESCE(SUM(total), 0) AS gross
+     FROM amortization_rows
+     WHERE property_id = ? AND status = 'paid'
+       AND period_start LIKE ?`,
+    [propertyId, `${period}%`],
+  );
+  const grossIncome = Number((paidRows as any[])[0]?.gross ?? 0);
 
-    // Fuente unificada: traer cargos chargedTo='owner'/'both' del período
-    // desde property_charges. Compat: si property_charges no tiene la fila
-    // (datos muy viejos), caemos a property_discounts.
-    const [chargeRows] = await pool.query(
-      `SELECT * FROM property_charges
-       WHERE property_id = ? AND period = ?
-         AND charged_to IN ('owner','both')`,
+  // Fuente unificada: traer cargos chargedTo='owner'/'both' del período
+  // desde property_charges. Compat: si property_charges no tiene la fila
+  // (datos muy viejos), caemos a property_discounts.
+  const [chargeRows] = await pool.query(
+    `SELECT * FROM property_charges
+     WHERE property_id = ? AND period = ?
+       AND charged_to IN ('owner','both')`,
+    [propertyId, period],
+  );
+  let discountsOrCharges: any[] = (chargeRows as any[]).map((r) => ({
+    id: r.id,
+    propertyId: r.property_id,
+    type: r.type,
+    description: r.description,
+    amount: Number(r.amount),
+    monthPeriod: r.period,
+    attachmentUrl: r.attachment_url ?? undefined,
+    recordedAt: r.recorded_at,
+    recordedBy: r.recorded_by,
+  }));
+  if (discountsOrCharges.length === 0) {
+    // Fallback legacy
+    const [legacyRows] = await pool.query(
+      `SELECT * FROM property_discounts
+       WHERE property_id = ? AND month_period = ?`,
       [propertyId, period],
     );
-    let discountsOrCharges: any[] = (chargeRows as any[]).map((r) => ({
+    discountsOrCharges = (legacyRows as any[]).map((r) => ({
       id: r.id,
       propertyId: r.property_id,
       type: r.type,
       description: r.description,
       amount: Number(r.amount),
-      monthPeriod: r.period,
+      monthPeriod: r.month_period,
       attachmentUrl: r.attachment_url ?? undefined,
       recordedAt: r.recorded_at,
       recordedBy: r.recorded_by,
     }));
-    if (discountsOrCharges.length === 0) {
-      // Fallback legacy
-      const [legacyRows] = await pool.query(
-        `SELECT * FROM property_discounts
-         WHERE property_id = ? AND month_period = ?`,
-        [propertyId, period],
-      );
-      discountsOrCharges = (legacyRows as any[]).map((r) => ({
-        id: r.id,
-        propertyId: r.property_id,
-        type: r.type,
-        description: r.description,
-        amount: Number(r.amount),
-        monthPeriod: r.month_period,
-        attachmentUrl: r.attachment_url ?? undefined,
-        recordedAt: r.recorded_at,
-        recordedBy: r.recorded_by,
-      }));
-    }
-
-    const statement = calculateAccountStatement(
-      propertyId,
-      period,
-      grossIncome,
-      discountsOrCharges,
-    );
-    res.json(statement);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
   }
-});
+
+  const statement = calculateAccountStatement(
+    propertyId,
+    period,
+    grossIncome,
+    discountsOrCharges,
+  );
+  res.json(statement);
+}));
 
 // ─── Cuenta de cobro ──────────────────────────────────────────────────
 
@@ -975,15 +981,96 @@ function rowToInvoice(r: any): RentInvoice {
  // la ve en pantalla, verifica valores, y solo cuando confirma hace click en
  // Enviar → /invoices/send que marca sent_at y genera invoice_number).
  */
-router.post("/invoices/generate", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.post("/invoices/generate", requireRole("canSendInvoice"), asyncHandler(async (req, res) => {
   const { propertyId, contractId, period } = req.body as {
     propertyId: string;
     contractId: string;
     period: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
+    [contractId, `${period}%`],
+  );
+  const list = rows as any[];
+  if (list.length === 0)
+    return res.status(404).json({ error: "no row for period" });
+  const row = rowToAmortization(list[0]);
+
+  const [bankRows] = await pool.query(
+    `SELECT id FROM bank_accounts WHERE property_id = ? AND is_primary = 1 LIMIT 1`,
+    [propertyId],
+  );
+  const primaryBankId = (bankRows as any[])[0]?.id ?? null;
+
+  const invoice = generateInvoiceFromRow(row, { paymentLink: primaryBankId });
+  await pool.query(
+    `INSERT INTO rent_invoices
+       (id, organization_id, property_id, contract_id, period,
+        due_date, subtotal, total_early, total_mid, total_late, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       due_date = VALUES(due_date),
+       subtotal = VALUES(subtotal),
+       total_early = VALUES(total_early),
+       total_mid = VALUES(total_mid),
+       total_late = VALUES(total_late)`,
+    [
+      invoice.id,
+      orgId,
+      propertyId,
+      contractId,
+      period,
+      invoice.dueDate,
+      invoice.subtotal,
+      invoice.totalEarly,
+      invoice.totalMid,
+      invoice.totalLate,
+      invoice.status,
+    ],
+  );
+  res.json(invoice);
+}));
+
+/**
+ * POST /api/billing/invoices/send
+ *
+ * Marca la cuenta de cobro como ENVIADA: genera `invoice_number` (CC-YYYYMM-NNN)
+ * y setea `sent_at`. Devuelve la invoice actualizada para que el frontend la
+ // pinte en el PDF y guarde el consecutivo en el histórico.
+ *
+ * Body: { propertyId, contractId, period }
+ */
+// BUG-029: migrado a asyncHandler. Errores no capturados van al errorHandler.
+router.post("/invoices/send", requireRole("canSendInvoice"), asyncHandler(async (req, res) => {
+  const { propertyId, contractId, period } = req.body as {
+    propertyId: string;
+    contractId: string;
+    period: string;
+  };
+  const orgId = await ensureDefaultOrg();
+  // 0. Sumar cargos al inquilino para este período (chargedTo IN ('tenant','both'),
+  //    appliesToInvoice=true). Si hay cargos, los añadimos al subtotal.
+  const [chargeRows] = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS charges_total
+     FROM property_charges
+     WHERE organization_id = ?
+       AND property_id = ?
+       AND period = ?
+       AND applies_to_invoice = 1
+       AND charged_to IN ('tenant','both')`,
+    [orgId, propertyId, period],
+  );
+  const chargesTotal = Number((chargeRows as any[])[0]?.charges_total ?? 0);
+
+  // 1. Asegurar que existe la fila de rent_invoices
+  const [existing] = await pool.query(
+    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+    [contractId, period],
+  );
+  if ((existing as any[]).length === 0) {
+    // No existe → la creamos primero con /generate
     const [rows] = await pool.query(
       `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
       [contractId, `${period}%`],
@@ -999,18 +1086,19 @@ router.post("/invoices/generate", async (req, res) => {
     );
     const primaryBankId = (bankRows as any[])[0]?.id ?? null;
 
-    const invoice = generateInvoiceFromRow(row, { paymentLink: primaryBankId });
+    const invoice = generateInvoiceFromRow(row, {
+      paymentLink: primaryBankId,
+    });
+    // Sumar cargos al inquilino al subtotal (si los hay)
+    const subtotalWithCharges = invoice.subtotal + chargesTotal;
+    const totalEarlyWith = invoice.totalEarly + chargesTotal;
+    const totalMidWith = invoice.totalMid + chargesTotal;
+    const totalLateWith = invoice.totalLate + chargesTotal;
     await pool.query(
       `INSERT INTO rent_invoices
          (id, organization_id, property_id, contract_id, period,
           due_date, subtotal, total_early, total_mid, total_late, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         due_date = VALUES(due_date),
-         subtotal = VALUES(subtotal),
-         total_early = VALUES(total_early),
-         total_mid = VALUES(total_mid),
-         total_late = VALUES(total_late)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         invoice.id,
         orgId,
@@ -1018,216 +1106,121 @@ router.post("/invoices/generate", async (req, res) => {
         contractId,
         period,
         invoice.dueDate,
-        invoice.subtotal,
-        invoice.totalEarly,
-        invoice.totalMid,
-        invoice.totalLate,
+        subtotalWithCharges,
+        totalEarlyWith,
+        totalMidWith,
+        totalLateWith,
         invoice.status,
       ],
     );
-    res.json(invoice);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  } else if (chargesTotal > 0) {
+    // Ya existía: actualizar subtotales para incluir cargos nuevos.
+    // Solo si todavía no fue pagado (no bajamos un paid a pending para
+    // no perder trazabilidad).
+    await pool.query(
+      `UPDATE rent_invoices
+       SET subtotal = subtotal + ?,
+           total_early = total_early + ?,
+           total_mid = total_mid + ?,
+           total_late = total_late + ?
+       WHERE contract_id = ? AND period = ? AND status <> 'paid'`,
+      [
+        chargesTotal,
+        chargesTotal,
+        chargesTotal,
+        chargesTotal,
+        contractId,
+        period,
+      ],
+    );
   }
-});
 
-/**
- * POST /api/billing/invoices/send
- *
- * Marca la cuenta de cobro como ENVIADA: genera `invoice_number` (CC-YYYYMM-NNN)
- * y setea `sent_at`. Devuelve la invoice actualizada para que el frontend la
- // pinte en el PDF y guarde el consecutivo en el histórico.
- *
- * Body: { propertyId, contractId, period }
- */
-router.post("/invoices/send", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
-  const { propertyId, contractId, period } = req.body as {
-    propertyId: string;
-    contractId: string;
-    period: string;
-  };
-  try {
-    const orgId = await ensureDefaultOrg();
-    // 0. Sumar cargos al inquilino para este período (chargedTo IN ('tenant','both'),
-    //    appliesToInvoice=true). Si hay cargos, los añadimos al subtotal.
-    const [chargeRows] = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS charges_total
-       FROM property_charges
-       WHERE organization_id = ?
-         AND property_id = ?
-         AND period = ?
-         AND applies_to_invoice = 1
-         AND charged_to IN ('tenant','both')`,
-      [orgId, propertyId, period],
-    );
-    const chargesTotal = Number((chargeRows as any[])[0]?.charges_total ?? 0);
-
-    // 1. Asegurar que existe la fila de rent_invoices
-    const [existing] = await pool.query(
-      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
-      [contractId, period],
-    );
-    if ((existing as any[]).length === 0) {
-      // No existe → la creamos primero con /generate
-      const [rows] = await pool.query(
-        `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
-        [contractId, `${period}%`],
-      );
-      const list = rows as any[];
-      if (list.length === 0)
-        return res.status(404).json({ error: "no row for period" });
-      const row = rowToAmortization(list[0]);
-
-      const [bankRows] = await pool.query(
-        `SELECT id FROM bank_accounts WHERE property_id = ? AND is_primary = 1 LIMIT 1`,
-        [propertyId],
-      );
-      const primaryBankId = (bankRows as any[])[0]?.id ?? null;
-
-      const invoice = generateInvoiceFromRow(row, {
-        paymentLink: primaryBankId,
-      });
-      // Sumar cargos al inquilino al subtotal (si los hay)
-      const subtotalWithCharges = invoice.subtotal + chargesTotal;
-      const totalEarlyWith = invoice.totalEarly + chargesTotal;
-      const totalMidWith = invoice.totalMid + chargesTotal;
-      const totalLateWith = invoice.totalLate + chargesTotal;
-      await pool.query(
-        `INSERT INTO rent_invoices
-           (id, organization_id, property_id, contract_id, period,
-            due_date, subtotal, total_early, total_mid, total_late, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          invoice.id,
-          orgId,
-          propertyId,
-          contractId,
-          period,
-          invoice.dueDate,
-          subtotalWithCharges,
-          totalEarlyWith,
-          totalMidWith,
-          totalLateWith,
-          invoice.status,
-        ],
-      );
-    } else if (chargesTotal > 0) {
-      // Ya existía: actualizar subtotales para incluir cargos nuevos.
-      // Solo si todavía no fue pagado (no bajamos un paid a pending para
-      // no perder trazabilidad).
+  // 2. Generar consecutivo si aún no tiene uno (re-envío es idempotente)
+  const [rowsAfter] = await pool.query(
+    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+    [contractId, period],
+  );
+  const r = (rowsAfter as any[])[0];
+  let invoiceNumber = r.invoice_number as string | null;
+  if (!invoiceNumber) {
+    invoiceNumber = await generateInvoiceNumber(orgId, propertyId, period);
+    // BUG-007: el UNIQUE constraint en (org, property, period, invoice_number)
+    // puede tirar ER_DUP_ENTRY si dos POSTs simultáneos generaron el mismo
+    // número (el loop de generateInvoiceNumber no es perfecto bajo race
+    // extremo). Si pasa, retry UNA vez con un número nuevo.
+    try {
       await pool.query(
         `UPDATE rent_invoices
-         SET subtotal = subtotal + ?,
-             total_early = total_early + ?,
-             total_mid = total_mid + ?,
-             total_late = total_late + ?
-         WHERE contract_id = ? AND period = ? AND status <> 'paid'`,
-        [
-          chargesTotal,
-          chargesTotal,
-          chargesTotal,
-          chargesTotal,
-          contractId,
-          period,
-        ],
+         SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
+           WHEN status = 'paid' THEN 'paid'  -- si ya estaba pagado (caso edge), no bajamos a pending
+           ELSE 'pending'
+         END
+         WHERE contract_id = ? AND period = ?`,
+        [invoiceNumber, contractId, period],
       );
-    }
-
-    // 2. Generar consecutivo si aún no tiene uno (re-envío es idempotente)
-    const [rowsAfter] = await pool.query(
-      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
-      [contractId, period],
-    );
-    const r = (rowsAfter as any[])[0];
-    let invoiceNumber = r.invoice_number as string | null;
-    if (!invoiceNumber) {
-      invoiceNumber = await generateInvoiceNumber(orgId, propertyId, period);
-      // BUG-007: el UNIQUE constraint en (org, property, period, invoice_number)
-      // puede tirar ER_DUP_ENTRY si dos POSTs simultáneos generaron el mismo
-      // número (el loop de generateInvoiceNumber no es perfecto bajo race
-      // extremo). Si pasa, retry UNA vez con un número nuevo.
-      try {
+    } catch (err: any) {
+      if (
+        err?.code === "ER_DUP_ENTRY" &&
+        err?.message?.includes("uniq_invoice_org_prop_period_number")
+      ) {
+        // Re-generar y retry una vez
+        invoiceNumber = await generateInvoiceNumber(
+          orgId,
+          propertyId,
+          period,
+        );
         await pool.query(
           `UPDATE rent_invoices
            SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
-             WHEN status = 'paid' THEN 'paid'  -- si ya estaba pagado (caso edge), no bajamos a pending
+             WHEN status = 'paid' THEN 'paid'
              ELSE 'pending'
            END
            WHERE contract_id = ? AND period = ?`,
           [invoiceNumber, contractId, period],
         );
-      } catch (err: any) {
-        if (
-          err?.code === "ER_DUP_ENTRY" &&
-          err?.message?.includes("uniq_invoice_org_prop_period_number")
-        ) {
-          // Re-generar y retry una vez
-          invoiceNumber = await generateInvoiceNumber(
-            orgId,
-            propertyId,
-            period,
-          );
-          await pool.query(
-            `UPDATE rent_invoices
-             SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
-               WHEN status = 'paid' THEN 'paid'
-               ELSE 'pending'
-             END
-             WHERE contract_id = ? AND period = ?`,
-            [invoiceNumber, contractId, period],
-          );
-        } else {
-          throw err;
-        }
+      } else {
+        throw err;
       }
-    } else {
-      // Ya tenía invoice_number (re-envío): solo actualizar sent_at si es null
-      await pool.query(
-        `UPDATE rent_invoices
-         SET sent_at = COALESCE(sent_at, NOW())
-         WHERE contract_id = ? AND period = ? AND sent_at IS NULL`,
-        [contractId, period],
-      );
     }
-
-    // 3. Devolver invoice actualizada
-    const [final] = await pool.query(
-      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+  } else {
+    // Ya tenía invoice_number (re-envío): solo actualizar sent_at si es null
+    await pool.query(
+      `UPDATE rent_invoices
+       SET sent_at = COALESCE(sent_at, NOW())
+       WHERE contract_id = ? AND period = ? AND sent_at IS NULL`,
       [contractId, period],
     );
-    res.json(rowToInvoice((final as any[])[0]));
-  } catch (err: any) {
-    console.error("[invoices/send]", err);
-    res.status(500).json({ error: err?.message });
   }
-});
 
-router.get("/invoices", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+  // 3. Devolver invoice actualizada
+  const [final] = await pool.query(
+    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+    [contractId, period],
+  );
+  res.json(rowToInvoice((final as any[])[0]));
+}));
+
+// BUG-029: migrado a asyncHandler.
+router.get("/invoices", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
   const contractId = req.query.contractId as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const where: string[] = ["organization_id = ?"];
-    const args: any[] = [orgId];
-    if (propertyId) {
-      where.push("property_id = ?");
-      args.push(propertyId);
-    }
-    if (contractId) {
-      where.push("contract_id = ?");
-      args.push(contractId);
-    }
-    const [rows] = await pool.query(
-      `SELECT * FROM rent_invoices WHERE ${where.join(" AND ")} ORDER BY period DESC`,
-      args,
-    );
-    res.json((rows as any[]).map(rowToInvoice));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  const orgId = await ensureDefaultOrg();
+  const where: string[] = ["organization_id = ?"];
+  const args: any[] = [orgId];
+  if (propertyId) {
+    where.push("property_id = ?");
+    args.push(propertyId);
   }
-});
+  if (contractId) {
+    where.push("contract_id = ?");
+    args.push(contractId);
+  }
+  const [rows] = await pool.query(
+    `SELECT * FROM rent_invoices WHERE ${where.join(" AND ")} ORDER BY period DESC`,
+    args,
+  );
+  res.json((rows as any[]).map(rowToInvoice));
+}));
 
 /**
  * GET /api/billing/invoices/lookup?contractId=&period=
@@ -1236,32 +1229,28 @@ router.get("/invoices", async (req, res) => {
  * estado de envío del mes en la tabla de amortización: ¿ya fue enviado?
  * ¿tiene invoice_number?).
  */
-router.get("/invoices/lookup", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try (después de la validación 400).
+// BUG-029: migrado a asyncHandler.
+router.get("/invoices/lookup", asyncHandler(async (req, res) => {
   const contractId = req.query.contractId as string | undefined;
   const period = req.query.period as string | undefined;
   if (!contractId || !period)
     return res
       .status(400)
       .json({ error: "contractId y period son requeridos" });
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query(
-      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ? AND organization_id = ?`,
-      [contractId, period, orgId],
-    );
-    const list = rows as any[];
-    if (list.length === 0) return res.json(null);
-    res.json(rowToInvoice(list[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ? AND organization_id = ?`,
+    [contractId, period, orgId],
+  );
+  const list = rows as any[];
+  if (list.length === 0) return res.json(null);
+  res.json(rowToInvoice(list[0]));
+}));
 
 // ─── Histórico (append-only) ───────────────────────────────────────────
 
-router.post("/actions", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.post("/actions", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
   const a = req.body as {
     id: string;
     propertyId: string;
@@ -1270,51 +1259,43 @@ router.post("/actions", async (req, res) => {
     payload?: any;
     actorName: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
-    await pool.query(
-      `INSERT INTO property_actions
-         (id, organization_id, property_id, type, description, payload, actor_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        a.id,
-        orgId,
-        a.propertyId,
-        a.type,
-        a.description,
-        a.payload ? JSON.stringify(a.payload) : null,
-        a.actorName,
-      ],
-    );
-    res.json({ ok: true, id: a.id });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  await pool.query(
+    `INSERT INTO property_actions
+       (id, organization_id, property_id, type, description, payload, actor_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      a.id,
+      orgId,
+      a.propertyId,
+      a.type,
+      a.description,
+      a.payload ? JSON.stringify(a.payload) : null,
+      a.actorName,
+    ],
+  );
+  res.json({ ok: true, id: a.id });
+}));
 
-router.get("/actions", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/actions", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = propertyId
-      ? await pool.query(
-          `SELECT * FROM property_actions WHERE property_id = ? AND organization_id = ? ORDER BY occurred_at DESC`,
-          [propertyId, orgId],
-        )
-      : await pool.query(
-          `SELECT * FROM property_actions WHERE organization_id = ? ORDER BY occurred_at DESC LIMIT 200`,
-          [orgId],
-        );
-    res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const [rows] = propertyId
+    ? await pool.query(
+        `SELECT * FROM property_actions WHERE property_id = ? AND organization_id = ? ORDER BY occurred_at DESC`,
+        [propertyId, orgId],
+      )
+    : await pool.query(
+        `SELECT * FROM property_actions WHERE organization_id = ? ORDER BY occurred_at DESC LIMIT 200`,
+        [orgId],
+      );
+  res.json(rows);
+}));
 
 // ─── Mora (utilidad de cálculo, útil para preview en UI) ───────────────
 
-router.post("/late-fee", (req, res) => {
+router.post("/late-fee", requireRole("canAddFinancial"), (req, res) => {
   const {
     subtotal,
     paidOnDayOfMonth,
@@ -1350,95 +1331,82 @@ function rowToOwnerPayout(r: any): OwnerPayout {
   };
 }
 
-router.post("/owner-payouts", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.post("/owner-payouts", requireRole("canRegisterOwnerPayout"), asyncHandler(async (req, res) => {
   const p = req.body as Omit<OwnerPayout, "id" | "recordedAt"> & {
     id?: string;
   };
-  try {
-    const orgId = await ensureDefaultOrg();
-    const id = p.id ?? crypto.randomUUID();
-    const recordedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-    await pool.query(
-      `INSERT INTO owner_payouts
-         (id, organization_id, property_id, contract_id, period,
-          amount, paid_at, bank_account_id, reference, notes, recorded_by, recorded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         contract_id = VALUES(contract_id),
-         period = VALUES(period),
-         amount = VALUES(amount),
-         paid_at = VALUES(paid_at),
-         bank_account_id = VALUES(bank_account_id),
-         reference = VALUES(reference),
-         notes = VALUES(notes),
-         recorded_by = VALUES(recorded_by)`,
-      [
-        id,
-        orgId,
-        p.propertyId,
-        p.contractId ?? null,
-        p.period,
-        Number(p.amount),
-        p.paidAt,
-        p.bankAccountId ?? null,
-        p.reference ?? null,
-        p.notes ?? null,
-        p.recordedBy,
-        recordedAt,
-      ],
-    );
-    // Devolver la fila creada
-    const [rows] = await pool.query(
-      `SELECT * FROM owner_payouts WHERE id = ?`,
-      [id],
-    );
-    res.json(rowToOwnerPayout((rows as any[])[0]));
-  } catch (err: any) {
-    console.error("[owner-payouts POST]", err);
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const orgId = await ensureDefaultOrg();
+  const id = p.id ?? crypto.randomUUID();
+  const recordedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+  await pool.query(
+    `INSERT INTO owner_payouts
+       (id, organization_id, property_id, contract_id, period,
+        amount, paid_at, bank_account_id, reference, notes, recorded_by, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       contract_id = VALUES(contract_id),
+       period = VALUES(period),
+       amount = VALUES(amount),
+       paid_at = VALUES(paid_at),
+       bank_account_id = VALUES(bank_account_id),
+       reference = VALUES(reference),
+       notes = VALUES(notes),
+       recorded_by = VALUES(recorded_by)`,
+    [
+      id,
+      orgId,
+      p.propertyId,
+      p.contractId ?? null,
+      p.period,
+      Number(p.amount),
+      p.paidAt,
+      p.bankAccountId ?? null,
+      p.reference ?? null,
+      p.notes ?? null,
+      p.recordedBy,
+      recordedAt,
+    ],
+  );
+  // Devolver la fila creada
+  const [rows] = await pool.query(
+    `SELECT * FROM owner_payouts WHERE id = ?`,
+    [id],
+  );
+  res.json(rowToOwnerPayout((rows as any[])[0]));
+}));
 
-router.get("/owner-payouts", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
+// BUG-029: migrado a asyncHandler.
+router.get("/owner-payouts", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string | undefined;
-  try {
-    const orgId = await ensureDefaultOrg();
-    const where: string[] = ["organization_id = ?"];
-    const args: any[] = [orgId];
-    if (propertyId) {
-      where.push("property_id = ?");
-      args.push(propertyId);
-    }
-    if (period) {
-      where.push("period = ?");
-      args.push(period);
-    }
-    const [rows] = await pool.query(
-      `SELECT * FROM owner_payouts WHERE ${where.join(" AND ")} ORDER BY paid_at DESC`,
-      args,
-    );
-    res.json((rows as any[]).map(rowToOwnerPayout));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  const orgId = await ensureDefaultOrg();
+  const where: string[] = ["organization_id = ?"];
+  const args: any[] = [orgId];
+  if (propertyId) {
+    where.push("property_id = ?");
+    args.push(propertyId);
   }
-});
+  if (period) {
+    where.push("period = ?");
+    args.push(period);
+  }
+  const [rows] = await pool.query(
+    `SELECT * FROM owner_payouts WHERE ${where.join(" AND ")} ORDER BY paid_at DESC`,
+    args,
+  );
+  res.json((rows as any[]).map(rowToOwnerPayout));
+}));
 
-router.delete("/owner-payouts/:id", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try.
-  try {
-    const orgId = await ensureDefaultOrg();
-    await pool.query(
-      `DELETE FROM owner_payouts WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId],
-    );
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.delete("/owner-payouts/:id", requireRole("canRegisterOwnerPayout"), asyncHandler(async (req, res) => {
+  const orgId = await ensureDefaultOrg();
+  await pool.query(
+    `DELETE FROM owner_payouts WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId],
+  );
+  res.json({ ok: true });
+}));
 
 /**
  * GET /api/billing/owner-statement?propertyId=&period=
@@ -1447,8 +1415,8 @@ router.delete("/owner-payouts/:id", async (req, res) => {
  * ingresos del inquilino + descuentos + retenciones del motor + payouts
  * reales. El PDF de estado de cuenta consume esta salida.
  */
-router.get("/owner-statement", async (req, res) => {
-  // BUG-006: ensureDefaultOrg() adentro del try (después de la validación 400).
+// BUG-029: migrado a asyncHandler.
+router.get("/owner-statement", asyncHandler(async (req, res) => {
   const propertyId = req.query.propertyId as string | undefined;
   const period = req.query.period as string;
   if (!propertyId || !period) {
@@ -1456,164 +1424,156 @@ router.get("/owner-statement", async (req, res) => {
       .status(400)
       .json({ error: "propertyId y period son requeridos" });
   }
-  try {
-    const orgId = await ensureDefaultOrg();
-    // 1) Ingresos del mes (amortization_rows pagados del period)
-    const [paidRows] = await pool.query(
-      `SELECT
-         COALESCE(SUM(base_rent), 0)        AS rent,
-         COALESCE(SUM(base_admin), 0)       AS admin,
-         COALESCE(SUM(late_fee_amount), 0)  AS late_fee,
-         COALESCE(SUM(total), 0)            AS total
-       FROM amortization_rows
-       WHERE property_id = ? AND status = 'paid' AND period_start LIKE ?`,
-      [propertyId, `${period}%`],
-    );
-    const paid = (paidRows as any[])[0] ?? {};
-    const grossRent = Number(paid.rent ?? 0);
-    const grossAdmin = Number(paid.admin ?? 0);
-    const grossLateFee = Number(paid.late_fee ?? 0);
-    const totalGrossIncome = grossRent + grossAdmin + grossLateFee;
+  const orgId = await ensureDefaultOrg();
+  // 1) Ingresos del mes (amortization_rows pagados del period)
+  const [paidRows] = await pool.query(
+    `SELECT
+       COALESCE(SUM(base_rent), 0)        AS rent,
+       COALESCE(SUM(base_admin), 0)       AS admin,
+       COALESCE(SUM(late_fee_amount), 0)  AS late_fee,
+       COALESCE(SUM(total), 0)            AS total
+     FROM amortization_rows
+     WHERE property_id = ? AND status = 'paid' AND period_start LIKE ?`,
+    [propertyId, `${period}%`],
+  );
+  const paid = (paidRows as any[])[0] ?? {};
+  const grossRent = Number(paid.rent ?? 0);
+  const grossAdmin = Number(paid.admin ?? 0);
+  const grossLateFee = Number(paid.late_fee ?? 0);
+  const totalGrossIncome = grossRent + grossAdmin + grossLateFee;
 
-    // 2) Cargos del mes que aplican al propietario (property_charges
-    //    con charged_to IN ('owner','both')). Compat: si la tabla nueva está
-    //    vacía para esta propiedad/period, caemos a property_discounts.
-    const [chargeRowsOwner] = await pool.query(
-      `SELECT * FROM property_charges
-       WHERE property_id = ? AND period = ?
-         AND charged_to IN ('owner','both')
+  // 2) Cargos del mes que aplican al propietario (property_charges
+  //    con charged_to IN ('owner','both')). Compat: si la tabla nueva está
+  //    vacía para esta propiedad/period, caemos a property_discounts.
+  const [chargeRowsOwner] = await pool.query(
+    `SELECT * FROM property_charges
+     WHERE property_id = ? AND period = ?
+       AND charged_to IN ('owner','both')
+     ORDER BY recorded_at ASC`,
+    [propertyId, period],
+  );
+  let chargesForOwner = (chargeRowsOwner as any[]).map(rowToCharge);
+  if (chargesForOwner.length === 0) {
+    const [legacyRows] = await pool.query(
+      `SELECT * FROM property_discounts
+       WHERE property_id = ? AND month_period = ?
        ORDER BY recorded_at ASC`,
       [propertyId, period],
     );
-    let chargesForOwner = (chargeRowsOwner as any[]).map(rowToCharge);
-    if (chargesForOwner.length === 0) {
-      const [legacyRows] = await pool.query(
-        `SELECT * FROM property_discounts
-         WHERE property_id = ? AND month_period = ?
-         ORDER BY recorded_at ASC`,
-        [propertyId, period],
-      );
-      chargesForOwner = (legacyRows as any[]).map((r) => ({
-        id: r.id,
-        propertyId: r.property_id,
-        period: r.month_period,
-        type: r.type,
-        description: r.description,
-        amount: Number(r.amount),
-        chargedTo: "owner" as const,
-        appliesToInvoice: false,
-        attachmentUrl: r.attachment_url ?? undefined,
-        recordedAt: r.recorded_at,
-        recordedBy: r.recorded_by,
-      }));
-    }
-    const totalDiscounts = chargesForOwner.reduce((s, c) => s + c.amount, 0);
-    // Mapear a la forma legacy `PropertyDiscount` para no romper la UI actual.
-    const discounts = chargesForOwner.map((c) => ({
-      id: c.id,
-      propertyId: c.propertyId,
-      type: c.type,
-      description: c.description,
-      amount: c.amount,
-      monthPeriod: c.period,
-      attachmentUrl: c.attachmentUrl,
-      recordedAt: c.recordedAt,
-      recordedBy: c.recordedBy,
+    chargesForOwner = (legacyRows as any[]).map((r) => ({
+      id: r.id,
+      propertyId: r.property_id,
+      period: r.month_period,
+      type: r.type,
+      description: r.description,
+      amount: Number(r.amount),
+      chargedTo: "owner" as const,
+      appliesToInvoice: false,
+      attachmentUrl: r.attachment_url ?? undefined,
+      recordedAt: r.recorded_at,
+      recordedBy: r.recorded_by,
     }));
-
-    // 2b) Cargos pasados al inquilino (solo auditoría — no afecta el neto)
-    const [chargeRowsTenant] = await pool.query(
-      `SELECT * FROM property_charges
-       WHERE property_id = ? AND period = ?
-         AND charged_to IN ('tenant','both')
-       ORDER BY recorded_at ASC`,
-      [propertyId, period],
-    );
-    const chargesToTenant = (chargeRowsTenant as any[]).map(rowToCharge);
-    const totalChargesToTenant = chargesToTenant.reduce(
-      (s, c) => s + c.amount,
-      0,
-    );
-
-    // 3) Retenciones del motor de liquidación (calculateMonthlySettlement)
-    // Usamos el rent_amount del contrato activo (si hay), la comisión del
-    // contrato, y tipo "natural" por default. El tipo de contribuyente
-    // puede ajustarse desde la UI en el futuro.
-    const policy = await loadPolicy(orgId, propertyId);
-    const [contracts] = await pool.query(
-      `SELECT * FROM contracts WHERE property_id = ? AND status = 'active' ORDER BY start_date DESC LIMIT 1`,
-      [propertyId],
-    );
-    const contract = (contracts as any[])[0];
-    const rentAmount = contract
-      ? Number(contract.rent_amount)
-      : (policy?.rentAmount ?? 0);
-    const adminFee = contract
-      ? Number(contract.admin_fee)
-      : (policy?.adminFee ?? 0);
-    const commissionPct = contract?.commission_pct ?? 8;
-
-    const settlementInputs: SettlementInputs = {
-      canon: rentAmount,
-      administracionPH: adminFee,
-      otrosIngresos: 0,
-      gastosOperativos: totalDiscounts,
-      comisionPct: Number(commissionPct),
-      seguroPct: 0,
-      ownerTaxType: "natural",
-      tenantTaxType: "natural",
-      period,
-      closed: false,
-    };
-    const settlementResult = calculateMonthlySettlement(settlementInputs);
-
-    // 4) Payouts reales del mes
-    const [payoutRows] = await pool.query(
-      `SELECT * FROM owner_payouts
-       WHERE property_id = ? AND period = ? AND organization_id = ?
-       ORDER BY paid_at ASC`,
-      [propertyId, period, orgId],
-    );
-    const payouts = (payoutRows as any[]).map(rowToOwnerPayout);
-    const totalPayouts = payouts.reduce((s, p) => s + p.amount, 0);
-
-    // 5) Saldo final
-    const netCalculated = settlementResult.totales.saldoTransferir;
-    const finalBalance = netCalculated - totalPayouts;
-
-    const stmt: OwnerStatement = {
-      propertyId,
-      period,
-      grossRent,
-      grossAdmin,
-      grossLateFee,
-      totalGrossIncome,
-      totalDiscounts,
-      discounts,
-      charges: chargesForOwner,
-      settlement: {
-        commission: settlementResult.trace.comision,
-        ivaOnCommission: settlementResult.trace.ivaSobreComision,
-        retefuente: settlementResult.trace.retefuente,
-        gmf: settlementResult.trace.gmf,
-        totalRetentions:
-          settlementResult.totales.impuestos +
-          settlementResult.trace.comision +
-          settlementResult.trace.gmf,
-        commissionPct: Number(commissionPct),
-      },
-      netCalculated,
-      totalPayouts,
-      payouts,
-      totalChargesToTenant,
-      finalBalance,
-    };
-    res.json(stmt);
-  } catch (err: any) {
-    console.error("[owner-statement]", err);
-    res.status(500).json({ error: err?.message });
   }
-});
+  const totalDiscounts = chargesForOwner.reduce((s, c) => s + c.amount, 0);
+  // Mapear a la forma legacy `PropertyDiscount` para no romper la UI actual.
+  const discounts = chargesForOwner.map((c) => ({
+    id: c.id,
+    propertyId: c.propertyId,
+    type: c.type,
+    description: c.description,
+    amount: c.amount,
+    monthPeriod: c.period,
+    attachmentUrl: c.attachmentUrl,
+    recordedAt: c.recordedAt,
+    recordedBy: c.recordedBy,
+  }));
+
+  // 2b) Cargos pasados al inquilino (solo auditoría — no afecta el neto)
+  const [chargeRowsTenant] = await pool.query(
+    `SELECT * FROM property_charges
+     WHERE property_id = ? AND period = ?
+       AND charged_to IN ('tenant','both')
+     ORDER BY recorded_at ASC`,
+    [propertyId, period],
+  );
+  const chargesToTenant = (chargeRowsTenant as any[]).map(rowToCharge);
+  const totalChargesToTenant = chargesToTenant.reduce(
+    (s, c) => s + c.amount,
+    0,
+  );
+
+  // 3) Retenciones del motor de liquidación (calculateMonthlySettlement)
+  const policy = await loadPolicy(orgId, propertyId);
+  const [contracts] = await pool.query(
+    `SELECT * FROM contracts WHERE property_id = ? AND status = 'active' ORDER BY start_date DESC LIMIT 1`,
+    [propertyId],
+  );
+  const contract = (contracts as any[])[0];
+  const rentAmount = contract
+    ? Number(contract.rent_amount)
+    : (policy?.rentAmount ?? 0);
+  const adminFee = contract
+    ? Number(contract.admin_fee)
+    : (policy?.adminFee ?? 0);
+  const commissionPct = contract?.commission_pct ?? 8;
+
+  const settlementInputs: SettlementInputs = {
+    canon: rentAmount,
+    administracionPH: adminFee,
+    otrosIngresos: 0,
+    gastosOperativos: totalDiscounts,
+    comisionPct: Number(commissionPct),
+    seguroPct: 0,
+    ownerTaxType: "natural",
+    tenantTaxType: "natural",
+    period,
+    closed: false,
+  };
+  const settlementResult = calculateMonthlySettlement(settlementInputs);
+
+  // 4) Payouts reales del mes
+  const [payoutRows] = await pool.query(
+    `SELECT * FROM owner_payouts
+     WHERE property_id = ? AND period = ? AND organization_id = ?
+     ORDER BY paid_at ASC`,
+    [propertyId, period, orgId],
+  );
+  const payouts = (payoutRows as any[]).map(rowToOwnerPayout);
+  const totalPayouts = payouts.reduce((s, p) => s + p.amount, 0);
+
+  // 5) Saldo final
+  const netCalculated = settlementResult.totales.saldoTransferir;
+  const finalBalance = netCalculated - totalPayouts;
+
+  const stmt: OwnerStatement = {
+    propertyId,
+    period,
+    grossRent,
+    grossAdmin,
+    grossLateFee,
+    totalGrossIncome,
+    totalDiscounts,
+    discounts,
+    charges: chargesForOwner,
+    settlement: {
+      commission: settlementResult.trace.comision,
+      ivaOnCommission: settlementResult.trace.ivaSobreComision,
+      retefuente: settlementResult.trace.retefuente,
+      gmf: settlementResult.trace.gmf,
+      totalRetentions:
+        settlementResult.totales.impuestos +
+        settlementResult.trace.comision +
+        settlementResult.trace.gmf,
+      commissionPct: Number(commissionPct),
+    },
+    netCalculated,
+    totalPayouts,
+    payouts,
+    totalChargesToTenant,
+    finalBalance,
+  };
+  res.json(stmt);
+}));
 
 // ============================================================================
 // Bank Accounts (consolidado de banks.ts — BUG-028)
@@ -1640,6 +1600,7 @@ router.get(
 
 router.post(
   "/bank-accounts",
+  requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
     const orgId = await ensureDefaultOrg();
     const b = req.body as {
@@ -1702,6 +1663,7 @@ router.post(
 
 router.delete(
   "/bank-accounts/:id",
+  requireRole("canDeleteFinancial"),
   asyncHandler(async (req, res) => {
     await pool.query(`DELETE FROM bank_accounts WHERE id = ?`, [req.params.id]);
     res.json({ ok: true });
@@ -1724,6 +1686,7 @@ router.get(
 
 router.post(
   "/insurance-policies",
+  requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
     const orgId = await ensureDefaultOrg();
     const p = req.body as {

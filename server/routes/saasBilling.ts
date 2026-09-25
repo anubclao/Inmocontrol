@@ -35,8 +35,15 @@
 
 import { Router } from 'express';
 import pool, { ensureDefaultOrg } from '../db.js';
+// FIX #2 (P0 seguridad): requireAuth en SaaS billing (planes, suscripción, pagos).
+import { requireAuth } from './auth.js';
+// fix-issue-permissions-by-endpoint: requiere canManageSaasBilling.
+import { requireRole } from '../middleware/requireRole.js';
+// BUG-029: asyncHandler para propagación central de errores.
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 const router = Router();
+router.use(requireAuth);
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -136,43 +143,35 @@ async function nextInvoiceNumber(): Promise<string> {
 // ─── PLANS ─────────────────────────────────────────────────────────────
 
 /** GET /plans — lista planes activos ordenados por sort_order. */
-router.get('/plans', async (_req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_plans WHERE is_active = 1 ORDER BY sort_order ASC`
-    );
-    res.json((rows as any[]).map(planRowToJson));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get('/plans', asyncHandler(async (_req, res) => {
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_plans WHERE is_active = 1 ORDER BY sort_order ASC`
+  );
+  res.json((rows as any[]).map(planRowToJson));
+}));
 
 /** GET /plans/all — incluye inactivos (admin). */
-router.get('/plans/all', async (_req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_plans ORDER BY sort_order ASC`
-    );
-    res.json((rows as any[]).map(planRowToJson));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get('/plans/all', asyncHandler(async (_req, res) => {
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_plans ORDER BY sort_order ASC`
+  );
+  res.json((rows as any[]).map(planRowToJson));
+}));
 
 /** GET /plans/:id */
-router.get('/plans/:id', async (req, res) => {
-  try {
-    const [rows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ?`, [req.params.id]);
-    const list = rows as any[];
-    if (list.length === 0) return res.status(404).json({ error: 'Plan no encontrado' });
-    res.json(planRowToJson(list[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get('/plans/:id', asyncHandler(async (req, res) => {
+  const [rows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ?`, [req.params.id]);
+  const list = rows as any[];
+  if (list.length === 0) return res.status(404).json({ error: 'Plan no encontrado' });
+  res.json(planRowToJson(list[0]));
+}));
 
 /** POST /plans — crear plan (admin). */
-router.post('/plans', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 409 para slug duplicado).
+router.post('/plans', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const p = req.body as {
     slug: string; name: string; description?: string;
     priceCop: number; maxProperties: number; maxUsers: number; maxAlertsPerMonth: number;
@@ -196,225 +195,203 @@ router.post('/plans', async (req, res) => {
     res.status(201).json(planRowToJson((rows as any[])[0]));
   } catch (err: any) {
     if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: `Ya existe un plan con slug "${p.slug}"` });
-    res.status(500).json({ error: err?.message });
+    throw err; // BUG-029: propagar al errorHandler central
   }
-});
+}));
 
 /** PUT /plans/:id — editar plan (admin). */
-router.put('/plans/:id', async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.put('/plans/:id', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const p = req.body as Partial<{
     name: string; description: string | null; priceCop: number;
     maxProperties: number; maxUsers: number; maxAlertsPerMonth: number;
     features: string[]; sortOrder: number; isActive: boolean;
   }>;
-  try {
-    await pool.query(
-      `UPDATE saas_plans SET
-         name = COALESCE(?, name),
-         description = ?,
-         price_cop = COALESCE(?, price_cop),
-         max_properties = COALESCE(?, max_properties),
-         max_users = COALESCE(?, max_users),
-         max_alerts_per_month = COALESCE(?, max_alerts_per_month),
-         features_json = COALESCE(?, features_json),
-         sort_order = COALESCE(?, sort_order),
-         is_active = COALESCE(?, is_active)
-       WHERE id = ?`,
-      [
-        p.name ?? null,
-        p.description ?? undefined,  // null permite limpiar
-        p.priceCop ?? null,
-        p.maxProperties ?? null,
-        p.maxUsers ?? null,
-        p.maxAlertsPerMonth ?? null,
-        p.features ? JSON.stringify(p.features) : null,
-        p.sortOrder ?? null,
-        p.isActive == null ? null : (p.isActive ? 1 : 0),
-        req.params.id,
-      ]
-    );
-    const [rows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ?`, [req.params.id]);
-    const list = rows as any[];
-    if (list.length === 0) return res.status(404).json({ error: 'Plan no encontrado' });
-    res.json(planRowToJson(list[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  await pool.query(
+    `UPDATE saas_plans SET
+       name = COALESCE(?, name),
+       description = ?,
+       price_cop = COALESCE(?, price_cop),
+       max_properties = COALESCE(?, max_properties),
+       max_users = COALESCE(?, max_users),
+       max_alerts_per_month = COALESCE(?, max_alerts_per_month),
+       features_json = COALESCE(?, features_json),
+       sort_order = COALESCE(?, sort_order),
+       is_active = COALESCE(?, is_active)
+     WHERE id = ?`,
+    [
+      p.name ?? null,
+      p.description ?? undefined,  // null permite limpiar
+      p.priceCop ?? null,
+      p.maxProperties ?? null,
+      p.maxUsers ?? null,
+      p.maxAlertsPerMonth ?? null,
+      p.features ? JSON.stringify(p.features) : null,
+      p.sortOrder ?? null,
+      p.isActive == null ? null : (p.isActive ? 1 : 0),
+      req.params.id,
+    ],
+  );
+  const [rows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ?`, [req.params.id]);
+  const list = rows as any[];
+  if (list.length === 0) return res.status(404).json({ error: 'Plan no encontrado' });
+  res.json(planRowToJson(list[0]));
+}));
 
 /** DELETE /plans/:id — desactivar (soft delete — no borramos por FK con subscriptions). */
-router.delete('/plans/:id', async (req, res) => {
-  try {
-    // Si hay suscripciones activas referenciando este plan, no dejamos borrarlo duro.
-    const [subs] = await pool.query(
-      `SELECT COUNT(*) AS n FROM saas_subscriptions WHERE plan_id = ? AND status IN ('active','trialing','past_due')`,
-      [req.params.id]
-    );
-    const activeCount = Number((subs as any[])[0]?.n ?? 0);
-    if (activeCount > 0) {
-      // Soft delete: desactivar
-      await pool.query(`UPDATE saas_plans SET is_active = 0 WHERE id = ?`, [req.params.id]);
-      return res.json({ ok: true, deactivated: true, activeSubscriptions: activeCount });
-    }
-    await pool.query(`DELETE FROM saas_plans WHERE id = ?`, [req.params.id]);
-    res.json({ ok: true, deactivated: false });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+// BUG-029: migrado a asyncHandler (preserva lógica de soft delete si hay subs activas).
+router.delete('/plans/:id', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
+  // Si hay suscripciones activas referenciando este plan, no dejamos borrarlo duro.
+  const [subs] = await pool.query(
+    `SELECT COUNT(*) AS n FROM saas_subscriptions WHERE plan_id = ? AND status IN ('active','trialing','past_due')`,
+    [req.params.id]
+  );
+  const activeCount = Number((subs as any[])[0]?.n ?? 0);
+  if (activeCount > 0) {
+    // Soft delete: desactivar
+    await pool.query(`UPDATE saas_plans SET is_active = 0 WHERE id = ?`, [req.params.id]);
+    return res.json({ ok: true, deactivated: true, activeSubscriptions: activeCount });
   }
-});
+  await pool.query(`DELETE FROM saas_plans WHERE id = ?`, [req.params.id]);
+  res.json({ ok: true, deactivated: false });
+}));
 
 // ─── SUBSCRIPTION ──────────────────────────────────────────────────────
 
 /** GET /subscription — subscripción actual de la org (o null si no hay). */
-router.get('/subscription', async (_req, res) => {
-  try {
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_subscriptions WHERE organization_id = ?`,
-      [orgId]
-    );
-    const list = rows as any[];
-    if (list.length === 0) return res.json(null);
-    res.json(subscriptionRowToJson(list[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+// BUG-029: migrado a asyncHandler.
+router.get('/subscription', asyncHandler(async (_req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_subscriptions WHERE organization_id = ?`,
+    [orgId]
+  );
+  const list = rows as any[];
+  if (list.length === 0) return res.json(null);
+  res.json(subscriptionRowToJson(list[0]));
+}));
 
 /** POST /subscription — subscribe o cambia de plan. Mock pay: emite invoice y la marca como pagada. */
-router.post('/subscription', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404 para plan inactivo).
+router.post('/subscription', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const { planId, paymentMethodId } = req.body as { planId: string; paymentMethodId?: string };
   if (!planId) return res.status(400).json({ error: 'Falta planId' });
   const orgId = await ensureDefaultOrg();
-  try {
-    // Validar plan
-    const [planRows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ? AND is_active = 1`, [planId]);
-    const planList = planRows as any[];
-    if (planList.length === 0) return res.status(404).json({ error: 'Plan no encontrado o inactivo' });
-    const plan = planRowToJson(planList[0]);
+  // Validar plan
+  const [planRows] = await pool.query(`SELECT * FROM saas_plans WHERE id = ? AND is_active = 1`, [planId]);
+  const planList = planRows as any[];
+  if (planList.length === 0) return res.status(404).json({ error: 'Plan no encontrado o inactivo' });
+  const plan = planRowToJson(planList[0]);
 
-    // ¿Existe ya subscripción?
-    const [existing] = await pool.query(
-      `SELECT * FROM saas_subscriptions WHERE organization_id = ?`,
-      [orgId]
-    );
-    const existingList = existing as any[];
-    const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
+  // ¿Existe ya subscripción?
+  const [existing] = await pool.query(
+    `SELECT * FROM saas_subscriptions WHERE organization_id = ?`,
+    [orgId]
+  );
+  const existingList = existing as any[];
+  const now = new Date();
+  const periodEnd = new Date(now);
+  periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-    const periodStartStr = fmt(now);
-    const periodEndStr = fmt(periodEnd);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const periodStartStr = fmt(now);
+  const periodEndStr = fmt(periodEnd);
 
-    let subscriptionId: string;
-    if (existingList.length > 0) {
-      subscriptionId = existingList[0].id;
-      await pool.query(
-        `UPDATE saas_subscriptions SET
-           plan_id = ?, status = 'active',
-           current_period_start = ?, current_period_end = ?,
-           cancel_at_period_end = 0,
-           canceled_at = NULL,
-           updated_at = NOW()
-         WHERE id = ?`,
-        [planId, periodStartStr, periodEndStr, subscriptionId]
-      );
-    } else {
-      subscriptionId = genId();
-      await pool.query(
-        `INSERT INTO saas_subscriptions
-           (id, organization_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end)
-         VALUES (?, ?, ?, 'active', ?, ?, 0)`,
-        [subscriptionId, orgId, planId, periodStartStr, periodEndStr]
-      );
-    }
-
-    // Generar invoice del primer mes (MOCK: lo marcamos paid de una vez)
-    const subtotal = plan.priceCop;
-    const iva = Math.round(subtotal * IVA_RATE);
-    const total = subtotal + iva;
-    const invNumber = await nextInvoiceNumber();
-    const invoiceId = genId();
+  let subscriptionId: string;
+  if (existingList.length > 0) {
+    subscriptionId = existingList[0].id;
     await pool.query(
-      `INSERT INTO saas_invoices
-         (id, organization_id, subscription_id, payment_method_id,
-          invoice_number, period_start, period_end,
-          subtotal_cop, iva_cop, total_cop,
-          status, issued_at, paid_at, plan_snapshot_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', NOW(), NOW(), ?)`,
-      [
-        invoiceId, orgId, subscriptionId, paymentMethodId ?? null,
-        invNumber, periodStartStr, periodEndStr,
-        subtotal, iva, total,
-        JSON.stringify(plan),
-      ]
-    );
-
-    const [subRows] = await pool.query(`SELECT * FROM saas_subscriptions WHERE id = ?`, [subscriptionId]);
-    res.status(201).json({
-      subscription: subscriptionRowToJson((subRows as any[])[0]),
-      plan,
-      invoiceId,
-      invoiceNumber: invNumber,
-    });
-  } catch (err: any) {
-    console.error('[subscription POST]', err);
-    res.status(500).json({ error: err?.message });
-  }
-});
-
-/** DELETE /subscription — cancelar al final del periodo actual (no inmediato). */
-router.delete('/subscription', async (_req, res) => {
-  const orgId = await ensureDefaultOrg();
-  try {
-    const [result] = await pool.query(
       `UPDATE saas_subscriptions SET
-         cancel_at_period_end = 1,
+         plan_id = ?, status = 'active',
+         current_period_start = ?, current_period_end = ?,
+         cancel_at_period_end = 0,
          canceled_at = NULL,
          updated_at = NOW()
-       WHERE organization_id = ? AND status IN ('active','trialing','past_due')`,
-      [orgId]
+       WHERE id = ?`,
+      [planId, periodStartStr, periodEndStr, subscriptionId]
     );
-    const affected = (result as any).affectedRows;
-    if (affected === 0) return res.status(404).json({ error: 'No hay subscripción activa para cancelar' });
-    res.json({ ok: true, message: 'Subscripción se cancelará al final del periodo actual.' });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  } else {
+    subscriptionId = genId();
+    await pool.query(
+      `INSERT INTO saas_subscriptions
+         (id, organization_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end)
+       VALUES (?, ?, ?, 'active', ?, ?, 0)`,
+      [subscriptionId, orgId, planId, periodStartStr, periodEndStr]
+    );
   }
-});
+
+  // Generar invoice del primer mes (MOCK: lo marcamos paid de una vez)
+  const subtotal = plan.priceCop;
+  const iva = Math.round(subtotal * IVA_RATE);
+  const total = subtotal + iva;
+  const invNumber = await nextInvoiceNumber();
+  const invoiceId = genId();
+  await pool.query(
+    `INSERT INTO saas_invoices
+       (id, organization_id, subscription_id, payment_method_id,
+        invoice_number, period_start, period_end,
+        subtotal_cop, iva_cop, total_cop,
+        status, issued_at, paid_at, plan_snapshot_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', NOW(), NOW(), ?)`,
+    [
+      invoiceId, orgId, subscriptionId, paymentMethodId ?? null,
+      invNumber, periodStartStr, periodEndStr,
+      subtotal, iva, total,
+      JSON.stringify(plan),
+    ]
+  );
+
+  const [subRows] = await pool.query(`SELECT * FROM saas_subscriptions WHERE id = ?`, [subscriptionId]);
+  res.status(201).json({
+    subscription: subscriptionRowToJson((subRows as any[])[0]),
+    plan,
+    invoiceId,
+    invoiceNumber: invNumber,
+  });
+}));
+
+/** DELETE /subscription — cancelar al final del periodo actual (no inmediato). */
+// BUG-029: migrado a asyncHandler (preserva 404 si no hay sub activa).
+router.delete('/subscription', requireRole('canManageSaasBilling'), asyncHandler(async (_req, res) => {
+  const orgId = await ensureDefaultOrg();
+  const [result] = await pool.query(
+    `UPDATE saas_subscriptions SET
+       cancel_at_period_end = 1,
+       canceled_at = NULL,
+       updated_at = NOW()
+     WHERE organization_id = ? AND status IN ('active','trialing','past_due')`,
+    [orgId]
+  );
+  const affected = (result as any).affectedRows;
+  if (affected === 0) return res.status(404).json({ error: 'No hay subscripción activa para cancelar' });
+  res.json({ ok: true, message: 'Subscripción se cancelará al final del periodo actual.' });
+}));
 
 /** POST /subscription/reactivate — quitar cancel_at_period_end antes del fin del periodo. */
-router.post('/subscription/reactivate', async (_req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404 si no hay sub activa).
+router.post('/subscription/reactivate', requireRole('canManageSaasBilling'), asyncHandler(async (_req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [result] = await pool.query(
-      `UPDATE saas_subscriptions SET cancel_at_period_end = 0, updated_at = NOW()
-       WHERE organization_id = ? AND status = 'active'`,
-      [orgId]
-    );
-    if ((result as any).affectedRows === 0) return res.status(404).json({ error: 'No hay subscripción activa para reactivar' });
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [result] = await pool.query(
+    `UPDATE saas_subscriptions SET cancel_at_period_end = 0, updated_at = NOW()
+     WHERE organization_id = ? AND status = 'active'`,
+    [orgId]
+  );
+  if ((result as any).affectedRows === 0) return res.status(404).json({ error: 'No hay subscripción activa para reactivar' });
+  res.json({ ok: true });
+}));
 
 // ─── PAYMENT METHODS ───────────────────────────────────────────────────
 
 /** GET /payment-methods */
-router.get('/payment-methods', async (_req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/payment-methods', asyncHandler(async (_req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_payment_methods WHERE organization_id = ? ORDER BY is_default DESC, created_at DESC`,
-      [orgId]
-    );
-    res.json((rows as any[]).map(pmRowToJson));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_payment_methods WHERE organization_id = ? ORDER BY is_default DESC, created_at DESC`,
+    [orgId]
+  );
+  res.json((rows as any[]).map(pmRowToJson));
+}));
 
 /**
  * POST /payment-methods — agregar método.
@@ -422,7 +399,8 @@ router.get('/payment-methods', async (_req, res) => {
  * nunca toca nuestro backend. Cuando se enchufe un PSP, este endpoint recibe
  * un token opaco del frontend (generado por el JS del PSP).
  */
-router.post('/payment-methods', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 400 de validación + lógica de default).
+router.post('/payment-methods', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const pm = req.body as {
     type: 'card' | 'pse' | 'nequi' | 'bancolombia';
     brand?: string; last4?: string; expiryMonth?: number; expiryYear?: number;
@@ -434,129 +412,110 @@ router.post('/payment-methods', async (req, res) => {
   }
   const orgId = await ensureDefaultOrg();
   const id = genId();
-  try {
-    // Si es default, desmarcar los demás primero
-    if (pm.makeDefault) {
-      await pool.query(`UPDATE saas_payment_methods SET is_default = 0 WHERE organization_id = ?`, [orgId]);
-    }
-    // Si es el primer método, hacerlo default automáticamente
-    const [countRows] = await pool.query(
-      `SELECT COUNT(*) AS n FROM saas_payment_methods WHERE organization_id = ?`,
-      [orgId]
-    );
-    const isFirst = Number((countRows as any[])[0]?.n ?? 0) === 0;
-    const isDefault = !!(pm.makeDefault ?? isFirst);
-
-    await pool.query(
-      `INSERT INTO saas_payment_methods
-         (id, organization_id, type, brand, last4, expiry_month, expiry_year, holder_name, details_json, is_default)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id, orgId, pm.type,
-        pm.brand ?? null, pm.last4 ?? null,
-        pm.expiryMonth ?? null, pm.expiryYear ?? null,
-        pm.holderName ?? null,
-        pm.details ? JSON.stringify(pm.details) : null,
-        isDefault ? 1 : 0,
-      ]
-    );
-    const [rows] = await pool.query(`SELECT * FROM saas_payment_methods WHERE id = ?`, [id]);
-    res.status(201).json(pmRowToJson((rows as any[])[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+  // Si es default, desmarcar los demás primero
+  if (pm.makeDefault) {
+    await pool.query(`UPDATE saas_payment_methods SET is_default = 0 WHERE organization_id = ?`, [orgId]);
   }
-});
+  // Si es el primer método, hacerlo default automáticamente
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS n FROM saas_payment_methods WHERE organization_id = ?`,
+    [orgId]
+  );
+  const isFirst = Number((countRows as any[])[0]?.n ?? 0) === 0;
+  const isDefault = !!(pm.makeDefault ?? isFirst);
+
+  await pool.query(
+    `INSERT INTO saas_payment_methods
+       (id, organization_id, type, brand, last4, expiry_month, expiry_year, holder_name, details_json, is_default)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id, orgId, pm.type,
+      pm.brand ?? null, pm.last4 ?? null,
+      pm.expiryMonth ?? null, pm.expiryYear ?? null,
+      pm.holderName ?? null,
+      pm.details ? JSON.stringify(pm.details) : null,
+      isDefault ? 1 : 0,
+    ]
+  );
+  const [rows] = await pool.query(`SELECT * FROM saas_payment_methods WHERE id = ?`, [id]);
+  res.status(201).json(pmRowToJson((rows as any[])[0]));
+}));
 
 /** DELETE /payment-methods/:id */
-router.delete('/payment-methods/:id', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404/409 cuando aplica).
+router.delete('/payment-methods/:id', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_payment_methods WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId]
-    );
-    const list = rows as any[];
-    if (list.length === 0) return res.status(404).json({ error: 'Método de pago no encontrado' });
-    if (list[0].is_default) return res.status(409).json({ error: 'No podés eliminar el método default. Marcá otro como default primero.' });
-    await pool.query(`DELETE FROM saas_payment_methods WHERE id = ?`, [req.params.id]);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_payment_methods WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId]
+  );
+  const list = rows as any[];
+  if (list.length === 0) return res.status(404).json({ error: 'Método de pago no encontrado' });
+  if (list[0].is_default) return res.status(409).json({ error: 'No podés eliminar el método default. Marcá otro como default primero.' });
+  await pool.query(`DELETE FROM saas_payment_methods WHERE id = ?`, [req.params.id]);
+  res.json({ ok: true });
+}));
 
 /** PUT /payment-methods/:id/default */
-router.put('/payment-methods/:id/default', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404 cuando el método no existe).
+router.put('/payment-methods/:id/default', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_payment_methods WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId]
-    );
-    if ((rows as any[]).length === 0) return res.status(404).json({ error: 'Método de pago no encontrado' });
-    await pool.query(`UPDATE saas_payment_methods SET is_default = 0 WHERE organization_id = ?`, [orgId]);
-    await pool.query(`UPDATE saas_payment_methods SET is_default = 1 WHERE id = ?`, [req.params.id]);
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_payment_methods WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId]
+  );
+  if ((rows as any[]).length === 0) return res.status(404).json({ error: 'Método de pago no encontrado' });
+  await pool.query(`UPDATE saas_payment_methods SET is_default = 0 WHERE organization_id = ?`, [orgId]);
+  await pool.query(`UPDATE saas_payment_methods SET is_default = 1 WHERE id = ?`, [req.params.id]);
+  res.json({ ok: true });
+}));
 
 // ─── INVOICES ──────────────────────────────────────────────────────────
 
 /** GET /invoices */
-router.get('/invoices', async (_req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.get('/invoices', asyncHandler(async (_req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_invoices WHERE organization_id = ? ORDER BY issued_at DESC LIMIT 200`,
-      [orgId]
-    );
-    res.json((rows as any[]).map(invoiceRowToJson));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_invoices WHERE organization_id = ? ORDER BY issued_at DESC LIMIT 200`,
+    [orgId]
+  );
+  res.json((rows as any[]).map(invoiceRowToJson));
+}));
 
 /** GET /invoices/:id */
-router.get('/invoices/:id', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404 cuando no pertenece a la org).
+router.get('/invoices/:id', asyncHandler(async (req, res) => {
   const orgId = await ensureDefaultOrg();
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_invoices WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId]
-    );
-    const list = rows as any[];
-    if (list.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
-    res.json(invoiceRowToJson(list[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_invoices WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId]
+  );
+  const list = rows as any[];
+  if (list.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+  res.json(invoiceRowToJson(list[0]));
+}));
 
 /** POST /invoices/:id/pay — mock pay (en producción llama al PSP). */
-router.post('/invoices/:id/pay', async (req, res) => {
+// BUG-029: migrado a asyncHandler (preserva 404 + 409 si ya está pagada).
+router.post('/invoices/:id/pay', requireRole('canManageSaasBilling'), asyncHandler(async (req, res) => {
   const orgId = await ensureDefaultOrg();
   const { paymentMethodId } = req.body as { paymentMethodId?: string };
-  try {
-    const [rows] = await pool.query(
-      `SELECT * FROM saas_invoices WHERE id = ? AND organization_id = ?`,
-      [req.params.id, orgId]
-    );
-    const list = rows as any[];
-    if (list.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
-    if (list[0].status === 'paid') return res.status(409).json({ error: 'La factura ya está pagada' });
-    // MOCK: simular delay y éxito
-    await new Promise((r) => setTimeout(r, 300));
-    await pool.query(
-      `UPDATE saas_invoices SET status = 'paid', paid_at = NOW(), payment_method_id = COALESCE(?, payment_method_id) WHERE id = ?`,
-      [paymentMethodId ?? null, req.params.id]
-    );
-    const [updated] = await pool.query(`SELECT * FROM saas_invoices WHERE id = ?`, [req.params.id]);
-    res.json({ ok: true, invoice: invoiceRowToJson((updated as any[])[0]) });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
-});
+  const [rows] = await pool.query(
+    `SELECT * FROM saas_invoices WHERE id = ? AND organization_id = ?`,
+    [req.params.id, orgId]
+  );
+  const list = rows as any[];
+  if (list.length === 0) return res.status(404).json({ error: 'Factura no encontrada' });
+  if (list[0].status === 'paid') return res.status(409).json({ error: 'La factura ya está pagada' });
+  // MOCK: simular delay y éxito
+  await new Promise((r) => setTimeout(r, 300));
+  await pool.query(
+    `UPDATE saas_invoices SET status = 'paid', paid_at = NOW(), payment_method_id = COALESCE(?, payment_method_id) WHERE id = ?`,
+    [paymentMethodId ?? null, req.params.id]
+  );
+  const [updated] = await pool.query(`SELECT * FROM saas_invoices WHERE id = ?`, [req.params.id]);
+  res.json({ ok: true, invoice: invoiceRowToJson((updated as any[])[0]) });
+}));
 
 export default router;

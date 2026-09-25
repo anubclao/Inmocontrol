@@ -7,8 +7,15 @@ import pool, { ensureDefaultOrg } from "../db.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
 import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
 import { withTransaction } from "../lib/withTransaction.js";
+// FIX #1 (P0 seguridad): requireAuth en todas las rutas de properties.
+import { requireAuth } from "./auth.js";
+// fix-issue-permissions-by-endpoint: requireRole valida acción específica
+// además de la sesión (cierra el agujero de EC-13 en AUTH).
+import { requireRole } from "../middleware/requireRole.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 const router = express.Router();
+router.use(requireAuth);
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -194,7 +201,8 @@ function parseDocumentKey(
  *   - `slotKey` formato legacy: "Cédula de Ciudadanía", "Rut Actualizado", etc.
  *     (se vincula al primer owner y/o a la unidad principal)
  */
-router.post("/", async (req, res) => {
+// BUG-029: migrado a asyncHandler (mínimo cambio: preserva try/catch internos).
+router.post("/", requireRole("canAddProperty"), asyncHandler(async (req, res) => {
   console.log("[POST /api/properties] body:", {
     address: req.body.address,
     owner: req.body.ownerName,
@@ -816,7 +824,7 @@ router.post("/", async (req, res) => {
       });
     }
   }
-});
+}));
 
 /**
  * GET /api/properties/:id
@@ -824,165 +832,161 @@ router.post("/", async (req, res) => {
  * Los owners y units vienen con sus documentos anidados (cedula/rut por owner,
  * certificado_tradicion por unit). El Mandato vive aparte en `mandate_pdf_url`.
  */
-router.get("/:id", async (req, res) => {
-  try {
-    const propertyId = req.params.id;
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query<any[]>(
-      `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
-              p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
-              p.inventory_pdf_url, p.inventory_captacion_pdf_url, p.inventory_colocacion_pdf_url,
-              p.mandato_pdf_url, p.mandato_signed_at, p.created_at,
-              COALESCE((SELECT COUNT(*) FROM inventories i WHERE i.property_id = p.id), 0) AS inventory_count
-       FROM properties p
-       WHERE p.id = ? AND p.organization_id = ?
-       LIMIT 1`,
-      [propertyId, orgId],
-    );
-    if (rows.length === 0) {
-      res.status(404).json({ error: "Propiedad no encontrada" });
-      return;
-    }
-    const p = rows[0];
-
-    // Owners (con sus docs)
-    const [ownerRows] = await pool.query<any[]>(
-      `SELECT id, name, id_number, phone, email, ownership_pct, position, notes
-       FROM property_owners
-       WHERE property_id = ?
-       ORDER BY position ASC`,
-      [propertyId],
-    );
-    const ownerIds = ownerRows.map((o) => o.id);
-    const docsByOwner: Record<string, { cedula?: string; rut?: string }> = {};
-    if (ownerIds.length > 0) {
-      const [docRows] = await pool.query<any[]>(
-        `SELECT owner_id, doc_type, file_url
-         FROM property_documents
-         WHERE property_id = ? AND owner_id IN (${ownerIds.map(() => "?").join(",")})`,
-        [propertyId, ...ownerIds],
-      );
-      for (const d of docRows) {
-        if (!d.owner_id) continue;
-        if (!docsByOwner[d.owner_id]) docsByOwner[d.owner_id] = {};
-        if (d.doc_type === "cedula" || d.doc_type === "rut") {
-          docsByOwner[d.owner_id][d.doc_type] = d.file_url;
-        }
-      }
-    }
-    const owners = ownerRows.map((o) => ({
-      id: o.id,
-      name: o.name,
-      idNumber: o.id_number,
-      phone: o.phone,
-      email: o.email,
-      ownershipPct: o.ownership_pct !== null ? Number(o.ownership_pct) : null,
-      position: o.position,
-      notes: o.notes,
-      documents: docsByOwner[o.id] ?? {},
-    }));
-
-    // Units (con sus docs)
-    const [unitRows] = await pool.query<any[]>(
-      `SELECT id, type, label, folio_matricula, area_m2, notes, position
-       FROM property_units
-       WHERE property_id = ?
-       ORDER BY position ASC`,
-      [propertyId],
-    );
-    const unitIds = unitRows.map((u) => u.id);
-    const docsByUnit: Record<string, { certificado_tradicion?: string }> = {};
-    if (unitIds.length > 0) {
-      const [docRows] = await pool.query<any[]>(
-        `SELECT unit_id, doc_type, file_url
-         FROM property_documents
-         WHERE property_id = ? AND unit_id IN (${unitIds.map(() => "?").join(",")})`,
-        [propertyId, ...unitIds],
-      );
-      for (const d of docRows) {
-        if (!d.unit_id) continue;
-        if (!docsByUnit[d.unit_id]) docsByUnit[d.unit_id] = {};
-        if (d.doc_type === "certificado_tradicion") {
-          docsByUnit[d.unit_id].certificado_tradicion = d.file_url;
-        }
-      }
-    }
-    const units = unitRows.map((u) => ({
-      id: u.id,
-      type: u.type,
-      label: u.label,
-      folioMatricula: u.folio_matricula,
-      areaM2: u.area_m2 !== null ? Number(u.area_m2) : null,
-      notes: u.notes,
-      position: u.position,
-      documents: docsByUnit[u.id] ?? {},
-    }));
-
-    // Documents a nivel de propiedad: predial + certificado_tradicion principal (unit_id IS NULL)
-    const [propDocRows] = await pool.query<any[]>(
-      `SELECT doc_type, file_url
-       FROM property_documents
-       WHERE property_id = ? AND owner_id IS NULL AND unit_id IS NULL`,
-      [propertyId],
-    );
-    const propertyDocuments: Record<string, string> = {};
-    for (const d of propDocRows) {
-      if (d.doc_type === "predial" || d.doc_type === "certificado_tradicion") {
-        propertyDocuments[d.doc_type] = d.file_url;
-      }
-    }
-
-    // Mantener compat: `documents` legacy con keys legibles que apuntan al
-    // primer owner (CC, RUT) y a la unidad principal (Certificado de Tradición).
-    // Esto evita que la card de la lista de propiedades muestre "todo falta"
-    // aunque los docs estén subidos.
-    const firstOwner = owners[0];
-    const documentsLegacy: Record<string, string> = {
-      "Cédula de Ciudadanía": firstOwner?.documents?.cedula ?? "",
-      "Rut Actualizado": firstOwner?.documents?.rut ?? "",
-      "Impuesto Predial": propertyDocuments.predial ?? "",
-      "Certificado de Tradición": propertyDocuments.certificado_tradicion ?? "",
-    };
-    // Quitar entries vacías
-    for (const k of Object.keys(documentsLegacy)) {
-      if (!documentsLegacy[k]) delete documentsLegacy[k];
-    }
-
-    res.json({
-      id: p.id,
-      address: p.address,
-      chip: p.chip,
-      folio: p.folio,
-      owner_name: p.owner_name,
-      owner_id_number: p.owner_id_number,
-      owner_phone: p.owner_phone,
-      owner_email: p.owner_email,
-      status: p.status,
-      property_type: p.property_type,
-      drive_folder_id: p.drive_folder_id,
-      drive_folder_path: p.drive_folder_path,
-      inventory_pdf_url: p.inventory_pdf_url,
-      inventario_captacion_pdf_url: p.inventory_captacion_pdf_url,
-      inventario_colocacion_pdf_url: p.inventory_colocacion_pdf_url,
-      inventory_captacion_pdf_url: p.inventory_captacion_pdf_url,
-      inventory_colocacion_pdf_url: p.inventory_colocacion_pdf_url,
-      mandato_pdf_url: p.mandato_pdf_url,
-      mandate_pdf_url: p.mandato_pdf_url,
-      mandate_signed_at: p.mandato_signed_at,
-      created_at: p.created_at,
-      inventory_count: p.inventory_count,
-      // ── Estructura nueva (migración 010+) ──
-      owners,
-      units,
-      documents: propertyDocuments,
-      // ── Compat con frontend legacy ──
-      documents_legacy: documentsLegacy,
-    });
-  } catch (err: any) {
-    console.error("[GET /api/properties/:id]", err);
-    res.status(500).json({ error: err.message });
+// BUG-029: migrado a asyncHandler.
+router.get("/:id", asyncHandler(async (req, res) => {
+  const propertyId = req.params.id;
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query<any[]>(
+    `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
+            p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
+            p.inventory_pdf_url, p.inventory_captacion_pdf_url, p.inventory_colocacion_pdf_url,
+            p.mandato_pdf_url, p.mandato_signed_at, p.created_at,
+            COALESCE((SELECT COUNT(*) FROM inventories i WHERE i.property_id = p.id), 0) AS inventory_count
+     FROM properties p
+     WHERE p.id = ? AND p.organization_id = ?
+     LIMIT 1`,
+    [propertyId, orgId],
+  );
+  if (rows.length === 0) {
+    res.status(404).json({ error: "Propiedad no encontrada" });
+    return;
   }
-});
+  const p = rows[0];
+
+  // Owners (con sus docs)
+  const [ownerRows] = await pool.query<any[]>(
+    `SELECT id, name, id_number, phone, email, ownership_pct, position, notes
+     FROM property_owners
+     WHERE property_id = ?
+     ORDER BY position ASC`,
+    [propertyId],
+  );
+  const ownerIds = ownerRows.map((o) => o.id);
+  const docsByOwner: Record<string, { cedula?: string; rut?: string }> = {};
+  if (ownerIds.length > 0) {
+    const [docRows] = await pool.query<any[]>(
+      `SELECT owner_id, doc_type, file_url
+       FROM property_documents
+       WHERE property_id = ? AND owner_id IN (${ownerIds.map(() => "?").join(",")})`,
+      [propertyId, ...ownerIds],
+    );
+    for (const d of docRows) {
+      if (!d.owner_id) continue;
+      if (!docsByOwner[d.owner_id]) docsByOwner[d.owner_id] = {};
+      if (d.doc_type === "cedula" || d.doc_type === "rut") {
+        docsByOwner[d.owner_id][d.doc_type] = d.file_url;
+      }
+    }
+  }
+  const owners = ownerRows.map((o) => ({
+    id: o.id,
+    name: o.name,
+    idNumber: o.id_number,
+    phone: o.phone,
+    email: o.email,
+    ownershipPct: o.ownership_pct !== null ? Number(o.ownership_pct) : null,
+    position: o.position,
+    notes: o.notes,
+    documents: docsByOwner[o.id] ?? {},
+  }));
+
+  // Units (con sus docs)
+  const [unitRows] = await pool.query<any[]>(
+    `SELECT id, type, label, folio_matricula, area_m2, notes, position
+     FROM property_units
+     WHERE property_id = ?
+     ORDER BY position ASC`,
+    [propertyId],
+  );
+  const unitIds = unitRows.map((u) => u.id);
+  const docsByUnit: Record<string, { certificado_tradicion?: string }> = {};
+  if (unitIds.length > 0) {
+    const [docRows] = await pool.query<any[]>(
+      `SELECT unit_id, doc_type, file_url
+       FROM property_documents
+       WHERE property_id = ? AND unit_id IN (${unitIds.map(() => "?").join(",")})`,
+      [propertyId, ...unitIds],
+    );
+    for (const d of docRows) {
+      if (!d.unit_id) continue;
+      if (!docsByUnit[d.unit_id]) docsByUnit[d.unit_id] = {};
+      if (d.doc_type === "certificado_tradicion") {
+        docsByUnit[d.unit_id].certificado_tradicion = d.file_url;
+      }
+    }
+  }
+  const units = unitRows.map((u) => ({
+    id: u.id,
+    type: u.type,
+    label: u.label,
+    folioMatricula: u.folio_matricula,
+    areaM2: u.area_m2 !== null ? Number(u.area_m2) : null,
+    notes: u.notes,
+    position: u.position,
+    documents: docsByUnit[u.id] ?? {},
+  }));
+
+  // Documents a nivel de propiedad: predial + certificado_tradicion principal (unit_id IS NULL)
+  const [propDocRows] = await pool.query<any[]>(
+    `SELECT doc_type, file_url
+     FROM property_documents
+     WHERE property_id = ? AND owner_id IS NULL AND unit_id IS NULL`,
+    [propertyId],
+  );
+  const propertyDocuments: Record<string, string> = {};
+  for (const d of propDocRows) {
+    if (d.doc_type === "predial" || d.doc_type === "certificado_tradicion") {
+      propertyDocuments[d.doc_type] = d.file_url;
+    }
+  }
+
+  // Mantener compat: `documents` legacy con keys legibles que apuntan al
+  // primer owner (CC, RUT) y a la unidad principal (Certificado de Tradición).
+  // Esto evita que la card de la lista de propiedades muestre "todo falta"
+  // aunque los docs estén subidos.
+  const firstOwner = owners[0];
+  const documentsLegacy: Record<string, string> = {
+    "Cédula de Ciudadanía": firstOwner?.documents?.cedula ?? "",
+    "Rut Actualizado": firstOwner?.documents?.rut ?? "",
+    "Impuesto Predial": propertyDocuments.predial ?? "",
+    "Certificado de Tradición": propertyDocuments.certificado_tradicion ?? "",
+  };
+  // Quitar entries vacías
+  for (const k of Object.keys(documentsLegacy)) {
+    if (!documentsLegacy[k]) delete documentsLegacy[k];
+  }
+
+  res.json({
+    id: p.id,
+    address: p.address,
+    chip: p.chip,
+    folio: p.folio,
+    owner_name: p.owner_name,
+    owner_id_number: p.owner_id_number,
+    owner_phone: p.owner_phone,
+    owner_email: p.owner_email,
+    status: p.status,
+    property_type: p.property_type,
+    drive_folder_id: p.drive_folder_id,
+    drive_folder_path: p.drive_folder_path,
+    inventory_pdf_url: p.inventory_pdf_url,
+    inventario_captacion_pdf_url: p.inventory_captacion_pdf_url,
+    inventario_colocacion_pdf_url: p.inventory_colocacion_pdf_url,
+    inventory_captacion_pdf_url: p.inventory_captacion_pdf_url,
+    inventory_colocacion_pdf_url: p.inventory_colocacion_pdf_url,
+    mandato_pdf_url: p.mandato_pdf_url,
+    mandate_pdf_url: p.mandato_pdf_url,
+    mandate_signed_at: p.mandato_signed_at,
+    created_at: p.created_at,
+    inventory_count: p.inventory_count,
+    // ── Estructura nueva (migración 010+) ──
+    owners,
+    units,
+    documents: propertyDocuments,
+    // ── Compat con frontend legacy ──
+    documents_legacy: documentsLegacy,
+  });
+}));
 
 /**
  * GET /api/properties
@@ -990,117 +994,115 @@ router.get("/:id", async (req, res) => {
  * documentos anidados (para no inflar la lista). Si `?expand=full`, devuelve
  * también los docs (más pesado).
  */
-router.get("/", async (req, res) => {
-  try {
-    const expand = req.query.expand === "full";
-    const orgId = await ensureDefaultOrg();
-    const [rows] = await pool.query<any[]>(
-      `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
-              p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
-              p.inventory_pdf_url, p.mandato_pdf_url, p.mandato_signed_at, p.created_at,
-              COALESCE((SELECT COUNT(*) FROM inventories i WHERE i.property_id = p.id), 0) AS inventory_count
-       FROM properties p
-       WHERE p.organization_id = ? AND p.archived = 0
-       ORDER BY p.created_at DESC`,
-      [orgId],
-    );
+// BUG-029: migrado a asyncHandler.
+router.get("/", asyncHandler(async (req, res) => {
+  const expand = req.query.expand === "full";
+  const orgId = await ensureDefaultOrg();
+  const [rows] = await pool.query<any[]>(
+    `SELECT p.id, p.address, p.chip, p.folio, p.owner_name, p.owner_id_number, p.owner_phone, p.owner_email,
+            p.status, p.property_type, p.drive_folder_id, p.drive_folder_path,
+            p.inventory_pdf_url, p.mandato_pdf_url, p.mandato_signed_at, p.created_at,
+            COALESCE((SELECT COUNT(*) FROM inventories i WHERE i.property_id = p.id), 0) AS inventory_count
+     FROM properties p
+     WHERE p.organization_id = ? AND p.archived = 0
+     ORDER BY p.created_at DESC`,
+    [orgId],
+  );
 
-    const propertyIds = rows.map((r) => r.id);
-    if (propertyIds.length === 0) {
-      res.json({ properties: [] });
-      return;
-    }
-
-    // Owners (sin docs anidados por defecto)
-    const [ownerRows] = await pool.query<any[]>(
-      `SELECT id, property_id, name, id_number, phone, email, ownership_pct, position
-       FROM property_owners
-       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
-       ORDER BY position ASC`,
-      propertyIds,
-    );
-    const ownersByProperty: Record<string, any[]> = {};
-    for (const o of ownerRows) {
-      if (!ownersByProperty[o.property_id])
-        ownersByProperty[o.property_id] = [];
-      ownersByProperty[o.property_id].push({
-        id: o.id,
-        name: o.name,
-        idNumber: o.id_number,
-        phone: o.phone,
-        email: o.email,
-        ownershipPct: o.ownership_pct !== null ? Number(o.ownership_pct) : null,
-        position: o.position,
-      });
-    }
-
-    // Units
-    const [unitRows] = await pool.query<any[]>(
-      `SELECT id, property_id, type, label, folio_matricula, area_m2, position
-       FROM property_units
-       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
-       ORDER BY position ASC`,
-      propertyIds,
-    );
-    const unitsByProperty: Record<string, any[]> = {};
-    for (const u of unitRows) {
-      if (!unitsByProperty[u.property_id]) unitsByProperty[u.property_id] = [];
-      unitsByProperty[u.property_id].push({
-        id: u.id,
-        type: u.type,
-        label: u.label,
-        folioMatricula: u.folio_matricula,
-        areaM2: u.area_m2 !== null ? Number(u.area_m2) : null,
-        position: u.position,
-      });
-    }
-
-    // Documents (legacy compat + nivel de propiedad)
-    const [docRows] = await pool.query<any[]>(
-      `SELECT property_id, doc_type, file_url
-       FROM property_documents
-       WHERE property_id IN (${propertyIds.map(() => "?").join(",")})`,
-      propertyIds,
-    );
-    const docsByProperty: Record<string, Record<string, string>> = {};
-    for (const d of docRows) {
-      if (!docsByProperty[d.property_id]) docsByProperty[d.property_id] = {};
-      if (d.doc_type === "cedula")
-        docsByProperty[d.property_id]["Cédula de Ciudadanía"] = d.file_url;
-      else if (d.doc_type === "rut")
-        docsByProperty[d.property_id]["Rut Actualizado"] = d.file_url;
-      else if (d.doc_type === "predial")
-        docsByProperty[d.property_id]["Impuesto Predial"] = d.file_url;
-      else if (d.doc_type === "certificado_tradicion")
-        docsByProperty[d.property_id]["Certificado de Tradición"] = d.file_url;
-    }
-
-    const properties = rows.map((r) => ({
-      ...r,
-      documents: docsByProperty[r.id] ?? {},
-      mandatePdfUrl: r.mandato_pdf_url,
-      mandateSignedAt: r.mandato_signed_at,
-      driveFolderId: r.drive_folder_id,
-      driveFolderPath: r.drive_folder_path,
-      propertyType: r.property_type,
-      ownerIdNumber: r.owner_id_number,
-      // Migración 010+
-      owners: ownersByProperty[r.id] ?? [],
-      units: unitsByProperty[r.id] ?? [],
-    }));
-
-    res.json({ properties });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  const propertyIds = rows.map((r) => r.id);
+  if (propertyIds.length === 0) {
+    res.json({ properties: [] });
+    return;
   }
-});
+
+  // Owners (sin docs anidados por defecto)
+  const [ownerRows] = await pool.query<any[]>(
+    `SELECT id, property_id, name, id_number, phone, email, ownership_pct, position
+     FROM property_owners
+     WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
+     ORDER BY position ASC`,
+    propertyIds,
+  );
+  const ownersByProperty: Record<string, any[]> = {};
+  for (const o of ownerRows) {
+    if (!ownersByProperty[o.property_id])
+      ownersByProperty[o.property_id] = [];
+    ownersByProperty[o.property_id].push({
+      id: o.id,
+      name: o.name,
+      idNumber: o.id_number,
+      phone: o.phone,
+      email: o.email,
+      ownershipPct: o.ownership_pct !== null ? Number(o.ownership_pct) : null,
+      position: o.position,
+    });
+  }
+
+  // Units
+  const [unitRows] = await pool.query<any[]>(
+    `SELECT id, property_id, type, label, folio_matricula, area_m2, position
+     FROM property_units
+     WHERE property_id IN (${propertyIds.map(() => "?").join(",")})
+     ORDER BY position ASC`,
+    propertyIds,
+  );
+  const unitsByProperty: Record<string, any[]> = {};
+  for (const u of unitRows) {
+    if (!unitsByProperty[u.property_id]) unitsByProperty[u.property_id] = [];
+    unitsByProperty[u.property_id].push({
+      id: u.id,
+      type: u.type,
+      label: u.label,
+      folioMatricula: u.folio_matricula,
+      areaM2: u.area_m2 !== null ? Number(u.area_m2) : null,
+      position: u.position,
+    });
+  }
+
+  // Documents (legacy compat + nivel de propiedad)
+  const [docRows] = await pool.query<any[]>(
+    `SELECT property_id, doc_type, file_url
+     FROM property_documents
+     WHERE property_id IN (${propertyIds.map(() => "?").join(",")})`,
+    propertyIds,
+  );
+  const docsByProperty: Record<string, Record<string, string>> = {};
+  for (const d of docRows) {
+    if (!docsByProperty[d.property_id]) docsByProperty[d.property_id] = {};
+    if (d.doc_type === "cedula")
+      docsByProperty[d.property_id]["Cédula de Ciudadanía"] = d.file_url;
+    else if (d.doc_type === "rut")
+      docsByProperty[d.property_id]["Rut Actualizado"] = d.file_url;
+    else if (d.doc_type === "predial")
+      docsByProperty[d.property_id]["Impuesto Predial"] = d.file_url;
+    else if (d.doc_type === "certificado_tradicion")
+      docsByProperty[d.property_id]["Certificado de Tradición"] = d.file_url;
+  }
+
+  const properties = rows.map((r) => ({
+    ...r,
+    documents: docsByProperty[r.id] ?? {},
+    mandatePdfUrl: r.mandato_pdf_url,
+    mandateSignedAt: r.mandato_signed_at,
+    driveFolderId: r.drive_folder_id,
+    driveFolderPath: r.drive_folder_path,
+    propertyType: r.property_type,
+    ownerIdNumber: r.owner_id_number,
+    // Migración 010+
+    owners: ownersByProperty[r.id] ?? [],
+    units: unitsByProperty[r.id] ?? [],
+  }));
+
+  res.json({ properties });
+}));
 
 /**
  * PATCH /api/properties/:id
  * No tocar owners/units (esos se manejan vía POST). Solo campos escalares
  * de `properties` y documentos sueltos si vienen.
  */
-router.patch("/:id", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.patch("/:id", requireRole("canEditProperty"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const allowed = [
     "address",
@@ -1193,29 +1195,25 @@ router.patch("/:id", async (req, res) => {
   }
 
   values.push(id);
-  try {
-    const orgId = await ensureDefaultOrg();
-    // BUG-018: pre-check para distinguir "no existe" (404) de "existe pero
-    // valores idénticos" (200 no-op). Sin este check, affectedRows=0
-    // podía significar ambas cosas y siempre devolvía 200 mentiroso.
-    const [exists] = await pool.query<any[]>(
-      `SELECT 1 FROM properties WHERE id = ? AND organization_id = ? LIMIT 1`,
-      [id, orgId],
-    );
-    if (!exists.length) {
-      return res.status(404).json({
-        error: "Propiedad no encontrada o no pertenece a esta organización",
-      });
-    }
-    await pool.query(
-      `UPDATE properties SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`,
-      [...values, orgId],
-    );
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  const orgId = await ensureDefaultOrg();
+  // BUG-018: pre-check para distinguir "no existe" (404) de "existe pero
+  // valores idénticos" (200 no-op). Sin este check, affectedRows=0
+  // podía significar ambas cosas y siempre devolvía 200 mentiroso.
+  const [exists] = await pool.query<any[]>(
+    `SELECT 1 FROM properties WHERE id = ? AND organization_id = ? LIMIT 1`,
+    [id, orgId],
+  );
+  if (!exists.length) {
+    return res.status(404).json({
+      error: "Propiedad no encontrada o no pertenece a esta organización",
+    });
   }
-});
+  await pool.query(
+    `UPDATE properties SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`,
+    [...values, orgId],
+  );
+  res.json({ success: true });
+}));
 
 /**
  * DELETE /api/properties/:id
@@ -1223,7 +1221,8 @@ router.patch("/:id", async (req, res) => {
  * Con CASCADE, los `property_documents`, `property_owners` y `property_units`
  * se limpian automáticamente.
  */
-router.delete("/:id", async (req, res) => {
+// BUG-029: migrado a asyncHandler.
+router.delete("/:id", requireRole("canDeleteProperty"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const orgId = await ensureDefaultOrg();
 
@@ -1256,18 +1255,10 @@ router.delete("/:id", async (req, res) => {
 
   const property = propRows[0];
 
-  try {
-    await pool.query(
-      `DELETE FROM properties WHERE id = ? AND organization_id = ?`,
-      [id, orgId],
-    );
-  } catch (err: any) {
-    console.error("[DELETE /api/properties] MySQL error:", err.message);
-    res
-      .status(500)
-      .json({ error: "Error eliminando propiedad: " + err.message });
-    return;
-  }
+  await pool.query(
+    `DELETE FROM properties WHERE id = ? AND organization_id = ?`,
+    [id, orgId],
+  );
 
   let driveCleanupStatus: "skipped" | "deleted" | "failed" = "skipped";
   if (property.drive_folder_id) {
@@ -1312,6 +1303,6 @@ router.delete("/:id", async (req, res) => {
           ? "Propiedad eliminada (la carpeta Drive tenía archivos; queda como histórico)"
           : "Propiedad eliminada (no se pudo limpiar Drive, hacelo manual si querés)",
   });
-});
+}));
 
 export default router;
