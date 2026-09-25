@@ -59,6 +59,11 @@ import { StepDocs, type UploadedDocsMap } from "./components/StepDocs";
 import { StepInventory } from "./components/StepInventory";
 // Commit 3 refactor #5: slotKeyHelpers extraído del monolito.
 import { slotKeyToLabel, slotKeyToFilename } from "./utils/slotKeyHelpers";
+// Commit 4 refactor #5: finalizeSummary tipo + constructor puro extraídos.
+import {
+  buildFinalizeSummary,
+  type FinalizeSummary,
+} from "./utils/finalizeSummary";
 import { revokeIfBlob, createBlobUrl } from "../../shared/lib/blob";
 import { Role } from "../auth/permissions";
 import { useContractStore } from "../contracts/contractStore";
@@ -237,29 +242,11 @@ export function PropertiesView({
 
   /**
    * Resumen estructurado que se muestra en el modal al finalizar el wizard.
-   * - `driveFolderPath`: link humano a la carpeta en Drive
-   * - `uploadedToDrive[]`: slotKeys que SÍ se subieron a Drive
-   * - `uploadedLocalOnly[]`: slotKeys que quedaron solo en el navegador (se perdieron al cerrar)
-   * - `missingDocs[]`: slotKeys que el usuario nunca llegó a subir
-   * - `failedUploads[]`: slotKeys que tiraron error durante la subida
-   * - `address`, `driveFolderId`: para el botón "Ver en Drive"
+   * Tipo + constructor puro viven en `./utils/finalizeSummary.ts` (Commit 4).
+   * Este useState solo persiste el resultado para que el modal lo renderice.
    */
-  const [finalizeSummary, setFinalizeSummary] = useState<null | {
-    address: string;
-    driveFolderId: string | null;
-    driveFolderPath: string | null;
-    driveConnected: boolean;
-    uploadedToDrive: string[];
-    uploadedLocalOnly: string[];
-    missingDocs: string[];
-    failedUploads: string[];
-    inventoryUploaded: boolean;
-    totalDocs: number;
-    // FIX BUG-2026-08-05: si el POST #2 al server no persistió los docs
-    // (silent failure en property_documents INSERTs), el modal muestra
-    // un banner rojo explicando qué hacer.
-    persistFailed?: boolean;
-  }>(null);
+  const [finalizeSummary, setFinalizeSummary] =
+    useState<null | FinalizeSummary>(null);
 
   // Galería de fotos del inventario: modal para visualizar las imágenes almacenadas
   // en IndexedDB agrupadas por área. Cada foto se ve en tamaño completo con lightbox.
@@ -1817,21 +1804,22 @@ export function PropertiesView({
       );
 
       // Guardamos el summary en el state — el modal se renderiza en el JSX abajo.
-      setFinalizeSummary({
-        address,
-        driveFolderId,
-        driveFolderPath,
-        driveConnected,
-        uploadedToDrive,
-        uploadedLocalOnly,
-        missingDocs: missingSlotKeys,
-        failedUploads,
-        inventoryUploaded: inventoryUploadedToDrive,
-        totalDocs,
-        // FIX BUG-2026-08-05: si la persistencia en MySQL falló, el modal de
-        // resumen muestra un banner rojo arriba con instrucciones.
-        persistFailed,
-      });
+      // Commit 4 refactor #5: el constructor es una función pura testeable.
+      setFinalizeSummary(
+        buildFinalizeSummary({
+          address,
+          driveFolderId,
+          driveFolderPath,
+          driveConnected,
+          uploadedToDrive,
+          uploadedLocalOnly,
+          missingSlotKeys,
+          failedUploads,
+          inventoryUploadedToDrive,
+          totalDocs,
+          persistFailed,
+        }),
+      );
 
       // SPEC fix_wizard_docs_persistence.md — AC-3.2 + AC-3.3
       // 1. Invalidamos la lista de properties para que el próximo mount
