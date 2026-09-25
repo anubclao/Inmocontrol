@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { generateMandatoPdf } from "./mandatoPdf";
+// Commit 1 refactor #5: hook que encapsula el step del wizard.
+import { useWizardState } from "./hooks/useWizardState";
 import { useSettingsStore } from "../../shared/store/settingsStore";
 import { motion } from "motion/react";
 import {
@@ -23,15 +25,11 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
-  Users,
+  // FIX #19: removidos Users, UserIcon, Mail, IdCard, Percent (no usados)
   Car,
   Package,
   Box,
-  User as UserIcon,
-  Mail,
   Phone,
-  IdCard,
-  Percent,
   CheckCircle2,
   CloudOff,
   AlertTriangle,
@@ -40,13 +38,13 @@ import {
 import { Button, Card, Modal } from "../../shared/ui";
 import { ProcessOrderBanner } from "../../shared/ui/ProcessOrderBanner";
 import {
-  formatAddress,
+  // FIX #10: formatAddress removido (no usado, se usa previewAddressFormat si hace falta)
   isValidCHIP,
   isValidEmail,
   isValidColombianPhone,
 } from "../../utils/validators";
 import {
-  createPropertyFolders,
+  // FIX #19: createPropertyFolders removido (no usado)
   uploadFileToDrive,
   fileToBase64,
 } from "../../lib/drive/driveService";
@@ -71,7 +69,7 @@ import { driveProxyUrl, driveDownloadUrl } from "../../lib/drive/driveProxy";
 import type {
   PropertyOwner,
   PropertyUnit,
-  PropertyUnitType,
+  // FIX #19: PropertyUnitType removido (no usado)
 } from "../../types";
 
 export interface PropertiesViewProps {
@@ -242,7 +240,8 @@ export function PropertiesView({
   const [ownerIdNumber, setOwnerIdNumber] = useState("");
   /** Si false → se muestra la lista de inmuebles. Si true → se muestra el wizard de captación. */
   const [showWizard, setShowWizard] = useState(false);
-  const [step, setStep] = useState(1);
+  // Commit 1 refactor #5: step del wizard encapsulado en hook.
+  const { step, setStep } = useWizardState(1);
   /** Docs subidos en el wizard. key = slotKey (ej: "cedula:<ownerId>", "predial", "mandato").
    *  Ahora cada slot acepta N archivos (no solo 1): un propietario puede tener
    *  varias hojas de cédula, varios RUTs, etc. */
@@ -1107,7 +1106,8 @@ export function PropertiesView({
       };
     }
     // Validación de campos básicos (mismas reglas que handleFinalize)
-    if (!address || !chip || !folio) {
+    // FIX #23: trim para que string vacío ("") no pase el truthy-check.
+    if (!address?.trim() || !chip?.trim() || !folio?.trim()) {
       showToast("Por favor complete dirección, CHIP y folio", "error");
       return null;
     }
@@ -1241,7 +1241,8 @@ export function PropertiesView({
       wizardUnits.filter((u) => u.label.trim()).length,
     );
     // ── Validación de campos básicos ──
-    if (!address || !chip || !folio) {
+    // FIX #23: trim para que string vacío no pase el truthy-check.
+    if (!address?.trim() || !chip?.trim() || !folio?.trim()) {
       showToast("Por favor complete dirección, CHIP y folio", "error");
       return;
     }
@@ -2353,7 +2354,8 @@ export function PropertiesView({
   const validateStep2 = () => {
     // Validación de campos básicos del paso 1: aunque estén en otro step,
     // no tiene sentido avanzar al inventario si no tenemos ni dirección.
-    if (!address || !chip || !folio) {
+    // FIX #23: trim para que string vacío no pase el truthy-check.
+    if (!address?.trim() || !chip?.trim() || !folio?.trim()) {
       showToast("Volvé al paso 1 y completá dirección, CHIP y folio", "error");
       return;
     }
