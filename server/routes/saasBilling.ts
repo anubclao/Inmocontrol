@@ -1321,10 +1321,7 @@ router.post(
         );
       }
       // fix-issue-27: throw internalExpose con mensaje custom.
-      throw internalExpose(
-        "Error al aceptar la invitación",
-        "DB_UNAVAILABLE",
-      );
+      throw internalExpose("Error al aceptar la invitación", "DB_UNAVAILABLE");
     } finally {
       conn.release();
     }
