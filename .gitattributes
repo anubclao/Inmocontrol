@@ -1,0 +1,19 @@
+# Normaliza line endings: todo se commitea con LF.
+# - `text=auto`: Git detecta automáticamente archivos de texto y normaliza.
+# - `eol=lf`: fuerza LF en checkout (sin CRLF en Windows al hacer clone).
+# Esto evita diffs espurios cuando un dev en Windows y otro en Mac/Linux
+# editan el mismo archivo.
+* text=auto eol=lf
+
+# Excepciones que SI o SI deben ser binarios:
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
