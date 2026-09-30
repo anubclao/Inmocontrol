@@ -34,12 +34,14 @@
  *   - Ver `.env.example` para las 3 variables requeridas
  */
 
-import { Router } from 'express';
+import { Router } from "express";
 // FIX #2 (P0 seguridad): requireAuth en notificaciones (Twilio WhatsApp + email).
-import { requireAuth } from './auth.js';
+import { requireAuth } from "./auth.js";
 // fix-issue-permissions-by-endpoint: gestión de canales requiere canManageNotifications.
-import { requireRole } from '../middleware/requireRole.js';
+import { requireRole } from "../middleware/requireRole.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+// fix-issue-27: helper de errores tipado.
+import { internalExpose, badRequest } from "../lib/errors.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -65,12 +67,15 @@ async function getClient() {
   if (!cfg) return null;
   // Import dinámico: si la dep no está instalada (ej: build de CI), no rompe el server.
   try {
-    const mod = await import('twilio');
+    const mod = await import("twilio");
     const twilio = (mod as any).default ?? mod;
     _client = twilio(cfg.accountSid, cfg.authToken);
     return _client;
   } catch (err) {
-    console.error('[notifications] twilio no instalado. Ejecuta `npm install`.', err);
+    console.error(
+      "[notifications] twilio no instalado. Ejecuta `npm install`.",
+      err,
+    );
     return null;
   }
 }
@@ -79,9 +84,9 @@ async function getClient() {
  *  Acepta: +57 300 123 4567 | 573001234567 | 3001234567 | 300 123 4567 */
 function normalizeColombianPhone(input: string): string | null {
   if (!input) return null;
-  const cleaned = String(input).replace(/[\s\-()]/g, '');
+  const cleaned = String(input).replace(/[\s\-()]/g, "");
   if (/^\+?57\d{10}$/.test(cleaned)) {
-    return cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
+    return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
   }
   if (/^3\d{9}$/.test(cleaned)) return `+57${cleaned}`;
   // Si ya viene con + y 10-15 dígitos, lo dejamos
@@ -91,86 +96,128 @@ function normalizeColombianPhone(input: string): string | null {
 
 // ─── GET /whatsapp/status ────────────────────────────────────────────────
 // BUG-029: migrado a asyncHandler.
-router.get('/whatsapp/status', asyncHandler(async (_req, res) => {
-  const cfg = readTwilioConfig();
-  if (!cfg) {
-    return res.json({
-      configured: false,
-      mode: 'mock',
-      from: null,
-      message: 'Twilio no configurado. Agrega TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_WHATSAPP_FROM a .env.local',
-    });
-  }
-  const client = await getClient();
-  if (!client) {
-    return res.json({
-      configured: false,
-      mode: 'mock',
+router.get(
+  "/whatsapp/status",
+  asyncHandler(async (_req, res) => {
+    const cfg = readTwilioConfig();
+    if (!cfg) {
+      return res.json({
+        configured: false,
+        mode: "mock",
+        from: null,
+        message:
+          "Twilio no configurado. Agrega TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_WHATSAPP_FROM a .env.local",
+      });
+    }
+    const client = await getClient();
+    if (!client) {
+      return res.json({
+        configured: false,
+        mode: "mock",
+        from: cfg.whatsappFrom,
+        message: "Paquete twilio no instalado. Ejecuta `npm install`.",
+      });
+    }
+    // Si el cliente cargó OK, el canal está en modo live.
+    res.json({
+      configured: true,
+      mode: "live",
       from: cfg.whatsappFrom,
-      message: 'Paquete twilio no instalado. Ejecuta `npm install`.',
+      message: "Conectado. Listo para enviar.",
     });
-  }
-  // Si el cliente cargó OK, el canal está en modo live.
-  res.json({
-    configured: true,
-    mode: 'live',
-    from: cfg.whatsappFrom,
-    message: 'Conectado. Listo para enviar.',
-  });
-}));
+  }),
+);
 
 // ─── POST /whatsapp (uso interno del engine de notificaciones) ──────────
 // BUG-029: migrado a asyncHandler.
-router.post('/whatsapp', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
-  const { to, body, alertId } = req.body as { to?: string; body?: string; alertId?: string };
-  if (!to || !body) {
-    return res.status(400).json({ error: 'Faltan campos: to, body' });
-  }
-  const phone = normalizeColombianPhone(to);
-  if (!phone) {
-    return res.status(400).json({ error: `Número inválido: "${to}". Esperado formato colombiano (+57 3XX XXX XXXX).` });
-  }
-  const client = await getClient();
-  if (!client) {
-    return res.status(503).json({ error: 'TWILIO_NOT_CONFIGURED', message: 'Twilio no configurado en el server' });
-  }
-  const cfg = readTwilioConfig()!;
-  try {
-    const msg = await client.messages.create({
-      from: cfg.whatsappFrom,
-      to: `whatsapp:${phone}`,
-      body,
-    });
-    console.info(`[notifications/whatsapp] alert=${alertId ?? 'n/a'} to=${phone} sid=${msg.sid} status=${msg.status}`);
-    res.json({ ok: true, sid: msg.sid, status: msg.status, to: phone });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Twilio error', code: err.code });
-  }
-}));
+router.post(
+  "/whatsapp",
+  requireRole("canManageNotifications"),
+  asyncHandler(async (req, res) => {
+    const { to, body, alertId } = req.body as {
+      to?: string;
+      body?: string;
+      alertId?: string;
+    };
+    if (!to || !body) {
+      return res.status(400).json({ error: "Faltan campos: to, body" });
+    }
+    const phone = normalizeColombianPhone(to);
+    if (!phone) {
+      return res
+        .status(400)
+        .json({
+          error: `Número inválido: "${to}". Esperado formato colombiano (+57 3XX XXX XXXX).`,
+        });
+    }
+    const client = await getClient();
+    if (!client) {
+      return res
+        .status(503)
+        .json({
+          error: "TWILIO_NOT_CONFIGURED",
+          message: "Twilio no configurado en el server",
+        });
+    }
+    const cfg = readTwilioConfig()!;
+    try {
+      const msg = await client.messages.create({
+        from: cfg.whatsappFrom,
+        to: `whatsapp:${phone}`,
+        body,
+      });
+      console.info(
+        `[notifications/whatsapp] alert=${alertId ?? "n/a"} to=${phone} sid=${msg.sid} status=${msg.status}`,
+      );
+      res.json({ ok: true, sid: msg.sid, status: msg.status, to: phone });
+    } catch (err: any) {
+      // fix-issue-27: errores de Twilio exponen msg del provider (es seguro —
+      // no contiene SQL ni paths internos). Usamos internalExpose para
+      // preservar el code real de Twilio (ej: 21211 invalid 'To').
+      throw internalExpose(
+        err?.message ?? "Twilio error",
+        err?.code ?? "TWILIO_ERROR",
+      );
+    }
+  }),
+);
 
 // ─── POST /whatsapp/test (botón "Probar" del modal de Configuración) ───
 // BUG-029: migrado a asyncHandler.
-router.post('/whatsapp/test', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
-  const { to } = req.body as { to?: string };
-  if (!to) return res.status(400).json({ error: 'Falta campo: to' });
-  const phone = normalizeColombianPhone(to);
-  if (!phone) return res.status(400).json({ error: `Número inválido: "${to}"` });
-  const client = await getClient();
-  if (!client) {
-    return res.status(503).json({ error: 'TWILIO_NOT_CONFIGURED', message: 'Twilio no configurado en el server' });
-  }
-  const cfg = readTwilioConfig()!;
-  try {
-    const msg = await client.messages.create({
-      from: cfg.whatsappFrom,
-      to: `whatsapp:${phone}`,
-      body: '🧪 Mensaje de prueba desde InmoControl. Si lees esto, Twilio está conectado correctamente.',
-    });
-    res.json({ ok: true, sid: msg.sid, status: msg.status, to: phone });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message ?? 'Twilio error', code: err.code });
-  }
-}));
+router.post(
+  "/whatsapp/test",
+  requireRole("canManageNotifications"),
+  asyncHandler(async (req, res) => {
+    const { to } = req.body as { to?: string };
+    if (!to) throw badRequest("Falta campo: to", "MISSING_TO");
+    const phone = normalizeColombianPhone(to);
+    if (!phone) throw badRequest(`Número inválido: "${to}"`, "INVALID_PHONE");
+    const client = await getClient();
+    if (!client) {
+      return res
+        .status(503)
+        .json({
+          error: "TWILIO_NOT_CONFIGURED",
+          message: "Twilio no configurado en el server",
+        });
+    }
+    const cfg = readTwilioConfig()!;
+    try {
+      const msg = await client.messages.create({
+        from: cfg.whatsappFrom,
+        to: `whatsapp:${phone}`,
+        body: "🧪 Mensaje de prueba desde InmoControl. Si lees esto, Twilio está conectado correctamente.",
+      });
+      res.json({ ok: true, sid: msg.sid, status: msg.status, to: phone });
+    } catch (err: any) {
+      // fix-issue-27: ver handler anterior.
+      throw internalExpose(
+        err?.message ?? "Twilio error",
+        err?.code ?? "TWILIO_ERROR",
+      );
+    }
+  }),
+);
 
 // ════════════════════════════════════════════════════════════════════════════
 // EMAIL (Fase 7)
@@ -181,8 +228,15 @@ router.post('/whatsapp/test', requireRole('canManageNotifications'), asyncHandle
  * (En SaaS real, el backend resolvería desde DB cifrada — ver nota al inicio).
  */
 type EmailProviderConfig =
-  | { kind: 'smtp'; host: string; port: number; user: string; pass: string; secure: boolean }
-  | { kind: 'sendgrid'; apiKey: string };
+  | {
+      kind: "smtp";
+      host: string;
+      port: number;
+      user: string;
+      pass: string;
+      secure: boolean;
+    }
+  | { kind: "sendgrid"; apiKey: string };
 
 interface EmailRequestBody {
   /** Mailbox a usar. Si se omite, intenta el fallback de env. */
@@ -206,26 +260,29 @@ async function getNodemailer() {
   if (_nodemailer) return _nodemailer;
   // Import dinámico (ESM no tiene `require`): si la dep no está instalada, no rompe el server.
   try {
-    const mod = await import('nodemailer');
+    const mod = await import("nodemailer");
     _nodemailer = mod.default ?? mod;
     return _nodemailer;
   } catch (err: any) {
-    console.error('[notifications/email] nodemailer no instalado. Ejecuta `npm install`.', err?.message ?? err);
+    console.error(
+      "[notifications/email] nodemailer no instalado. Ejecuta `npm install`.",
+      err?.message ?? err,
+    );
     return null;
   }
 }
 
 /** Normaliza el provider a una config de nodemailer. */
 function providerToTransport(provider: EmailProviderConfig) {
-  if (provider.kind === 'sendgrid') {
+  if (provider.kind === "sendgrid") {
     return {
       transport: {
-        host: 'smtp.sendgrid.net',
+        host: "smtp.sendgrid.net",
         port: 587,
         secure: false,
-        auth: { user: 'apikey', pass: provider.apiKey },
+        auth: { user: "apikey", pass: provider.apiKey },
       },
-      providerLabel: 'sendgrid',
+      providerLabel: "sendgrid",
     };
   }
   // smtp
@@ -241,16 +298,16 @@ function providerToTransport(provider: EmailProviderConfig) {
 }
 
 /** Lee el fallback SMTP/SendGrid de env (modo "centralized"). */
-function readEmailFallback(): NonNullable<EmailRequestBody['mailbox']> | null {
-  if (process.env.EMAIL_FALLBACK_ENABLED !== 'true') return null;
+function readEmailFallback(): NonNullable<EmailRequestBody["mailbox"]> | null {
+  if (process.env.EMAIL_FALLBACK_ENABLED !== "true") return null;
 
   const sendgridKey = process.env.SENDGRID_API_KEY;
   if (sendgridKey) {
     return {
-      purpose: 'fallback',
-      fromName: process.env.EMAIL_FROM_NAME || 'InmoControl',
-      fromEmail: process.env.EMAIL_FROM_EMAIL || 'noreply@inmocontrol.co',
-      provider: { kind: 'sendgrid', apiKey: sendgridKey },
+      purpose: "fallback",
+      fromName: process.env.EMAIL_FROM_NAME || "InmoControl",
+      fromEmail: process.env.EMAIL_FROM_EMAIL || "noreply@inmocontrol.co",
+      provider: { kind: "sendgrid", apiKey: sendgridKey },
     };
   }
   const host = process.env.SMTP_HOST;
@@ -258,16 +315,16 @@ function readEmailFallback(): NonNullable<EmailRequestBody['mailbox']> | null {
   const pass = process.env.SMTP_PASS;
   if (host && user && pass) {
     return {
-      purpose: 'fallback',
-      fromName: process.env.EMAIL_FROM_NAME || 'InmoControl',
+      purpose: "fallback",
+      fromName: process.env.EMAIL_FROM_NAME || "InmoControl",
       fromEmail: process.env.EMAIL_FROM_EMAIL || user,
       provider: {
-        kind: 'smtp',
+        kind: "smtp",
         host,
-        port: parseInt(process.env.SMTP_PORT || '587', 10),
+        port: parseInt(process.env.SMTP_PORT || "587", 10),
         user,
         pass,
-        secure: process.env.SMTP_SECURE === 'true',
+        secure: process.env.SMTP_SECURE === "true",
       },
     };
   }
@@ -276,130 +333,207 @@ function readEmailFallback(): NonNullable<EmailRequestBody['mailbox']> | null {
 
 // ─── GET /email/status ────────────────────────────────────────────────────
 // BUG-029: migrado a asyncHandler.
-router.get('/email/status', asyncHandler(async (_req, res) => {
-  const nodemailer = await getNodemailer();
-  const fallback = readEmailFallback();
-  res.json({
-    packageInstalled: !!nodemailer,
-    fallbackConfigured: !!fallback,
-    fallbackProvider: fallback?.provider.kind ?? null,
-    message: !nodemailer
-      ? 'Paquete nodemailer no instalado. Ejecuta `npm install`.'
-      : !fallback
-      ? 'Sin fallback centralizado. Configura los buzones en Settings → Integraciones.'
-      : 'Listo. Puedes usar buzones por agencia o el fallback centralizado.',
-  });
-}));
+router.get(
+  "/email/status",
+  asyncHandler(async (_req, res) => {
+    const nodemailer = await getNodemailer();
+    const fallback = readEmailFallback();
+    res.json({
+      packageInstalled: !!nodemailer,
+      fallbackConfigured: !!fallback,
+      fallbackProvider: fallback?.provider.kind ?? null,
+      message: !nodemailer
+        ? "Paquete nodemailer no instalado. Ejecuta `npm install`."
+        : !fallback
+          ? "Sin fallback centralizado. Configura los buzones en Settings → Integraciones."
+          : "Listo. Puedes usar buzones por agencia o el fallback centralizado.",
+    });
+  }),
+);
 
 // ─── POST /email/verify ───────────────────────────────────────────────────
 /** Verifica la conexión SMTP/SendGrid de un mailbox. No envía. */
 // BUG-029: migrado a asyncHandler.
-router.post('/email/verify', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
-  const nodemailer = await getNodemailer();
-  if (!nodemailer) {
-    return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED', message: 'Ejecuta `npm install`' });
-  }
-  const { mailbox } = req.body as { mailbox?: EmailRequestBody['mailbox'] };
-  if (!mailbox) return res.status(400).json({ ok: false, error: 'Falta campo: mailbox' });
+router.post(
+  "/email/verify",
+  requireRole("canManageNotifications"),
+  asyncHandler(async (req, res) => {
+    const nodemailer = await getNodemailer();
+    if (!nodemailer) {
+      return res
+        .status(503)
+        .json({
+          ok: false,
+          error: "NODEMAILER_NOT_INSTALLED",
+          message: "Ejecuta `npm install`",
+        });
+    }
+    const { mailbox } = req.body as { mailbox?: EmailRequestBody["mailbox"] };
+    if (!mailbox)
+      return res.status(400).json({ ok: false, error: "Falta campo: mailbox" });
 
-  try {
-    const { transport } = providerToTransport(mailbox.provider);
-    const transporter = nodemailer.createTransport(transport);
-    await transporter.verify();
-    res.json({ ok: true, message: 'Conexión SMTP/SendGrid verificada correctamente.' });
-  } catch (err: any) {
-    res.status(400).json({ ok: false, error: err.message ?? 'Verify failed', code: err.code });
-  }
-}));
+    try {
+      const { transport } = providerToTransport(mailbox.provider);
+      const transporter = nodemailer.createTransport(transport);
+      await transporter.verify();
+      res.json({
+        ok: true,
+        message: "Conexión SMTP/SendGrid verificada correctamente.",
+      });
+    } catch (err: any) {
+      res
+        .status(400)
+        .json({
+          ok: false,
+          error: err.message ?? "Verify failed",
+          code: err.code,
+        });
+    }
+  }),
+);
 
 // ─── POST /email/test ─────────────────────────────────────────────────────
 /** Envía un email de prueba al destinatario que diga el form. */
 // BUG-029: migrado a asyncHandler.
-router.post('/email/test', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
-  const nodemailer = await getNodemailer();
-  if (!nodemailer) {
-    return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED' });
-  }
-  const { mailbox, to } = req.body as { mailbox?: EmailRequestBody['mailbox']; to?: string };
-  if (!to) return res.status(400).json({ ok: false, error: 'Falta campo: to' });
-  const mb = mailbox ?? readEmailFallback();
-  if (!mb) return res.status(400).json({ ok: false, error: 'Falta mailbox y no hay fallback configurado' });
+router.post(
+  "/email/test",
+  requireRole("canManageNotifications"),
+  asyncHandler(async (req, res) => {
+    const nodemailer = await getNodemailer();
+    if (!nodemailer) {
+      return res
+        .status(503)
+        .json({ ok: false, error: "NODEMAILER_NOT_INSTALLED" });
+    }
+    const { mailbox, to } = req.body as {
+      mailbox?: EmailRequestBody["mailbox"];
+      to?: string;
+    };
+    if (!to)
+      return res.status(400).json({ ok: false, error: "Falta campo: to" });
+    const mb = mailbox ?? readEmailFallback();
+    if (!mb)
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error: "Falta mailbox y no hay fallback configurado",
+        });
 
-  try {
-    const { transport, providerLabel } = providerToTransport(mb.provider);
-    const transporter = nodemailer.createTransport(transport);
-    const info = await transporter.sendMail({
-      from: `"${mb.fromName}" <${mb.fromEmail}>`,
-      to,
-      subject: '🧪 Mensaje de prueba desde InmoControl',
-      text: 'Si lees esto, tu buzón de email está conectado correctamente. — Equipo InmoControl',
-      html: `<div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+    try {
+      const { transport, providerLabel } = providerToTransport(mb.provider);
+      const transporter = nodemailer.createTransport(transport);
+      const info = await transporter.sendMail({
+        from: `"${mb.fromName}" <${mb.fromEmail}>`,
+        to,
+        subject: "🧪 Mensaje de prueba desde InmoControl",
+        text: "Si lees esto, tu buzón de email está conectado correctamente. — Equipo InmoControl",
+        html: `<div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #2563eb; margin: 0 0 16px;">✅ ¡Email conectado!</h2>
         <p style="color: #334155; line-height: 1.5;">Si lees esto, tu buzón <strong>${mb.fromEmail}</strong> está configurado correctamente y puede enviar notificaciones.</p>
         <p style="color: #64748b; font-size: 14px; margin-top: 24px;">Proveedor: <code>${providerLabel}</code><br/>Propósito: ${mb.purpose}</p>
         <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;"/>
         <p style="color: #94a3b8; font-size: 12px;">— Equipo InmoControl</p>
       </div>`,
-      replyTo: mb.replyTo,
-    });
-    console.info(`[notifications/email/test] to=${to} provider=${providerLabel} messageId=${info.messageId}`);
-    res.json({ ok: true, messageId: info.messageId, to, provider: providerLabel });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message ?? 'Send failed', code: err.code });
-  }
-}));
+        replyTo: mb.replyTo,
+      });
+      console.info(
+        `[notifications/email/test] to=${to} provider=${providerLabel} messageId=${info.messageId}`,
+      );
+      res.json({
+        ok: true,
+        messageId: info.messageId,
+        to,
+        provider: providerLabel,
+      });
+    } catch (err: any) {
+      // fix-issue-27: errores de nodemailer/SMTP exponen msg del provider
+      // (es seguro — no contiene SQL ni paths internos del server).
+      throw internalExpose(
+        err?.message ?? "Send failed",
+        err?.code ?? "EMAIL_SEND_FAILED",
+      );
+    }
+  }),
+);
 
 // ─── POST /email/send (uso interno del engine) ────────────────────────────
 // BUG-029: migrado a asyncHandler.
-router.post('/email/send', requireRole('canManageNotifications'), asyncHandler(async (req, res) => {
-  const nodemailer = await getNodemailer();
-  if (!nodemailer) {
-    return res.status(503).json({ ok: false, error: 'NODEMAILER_NOT_INSTALLED' });
-  }
-  const { mailbox, to, subject, body, html, alertId } = req.body as EmailRequestBody;
-  if (!to || !subject || !body) {
-    return res.status(400).json({ ok: false, error: 'Faltan campos: to, subject, body' });
-  }
-  const mb = mailbox ?? readEmailFallback();
-  if (!mb) return res.status(400).json({ ok: false, error: 'Falta mailbox y no hay fallback configurado' });
+router.post(
+  "/email/send",
+  requireRole("canManageNotifications"),
+  asyncHandler(async (req, res) => {
+    const nodemailer = await getNodemailer();
+    if (!nodemailer) {
+      return res
+        .status(503)
+        .json({ ok: false, error: "NODEMAILER_NOT_INSTALLED" });
+    }
+    const { mailbox, to, subject, body, html, alertId } =
+      req.body as EmailRequestBody;
+    if (!to || !subject || !body) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Faltan campos: to, subject, body" });
+    }
+    const mb = mailbox ?? readEmailFallback();
+    if (!mb)
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error: "Falta mailbox y no hay fallback configurado",
+        });
 
-  try {
-    const { transport, providerLabel } = providerToTransport(mb.provider);
-    const transporter = nodemailer.createTransport(transport);
+    try {
+      const { transport, providerLabel } = providerToTransport(mb.provider);
+      const transporter = nodemailer.createTransport(transport);
 
-    // Envolvemos el body en una plantilla HTML mínima si viene html=true.
-    const htmlBody = html
-      ? `<div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #334155;">
+      // Envolvemos el body en una plantilla HTML mínima si viene html=true.
+      const htmlBody = html
+        ? `<div style="font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #334155;">
           <h2 style="color: #1e293b; margin: 0 0 16px;">${escapeHtml(subject)}</h2>
           <div style="line-height: 1.5; white-space: pre-wrap;">${escapeHtml(body)}</div>
           <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;"/>
           <p style="color: #94a3b8; font-size: 12px;">— ${escapeHtml(mb.fromName)} vía InmoControl</p>
         </div>`
-      : undefined;
+        : undefined;
 
-    const info = await transporter.sendMail({
-      from: `"${mb.fromName}" <${mb.fromEmail}>`,
-      to,
-      subject,
-      text: body,
-      html: htmlBody,
-      replyTo: mb.replyTo,
-    });
-    console.info(`[notifications/email/send] alert=${alertId ?? 'n/a'} to=${to} provider=${providerLabel} messageId=${info.messageId}`);
-    res.json({ ok: true, messageId: info.messageId, to, provider: providerLabel });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message ?? 'Send failed', code: err.code });
-  }
-}));
+      const info = await transporter.sendMail({
+        from: `"${mb.fromName}" <${mb.fromEmail}>`,
+        to,
+        subject,
+        text: body,
+        html: htmlBody,
+        replyTo: mb.replyTo,
+      });
+      console.info(
+        `[notifications/email/send] alert=${alertId ?? "n/a"} to=${to} provider=${providerLabel} messageId=${info.messageId}`,
+      );
+      res.json({
+        ok: true,
+        messageId: info.messageId,
+        to,
+        provider: providerLabel,
+      });
+    } catch (err: any) {
+      // fix-issue-27: ver handler anterior.
+      throw internalExpose(
+        err?.message ?? "Send failed",
+        err?.code ?? "EMAIL_SEND_FAILED",
+      );
+    }
+  }),
+);
 
 /** Escapa HTML básico para evitar inyecciones en el subject/body. */
 function escapeHtml(s: string): string {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export default router;

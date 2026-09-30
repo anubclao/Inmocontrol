@@ -17,6 +17,8 @@ import { requireAuth } from "./auth.js";
 // además de la sesión (cierra el agujero de EC-13 en AUTH).
 import { requireRole } from "../middleware/requireRole.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+// fix-issue-27: helper de errores tipado.
+import { internal, internalExpose } from "../lib/errors.js";
 
 const router = express.Router();
 router.use(requireAuth);
@@ -287,15 +289,15 @@ router.post(
               //  ya tengamos propertyId y orgId en scope)
             }
           } catch (lookupErr: any) {
+            // fix-issue-27: mensaje custom seguro (no leak). internalExpose.
             console.error(
               "[POST /api/properties] no se pudo validar la propiedad existente:",
-              lookupErr.message,
+              lookupErr,
             );
-            res.status(500).json({
-              error: "No se pudo validar la propiedad existente.",
-              code: "LOOKUP_FAILED",
-            });
-            return;
+            throw internalExpose(
+              "No se pudo validar la propiedad existente.",
+              "LOOKUP_FAILED",
+            );
           }
         } else {
           // INSERT puro: sin localId y sin address → 400.
@@ -456,15 +458,9 @@ router.post(
         }
         orgId = ctx.orgId;
       } catch (err: any) {
-        console.error(
-          "[POST /api/properties] Error resolviendo orgId:",
-          err.message,
-        );
-        res.status(500).json({
-          error:
-            "Error resolviendo organización: " + (err.message ?? String(err)),
-        });
-        return;
+        // fix-issue-27: error inesperado. Sanitizar.
+        console.error("[POST /api/properties] Error resolviendo orgId:", err);
+        throw internal();
       }
       // FIX 2026-09-25 (saas_multitenant.md AC-7): si el body trae
       // organizationId ajeno al del user, rechazar con 403.
@@ -534,12 +530,11 @@ router.post(
               "[POST /api/properties] UPSERT no afectó ninguna fila:",
               { propertyId, orgId },
             );
-            res.status(500).json({
-              error:
-                "No se pudo actualizar la propiedad: el id no existe o pertenece a otra organización",
-              code: "UPSERT_NO_MATCH",
-            });
-            return;
+            // fix-issue-27: mensaje custom seguro (no leak). internalExpose.
+            throw internalExpose(
+              "No se pudo actualizar la propiedad: el id no existe o pertenece a otra organización",
+              "UPSERT_NO_MATCH",
+            );
           }
         } else {
           // FIX Karpathy (jul-2026): rechaza blob/data URLs en mandato_pdf_url
@@ -669,11 +664,14 @@ router.post(
           // cliente sepa que la operación falló y pueda reintentar. La
           // transacción ya hizo rollback, así que la propiedad queda con
           // los owners VIEJOS intactos.
-          res.status(500).json({
-            error: "Error guardando owners. Cambios no aplicados.",
-            hint: "Reintentá el POST con el mismo body.",
+          // fix-issue-27: loguear contexto del dominio (orgId, propertyId)
+          // y propagar. errorHandler sanitiza el SQL.
+          console.error("[DB] Error persistiendo property_owners:", {
+            err: err?.message,
+            orgId,
+            propertyId,
           });
-          return;
+          throw err;
         }
       }
 
@@ -726,13 +724,14 @@ router.post(
             }
           });
         } catch (err: any) {
-          console.error("[DB] Error persistiendo property_units:", err.message);
-          // BUG-017: 500 con hint accionable (mismo patrón que owners).
-          res.status(500).json({
-            error: "Error guardando units. Cambios no aplicados.",
-            hint: "Reintentá el POST con el mismo body.",
+          // BUG-017: 500 con contexto del dominio (mismo patrón que owners).
+          // fix-issue-27: propagar. errorHandler sanitiza.
+          console.error("[DB] Error persistiendo property_units:", {
+            err: err?.message,
+            orgId,
+            propertyId,
           });
-          return;
+          throw err;
         }
       }
 
@@ -841,17 +840,10 @@ router.post(
       });
     } catch (err: any) {
       // Cualquier error no manejado por los try/catch internos cae acá.
-      // Devolvemos JSON para que el frontend pueda parsearlo (antes era HTML
-      // y el browser tiraba SyntaxError en consola).
-      console.error("[POST /api/properties] UNHANDLED:", err.message ?? err);
-      if (err?.stack) console.error(err.stack);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error:
-            "Error inesperado guardando propiedad: " +
-            (err.message ?? String(err)),
-        });
-      }
+      // fix-issue-27: propagar. asyncHandler → next(err) → errorHandler.
+      // El log de stack lo hace el errorHandler.
+      console.error("[POST /api/properties] UNHANDLED:", err?.message ?? err);
+      throw err;
     }
   }),
 );

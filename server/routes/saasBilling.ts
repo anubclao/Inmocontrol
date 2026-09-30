@@ -48,6 +48,8 @@ import { requireRole } from "../middleware/requireRole.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 // BUG-029: asyncHandler para propagación central de errores.
 import { asyncHandler } from "../lib/asyncHandler.js";
+// fix-issue-27: helper de errores tipado.
+import { internalExpose, conflict } from "../lib/errors.js";
 
 const router = Router();
 
@@ -153,11 +155,12 @@ router.post(
         );
       } catch (e: any) {
         if (e?.code !== "ER_DUP_ENTRY") {
+          // fix-issue-27: mensaje custom es seguro (no leak). internalExpose.
           console.error("[signup] auto-seed trial plan fallo:", e);
-          return res.status(500).json({
-            error: "No se pudo inicializar el plan trial.",
-            code: "NO_TRIAL_PLAN",
-          });
+          throw internalExpose(
+            "No se pudo inicializar el plan trial.",
+            "NO_TRIAL_PLAN",
+          );
         }
         // Si hubo carrera y otro request creo el plan, lo recuperamos.
         const [retry] = await pool.query<any[]>(
@@ -215,16 +218,16 @@ router.post(
       console.error("[signup] transaccion fallo:", e);
       // EC-5: error de DB -> 500 con code.
       if (e?.code === "ER_DUP_ENTRY") {
-        return res.status(409).json({
-          error:
-            "Ya existe una cuenta con ese email. ¿Olvidaste tu contraseña?",
-          code: "EMAIL_TAKEN",
-        });
+        throw conflict(
+          "Ya existe una cuenta con ese email. ¿Olvidaste tu contraseña?",
+          "EMAIL_TAKEN",
+        );
       }
-      return res.status(500).json({
-        error: "Error creando la cuenta. Reintentá en unos minutos.",
-        code: "DB_UNAVAILABLE",
-      });
+      // fix-issue-27: 500 con mensaje custom seguro. internalExpose.
+      throw internalExpose(
+        "Error creando la cuenta. Reintentá en unos minutos.",
+        "DB_UNAVAILABLE",
+      );
     } finally {
       conn.release();
     }
@@ -1143,12 +1146,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const { token } = req.params;
     if (!token || !/^[0-9a-f]{64}$/.test(token)) {
-      return res
-        .status(404)
-        .json({
-          error: "Invitación no encontrada",
-          code: "INVITATION_NOT_FOUND",
-        });
+      return res.status(404).json({
+        error: "Invitación no encontrada",
+        code: "INVITATION_NOT_FOUND",
+      });
     }
     const [rows] = await pool.query<any[]>(
       `SELECT i.email, i.role, i.expires_at, i.accepted_at, o.name AS org_name
@@ -1159,22 +1160,18 @@ router.get(
       [token],
     );
     if (rows.length === 0) {
-      return res
-        .status(404)
-        .json({
-          error: "Invitación no encontrada",
-          code: "INVITATION_NOT_FOUND",
-        });
+      return res.status(404).json({
+        error: "Invitación no encontrada",
+        code: "INVITATION_NOT_FOUND",
+      });
     }
     const r = rows[0];
     // Distinguir entre no encontrada / expirada / ya aceptada.
     if (r.accepted_at) {
-      return res
-        .status(404)
-        .json({
-          error: "Esta invitación ya fue aceptada",
-          code: "INVITATION_ALREADY_ACCEPTED",
-        });
+      return res.status(404).json({
+        error: "Esta invitación ya fue aceptada",
+        code: "INVITATION_ALREADY_ACCEPTED",
+      });
     }
     if (new Date(r.expires_at) <= new Date()) {
       return res
@@ -1204,20 +1201,16 @@ router.post(
     };
 
     if (!token || !/^[0-9a-f]{64}$/.test(token)) {
-      return res
-        .status(404)
-        .json({
-          error: "Invitación no encontrada",
-          code: "INVITATION_NOT_FOUND",
-        });
+      return res.status(404).json({
+        error: "Invitación no encontrada",
+        code: "INVITATION_NOT_FOUND",
+      });
     }
     if (!password) {
-      return res
-        .status(400)
-        .json({
-          error: "Falta el campo password",
-          code: "MISSING_REQUIRED_FIELDS",
-        });
+      return res.status(400).json({
+        error: "Falta el campo password",
+        code: "MISSING_REQUIRED_FIELDS",
+      });
     }
     if (
       password.length < 8 ||
@@ -1268,31 +1261,25 @@ router.post(
       );
       if (rows.length === 0) {
         await conn.rollback();
-        return res
-          .status(404)
-          .json({
-            error: "Invitación no encontrada",
-            code: "INVITATION_NOT_FOUND",
-          });
+        return res.status(404).json({
+          error: "Invitación no encontrada",
+          code: "INVITATION_NOT_FOUND",
+        });
       }
       invitation = rows[0];
       if (invitation.accepted_at) {
         await conn.rollback();
-        return res
-          .status(404)
-          .json({
-            error: "Esta invitación ya fue aceptada",
-            code: "INVITATION_ALREADY_ACCEPTED",
-          });
+        return res.status(404).json({
+          error: "Esta invitación ya fue aceptada",
+          code: "INVITATION_ALREADY_ACCEPTED",
+        });
       }
       if (new Date(invitation.expires_at) <= new Date()) {
         await conn.rollback();
-        return res
-          .status(404)
-          .json({
-            error: "Esta invitación expiró",
-            code: "INVITATION_EXPIRED",
-          });
+        return res.status(404).json({
+          error: "Esta invitación expiró",
+          code: "INVITATION_EXPIRED",
+        });
       }
       orgId = invitation.organization_id;
       invitedRole = invitation.role;
@@ -1327,17 +1314,17 @@ router.post(
       await conn.rollback();
       console.error("[invitations] accept failed:", e);
       if (e?.code === "ER_DUP_ENTRY") {
-        return res.status(409).json({
-          error: "Ya existe un miembro con ese email en esta organización.",
-          code: "EMAIL_ALREADY_MEMBER",
-        });
+        // fix-issue-27: throw conflict (no return res).
+        throw conflict(
+          "Ya existe un miembro con ese email en esta organización.",
+          "EMAIL_ALREADY_MEMBER",
+        );
       }
-      return res
-        .status(500)
-        .json({
-          error: "Error al aceptar la invitación",
-          code: "DB_UNAVAILABLE",
-        });
+      // fix-issue-27: throw internalExpose con mensaje custom.
+      throw internalExpose(
+        "Error al aceptar la invitación",
+        "DB_UNAVAILABLE",
+      );
     } finally {
       conn.release();
     }
@@ -1416,30 +1403,24 @@ router.post(
       role?: string;
     };
     if (!rawEmail || !rawRole) {
-      return res
-        .status(400)
-        .json({
-          error: "Faltan campos requeridos: email, role",
-          code: "MISSING_REQUIRED_FIELDS",
-        });
+      return res.status(400).json({
+        error: "Faltan campos requeridos: email, role",
+        code: "MISSING_REQUIRED_FIELDS",
+      });
     }
     const email = rawEmail.toLowerCase().trim();
     const role = rawRole;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res
-        .status(400)
-        .json({
-          error: "El email no tiene formato válido",
-          code: "INVALID_EMAIL",
-        });
+      return res.status(400).json({
+        error: "El email no tiene formato válido",
+        code: "INVALID_EMAIL",
+      });
     }
     if (!["gestor", "propietario", "inquilino"].includes(role)) {
-      return res
-        .status(400)
-        .json({
-          error: `Rol inválido: ${role}. Roles permitidos: gestor, propietario, inquilino.`,
-          code: "INVALID_ROLE",
-        });
+      return res.status(400).json({
+        error: `Rol inválido: ${role}. Roles permitidos: gestor, propietario, inquilino.`,
+        code: "INVALID_ROLE",
+      });
     }
 
     // EC-3: email ya es miembro de esta org.
@@ -1448,12 +1429,10 @@ router.post(
       [email, orgId],
     );
     if (existing.length > 0) {
-      return res
-        .status(409)
-        .json({
-          error: `${email} ya es miembro de esta organización.`,
-          code: "EMAIL_ALREADY_MEMBER",
-        });
+      return res.status(409).json({
+        error: `${email} ya es miembro de esta organización.`,
+        code: "EMAIL_ALREADY_MEMBER",
+      });
     }
 
     // AC-11/12: chequeo de quota.
@@ -1567,20 +1546,16 @@ router.delete(
       [id, orgId],
     );
     if (rows.length === 0) {
-      return res
-        .status(404)
-        .json({
-          error: "Invitación no encontrada",
-          code: "INVITATION_NOT_FOUND",
-        });
+      return res.status(404).json({
+        error: "Invitación no encontrada",
+        code: "INVITATION_NOT_FOUND",
+      });
     }
     if (rows[0].accepted_at) {
-      return res
-        .status(409)
-        .json({
-          error: "No se puede borrar una invitación ya aceptada",
-          code: "CANNOT_DELETE_ACCEPTED_INVITATION",
-        });
+      return res.status(409).json({
+        error: "No se puede borrar una invitación ya aceptada",
+        code: "CANNOT_DELETE_ACCEPTED_INVITATION",
+      });
     }
     await pool.query(`DELETE FROM org_invitations WHERE id = ?`, [id]);
     return res.status(204).send();
@@ -1609,20 +1584,16 @@ router.post(
       [id, orgId],
     );
     if (rows.length === 0) {
-      return res
-        .status(404)
-        .json({
-          error: "Invitación no encontrada",
-          code: "INVITATION_NOT_FOUND",
-        });
+      return res.status(404).json({
+        error: "Invitación no encontrada",
+        code: "INVITATION_NOT_FOUND",
+      });
     }
     if (rows[0].accepted_at) {
-      return res
-        .status(409)
-        .json({
-          error: "La invitación ya fue aceptada",
-          code: "INVITATION_ALREADY_ACCEPTED",
-        });
+      return res.status(409).json({
+        error: "La invitación ya fue aceptada",
+        code: "INVITATION_ALREADY_ACCEPTED",
+      });
     }
     const newToken = (globalThis as any).crypto.randomBytes(32).toString("hex");
     const newExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -1721,12 +1692,10 @@ router.patch(
     }
     const target = rows[0];
     if (target.role === "admin" && target.email === target.org_created_by) {
-      return res
-        .status(409)
-        .json({
-          error: "No podés cambiar el rol del dueño de la organización.",
-          code: "CANNOT_REMOVE_ORG_OWNER",
-        });
+      return res.status(409).json({
+        error: "No podés cambiar el rol del dueño de la organización.",
+        code: "CANNOT_REMOVE_ORG_OWNER",
+      });
     }
     await pool.query(`UPDATE profiles SET role = ? WHERE id = ?`, [role, id]);
     return res.json({
@@ -1766,12 +1735,10 @@ router.delete(
     }
     const target = rows[0];
     if (target.role === "admin" && target.email === target.org_created_by) {
-      return res
-        .status(409)
-        .json({
-          error: "No podés eliminar al dueño de la organización.",
-          code: "CANNOT_REMOVE_ORG_OWNER",
-        });
+      return res.status(409).json({
+        error: "No podés eliminar al dueño de la organización.",
+        code: "CANNOT_REMOVE_ORG_OWNER",
+      });
     }
     await pool.query(`DELETE FROM profiles WHERE id = ?`, [id]);
     return res.status(204).send();

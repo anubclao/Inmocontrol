@@ -1,20 +1,25 @@
 import { Request, Response, NextFunction } from "express";
+import { AppError } from "./errors.js";
 
 /**
  * Middleware central de errores para InmoControl.
  * Captura cualquier error que llegue via next(err) o de un asyncHandler.
  * SIEMPRE devuelve JSON (regla AGENTS.md: "NUNCA HTML").
  *
- * Shape de respuesta: { error: string, code?: string }
+ * Shape de respuesta: { error: string, code: string }
  *
- * - Para 4xx: incluye el mensaje del error (es seguro exponerlo al cliente).
- * - Para 5xx: mensaje genérico "Internal server error" (evita leak de internals).
- *   El error original se loguea con stack a console.error.
- * - err.expose === true: el caller marcó el error como seguro de exponer.
+ * fix-issue-27 (FASE 4 Karpathy, oct-2026):
+ *  - Reconoce errores `AppError` (de server/lib/errors.ts) con shape uniforme.
+ *  - Aplica la regla `expose`:
+ *      • 4xx: el mensaje del caller SE expone al cliente (es seguro).
+ *      • 5xx con expose=true: el mensaje custom SE expone (caller ya validó).
+ *      • 5xx con expose=false: mensaje genérico "Internal server error" (evita leak).
+ *  - Loguea una sola línea uniforme por error (con stack si >= 500).
+ *  - Si `err` no es `AppError`, lo trata como 500 internal.
  *
  * Casos especiales:
- * - err.type === 'entity.parse.failed': body malformado → 400 INVALID_JSON.
- * - res.headersSent: no podemos responder de nuevo (race con el handler).
+ *  - err.type === 'entity.parse.failed': body malformado → 400 INVALID_JSON.
+ *  - res.headersSent: no podemos responder de nuevo (race con el handler).
  */
 export function errorHandler(
   err: any,
@@ -37,19 +42,46 @@ export function errorHandler(
     return;
   }
 
-  const status = err?.statusCode ?? err?.status ?? 500;
-  const expose = err?.expose === true;
-  const message =
-    status < 500 || expose
+  // ── Resolver status / code / message / expose ────────────────────────
+  let statusCode: number;
+  let code: string;
+  let message: string;
+  let isAppError = false;
+
+  if (err instanceof AppError) {
+    isAppError = true;
+    statusCode = err.statusCode;
+    code = err.code;
+    message = err.expose ? err.message : "Internal server error";
+  } else {
+    // Error no tipado: 4xx si trae status < 500, 5xx por default
+    statusCode = err?.statusCode ?? err?.status ?? 500;
+    code = err?.code ?? (statusCode >= 500 ? "INTERNAL" : "CLIENT_ERROR");
+    // Si es 4xx o el caller marcó expose=true, mostramos el mensaje.
+    // Si es 5xx sin expose, mensaje genérico.
+    const expose = statusCode < 500 || err?.expose === true;
+    message = expose
       ? (err?.message ?? "Internal server error")
       : "Internal server error";
-
-  if (status >= 500) {
-    console.error(`[errorHandler] ${req.method} ${req.path}:`, err);
   }
 
-  res.status(status).json({
+  // ── Logging uniforme ──────────────────────────────────────────────────
+  if (statusCode >= 500) {
+    console.error(
+      `[errorHandler] ${req.method} ${req.path} → ${statusCode} ` +
+        `(code=${code}, msg=${err?.message ?? "(no msg)"}, ` +
+        `stack=${err?.stack ? "presente" : "ausente"}, ` +
+        `appError=${isAppError})`,
+    );
+  } else {
+    console.warn(
+      `[errorHandler] ${req.method} ${req.path} → ${statusCode} ` +
+        `(code=${code}, msg=${message})`,
+    );
+  }
+
+  res.status(statusCode).json({
     error: message,
-    code: err?.code ?? (status >= 500 ? "INTERNAL" : "CLIENT_ERROR"),
+    code,
   });
 }

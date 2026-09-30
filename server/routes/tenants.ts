@@ -389,15 +389,9 @@ router.post(
           : "Arrendatario creado (sin Drive — conecta tu Google Drive en Configuración)",
       });
     } catch (err: any) {
-      console.error("[POST /api/tenants] UNHANDLED:", err.message ?? err);
-      if (err?.stack) console.error(err.stack);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error:
-            "Error inesperado creando arrendatario: " +
-            (err.message ?? String(err)),
-        });
-      }
+      // fix-issue-27: propagar. errorHandler sanitiza.
+      console.error("[POST /api/tenants] UNHANDLED:", err?.message ?? err);
+      throw err;
     }
   }),
 );
@@ -943,8 +937,10 @@ router.post(
         webViewLink: uploaded.data.webViewLink,
       });
     } catch (err: any) {
-      console.error("[Drive] Error subiendo documento:", err.message);
-      res.status(500).json({ error: "Error subiendo a Drive: " + err.message });
+      // fix-issue-27: loguear contexto (incluye err.message que puede
+      // contener info de Google API — seguro) y propagar.
+      console.error("[Drive] Error subiendo documento:", err);
+      throw err;
     }
   }),
 );

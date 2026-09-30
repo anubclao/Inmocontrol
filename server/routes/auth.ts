@@ -211,8 +211,9 @@ router.post(
         },
       });
     } catch (err: any) {
-      console.error("[auth] login error:", err.message);
-      return res.status(500).json({ error: "Error interno", code: "INTERNAL" });
+      // fix-issue-27: loguear contexto y propagar. errorHandler sanitiza.
+      console.error("[auth] login error:", err);
+      throw err;
     }
   },
 );

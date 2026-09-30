@@ -22,26 +22,29 @@
  *                        todo (mode 503) hasta que se configure.
  */
 
-import { Router } from 'express';
-import { runPilotSeed } from '../seed/pilotSeed.js';
+import { Router } from "express";
+import { runPilotSeed } from "../seed/pilotSeed.js";
+// fix-issue-27: helper tipado para tirar errores que el errorHandler procesa.
+import { internal } from "../lib/errors.js";
 
 const router = Router();
 
-router.post('/seed', async (req, res) => {
+router.post("/seed", async (req, res) => {
   const expected = process.env.ADMIN_SEED_TOKEN;
   if (!expected) {
     return res.status(503).json({
       ok: false,
-      code: 'ADMIN_SEED_TOKEN_NOT_CONFIGURED',
-      error: 'Server admin no configuró ADMIN_SEED_TOKEN. Definilo en el panel de Hostinger antes de invocar.',
+      code: "ADMIN_SEED_TOKEN_NOT_CONFIGURED",
+      error:
+        "Server admin no configuró ADMIN_SEED_TOKEN. Definilo en el panel de Hostinger antes de invocar.",
     });
   }
-  const provided = req.headers['x-admin-seed-token'];
-  if (typeof provided !== 'string' || provided !== expected) {
+  const provided = req.headers["x-admin-seed-token"];
+  if (typeof provided !== "string" || provided !== expected) {
     return res.status(401).json({
       ok: false,
-      code: 'INVALID_TOKEN',
-      error: 'Falta o es incorrecto el header X-Admin-Seed-Token.',
+      code: "INVALID_TOKEN",
+      error: "Falta o es incorrecto el header X-Admin-Seed-Token.",
     });
   }
 
@@ -53,28 +56,25 @@ router.post('/seed', async (req, res) => {
       stages: result.stages,
       admin: result.admin,
       message: result.alreadySeeded
-        ? 'DB ya tiene admin — seed no ejecutado.'
-        : 'Seed del piloto completado.',
+        ? "DB ya tiene admin — seed no ejecutado."
+        : "Seed del piloto completado.",
     });
   } catch (err: any) {
-    console.error('[admin/seed] failed:', err);
-    return res.status(500).json({
-      ok: false,
-      code: 'SEED_ERROR',
-      error: err?.message ?? 'Error desconocido en seed',
-      sql: err?.sql,
-      mysqlCode: err?.code,
-    });
+    // fix-issue-27: loguear contexto completo (incluye sql/mysqlCode) ANTES
+    // de propagar. El errorHandler ahora sanitiza: el cliente NO ve el
+    // `sql` ni el `mysqlCode` (seguridad), solo el shape `{ error, code }`.
+    console.error("[admin/seed] failed:", err);
+    throw internal("SEED_ERROR");
   }
 });
 
-router.get('/seed/status', async (_req, res) => {
+router.get("/seed/status", async (_req, res) => {
   // Endpoint util para verificar el estado sin ejecutar.
   // Lee si hay admin user y devuelve contexto.
   // (Solo informativo — no requiere token.)
   // Import dinâmico de pool para evitar ciclo si el server está sin DB.
   try {
-    const { default: pool } = await import('../db.js');
+    const { default: pool } = await import("../db.js");
     const [rows] = await pool.query(
       `SELECT
          (SELECT COUNT(*) FROM organizations) AS orgs,
@@ -82,11 +82,12 @@ router.get('/seed/status', async (_req, res) => {
          (SELECT COUNT(*) FROM profiles WHERE role='admin') AS admins,
          (SELECT COUNT(*) FROM tenants WHERE status='Activo') AS tenants,
          (SELECT COUNT(*) FROM contracts WHERE status='active') AS contracts,
-         (SELECT COUNT(*) FROM amortization_rows) AS amort_rows`
+         (SELECT COUNT(*) FROM amortization_rows) AS amort_rows`,
     );
     return res.json({ ok: true, counts: rows[0] });
-  } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err?.message });
+  } catch {
+    // fix-issue-27: shape uniforme. errorHandler sanitiza el mensaje.
+    throw internal();
   }
 });
 
