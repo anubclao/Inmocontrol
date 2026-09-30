@@ -78,8 +78,12 @@
 
 ### AC-11: El estado del contract debe ser válido
 
-- Solo acepta: `'draft'` o `'active'`.
-- El select muestra solo esas 2 opciones.
+- Acepta uno de: `'active'`, `'ended'`, `'pending'`, `'cancelled'`, `'renewed'`.
+- El `select` muestra las opciones que aplican al contexto:
+  - Form de **crear contrato nuevo** (no se usa — ver nota al inicio del spec): solo `'draft'` o `'active'`.
+  - Form de **edición de contrato existente**: todas las opciones según el ciclo de vida.
+- El server valida server-side con 400 + `INVALID_ENUM` si llega un valor fuera de la lista.
+- Los valores "legacy" `terminated`/`expired` que aparecen en la UI son alias de `ended` (mapeo en el mapper del cliente).
 
 ### AC-12: La estrategia de renovación debe ser válida
 
