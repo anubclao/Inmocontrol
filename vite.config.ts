@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => ({
     // moderno tal cual y los browsers modernos lo ejecutan nativamente.
     target: 'esnext',
   },
+  // Mismo problema en dev: el pre-bundling de deps usa su propio target
+  // (no hereda build.target) y esbuild 0.28 falla igual con tailwind-merge.
+  optimizeDeps: {
+    esbuildOptions: { target: 'esnext' },
+  },
   server: {
     // En desarrollo, Express corre en 3001. Aquí Vite recibe las peticiones
     // y reenvía /api/* al backend Express.
