@@ -449,6 +449,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // BUG-020: mover ...p ANTES de los defaults para que no los pise.
       // Antes, si p.chip era undefined, el spread al final reescribia
       // chip: '' con chip: undefined → cards renderizaban `undefined`.
+      // FIX #9: createdAt优先使用server返回的created_at，回退到本地时间。
       const local: Property = {
         ...p,
         id: p.id,
@@ -466,7 +467,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         inventoryPdfUrl: p.inventoryPdfUrl ?? null,
         mandatePdfUrl: p.mandatePdfUrl ?? null,
         mandateSignedAt: p.mandateSignedAt ?? null,
-        createdAt: new Date().toISOString(),
+        // FIX #9: server response优先 (viene como created_at); fallback ISO local
+        createdAt: (p as any).createdAt ?? (p as any).created_at ?? new Date().toISOString(),
       } as Property;
       set((s) => ({ properties: [...s.properties, local] }));
       return local;
@@ -492,7 +494,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         inventoryPdfUrl: p.inventoryPdfUrl ?? null,
         mandatePdfUrl: p.mandatePdfUrl ?? null,
         mandateSignedAt: p.mandateSignedAt ?? null,
-        createdAt: new Date().toISOString(),
+        // FIX #9: usar createdAt del server si está disponible; fallback ISO local
+        createdAt: data.createdAt ?? data.created_at ?? new Date().toISOString(),
       } as Property;
       set((s) => ({ properties: [...s.properties, created] }));
       return created;

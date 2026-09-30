@@ -34,7 +34,11 @@
 import { Router } from "express";
 import crypto from "crypto";
 import type { PoolConnection } from "mysql2/promise";
-import pool, { ensureDefaultOrg } from "../db.js";
+import pool from "../db.js";
+// FIX 2026-09-25 (saas_multitenant.md): usar getOrgIdForRequest en vez de
+// ensureDefaultOrg() para que el orgId venga del req.user, no del primero
+// de la tabla. ensureDefaultOrg() se mantiene para bootstrap/tests.
+import { getOrgIdForRequest } from "../lib/orgContext.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { withTransaction } from "../lib/withTransaction.js";
 // FIX #2 (P0 seguridad): requireAuth en todas las rutas de billing.
@@ -171,18 +175,35 @@ function rowToAmortization(r: any) {
 // ─── BillingPolicy ─────────────────────────────────────────────────────
 
 // BUG-029: migrado a asyncHandler. Errores se propagan al errorHandler central.
-router.get("/policies/:propertyId", asyncHandler(async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const policy = await loadPolicy(orgId, req.params.propertyId);
-  if (!policy) return res.status(404).json({ error: "not found" });
-  res.json(policy);
-}));
+router.get(
+  "/policies/:propertyId",
+  asyncHandler(async (req, res) => {
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const policy = await loadPolicy(orgId, req.params.propertyId);
+    if (!policy) return res.status(404).json({ error: "not found" });
+    res.json(policy);
+  }),
+);
 
 router.put(
   "/policies/:propertyId",
   requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const propertyId = req.params.propertyId;
     const p: BillingPolicy = req.body;
     // FIX Karpathy (jul-2026): bug histórico. La columna `policy_id` NO
@@ -239,7 +260,14 @@ router.post(
   "/amortization/generate",
   requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const { contract, policy } = req.body as {
       contract: Contract;
       policy: BillingPolicy;
@@ -381,16 +409,26 @@ router.post(
 );
 
 // BUG-029: migrado a asyncHandler.
-router.get("/amortization/:contractId", asyncHandler(async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const [rows] = await pool.query(
-    `SELECT * FROM amortization_rows
+router.get(
+  "/amortization/:contractId",
+  asyncHandler(async (req, res) => {
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = await pool.query(
+      `SELECT * FROM amortization_rows
      WHERE contract_id = ? AND organization_id = ?
      ORDER BY month_number ASC`,
-    [req.params.contractId, orgId],
-  );
-  res.json((rows as any[]).map(rowToAmortization));
-}));
+      [req.params.contractId, orgId],
+    );
+    res.json((rows as any[]).map(rowToAmortization));
+  }),
+);
 
 // ─── GET /api/billing/amortization ───────────────────────────────────────
 // Lista TODA la amortización del org. Usado por el frontend en hydrate
@@ -402,16 +440,27 @@ router.get("/amortization/:contractId", asyncHandler(async (req, res) => {
 // agrupar por contrato (el frontend agrupa por contractId).
 
 // BUG-029: migrado a asyncHandler.
-router.get("/amortization", asyncHandler(async (_req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const [rows] = await pool.query(
-    `SELECT * FROM amortization_rows
+router.get(
+  "/amortization",
+  asyncHandler(async (req, res) => {
+    // FIX 2026-09-26 (saas_multitenant.md AC-6): orgId del request,
+    // no ensureDefaultOrg(). Mismo patrón que el resto del archivo.
+    const ctx = await getOrgIdForRequest(req);
+    if (ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = ctx.orgId;
+    const [rows] = await pool.query(
+      `SELECT * FROM amortization_rows
      WHERE organization_id = ?
      ORDER BY contract_id, month_number ASC`,
-    [orgId],
-  );
-  res.json({ rows: (rows as any[]).map(rowToAmortization) });
-}));
+      [orgId],
+    );
+    res.json({ rows: (rows as any[]).map(rowToAmortization) });
+  }),
+);
 
 // ─── Pagos ─────────────────────────────────────────────────────────────
 
@@ -424,7 +473,14 @@ router.post(
       rowId: string;
       paidOnDayOfMonth: number;
     };
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const [rows] = await pool.query(
       `SELECT * FROM amortization_rows WHERE id = ? AND contract_id = ?`,
       [rowId, contractId],
@@ -580,22 +636,32 @@ const CHARGE_COLS = `(id, organization_id, property_id, period, type,
                        attachment_url, recorded_by)`;
 
 // BUG-029: migrado a asyncHandler. Errores se propagan al errorHandler central.
-router.post("/charges", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
-  const c = req.body as {
-    id: string;
-    propertyId: string;
-    period: string;
-    type: string;
-    description: string;
-    amount: number;
-    chargedTo: "owner" | "tenant" | "both";
-    appliesToInvoice?: boolean;
-    attachmentUrl?: string;
-    recordedBy: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  await pool.query(
-    `INSERT INTO property_charges
+router.post(
+  "/charges",
+  requireRole("canAddFinancial"),
+  asyncHandler(async (req, res) => {
+    const c = req.body as {
+      id: string;
+      propertyId: string;
+      period: string;
+      type: string;
+      description: string;
+      amount: number;
+      chargedTo: "owner" | "tenant" | "both";
+      appliesToInvoice?: boolean;
+      attachmentUrl?: string;
+      recordedBy: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    await pool.query(
+      `INSERT INTO property_charges
        ${CHARGE_COLS}
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
@@ -605,56 +671,78 @@ router.post("/charges", requireRole("canAddFinancial"), asyncHandler(async (req,
        charged_to = VALUES(charged_to),
        applies_to_invoice = VALUES(applies_to_invoice),
        attachment_url = VALUES(attachment_url)`,
-    [
-      c.id,
-      orgId,
-      c.propertyId,
-      c.period,
-      c.type,
-      c.description,
-      Number(c.amount),
-      c.chargedTo ?? "owner",
-      c.appliesToInvoice === false ? 0 : 1,
-      c.attachmentUrl ?? null,
-      c.recordedBy,
-    ],
-  );
-  res.json({ ok: true, id: c.id });
-}));
+      [
+        c.id,
+        orgId,
+        c.propertyId,
+        c.period,
+        c.type,
+        c.description,
+        Number(c.amount),
+        c.chargedTo ?? "owner",
+        c.appliesToInvoice === false ? 0 : 1,
+        c.attachmentUrl ?? null,
+        c.recordedBy,
+      ],
+    );
+    res.json({ ok: true, id: c.id });
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/charges", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const period = req.query.period as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const where: string[] = ["organization_id = ?"];
-  const args: any[] = [orgId];
-  if (propertyId) {
-    where.push("property_id = ?");
-    args.push(propertyId);
-  }
-  if (period) {
-    where.push("period = ?");
-    args.push(period);
-  }
-  const [rows] = await pool.query(
-    `SELECT * FROM property_charges
+router.get(
+  "/charges",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    const period = req.query.period as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const where: string[] = ["organization_id = ?"];
+    const args: any[] = [orgId];
+    if (propertyId) {
+      where.push("property_id = ?");
+      args.push(propertyId);
+    }
+    if (period) {
+      where.push("period = ?");
+      args.push(period);
+    }
+    const [rows] = await pool.query(
+      `SELECT * FROM property_charges
      WHERE ${where.join(" AND ")}
      ORDER BY period DESC, recorded_at DESC`,
-    args,
-  );
-  res.json((rows as any[]).map(rowToCharge));
-}));
+      args,
+    );
+    res.json((rows as any[]).map(rowToCharge));
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.delete("/charges/:id", requireRole("canDeleteFinancial"), asyncHandler(async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  const [result] = await pool.query(
-    `DELETE FROM property_charges WHERE id = ? AND organization_id = ?`,
-    [req.params.id, orgId],
-  );
-  res.json({ ok: true, deleted: (result as any).affectedRows });
-}));
+router.delete(
+  "/charges/:id",
+  requireRole("canDeleteFinancial"),
+  asyncHandler(async (req, res) => {
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [result] = await pool.query(
+      `DELETE FROM property_charges WHERE id = ? AND organization_id = ?`,
+      [req.params.id, orgId],
+    );
+    res.json({ ok: true, deleted: (result as any).affectedRows });
+  }),
+);
 
 /**
  * GET /api/billing/charges/invoice-summary?propertyId=&period=
@@ -665,29 +753,39 @@ router.delete("/charges/:id", requireRole("canDeleteFinancial"), asyncHandler(as
  * y para saber cuánto sumar al subtotal.
  */
 // BUG-029: migrado a asyncHandler.
-router.get("/charges/invoice-summary", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string;
-  const period = req.query.period as string;
-  if (!propertyId || !period) {
-    return res
-      .status(400)
-      .json({ error: "propertyId y period son requeridos" });
-  }
-  const orgId = await ensureDefaultOrg();
-  const [rows] = await pool.query(
-    `SELECT * FROM property_charges
+router.get(
+  "/charges/invoice-summary",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string;
+    const period = req.query.period as string;
+    if (!propertyId || !period) {
+      return res
+        .status(400)
+        .json({ error: "propertyId y period son requeridos" });
+    }
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = await pool.query(
+      `SELECT * FROM property_charges
      WHERE organization_id = ?
        AND property_id = ?
        AND period = ?
        AND applies_to_invoice = 1
        AND charged_to IN ('tenant','both')
      ORDER BY recorded_at ASC`,
-    [orgId, propertyId, period],
-  );
-  const charges = (rows as any[]).map(rowToCharge);
-  const total = charges.reduce((s, c) => s + c.amount, 0);
-  res.json({ propertyId, period, total, charges });
-}));
+      [orgId, propertyId, period],
+    );
+    const charges = (rows as any[]).map(rowToCharge);
+    const total = charges.reduce((s, c) => s + c.amount, 0);
+    res.json({ propertyId, period, total, charges });
+  }),
+);
 
 // ─── Descuentos (LEGACY — compat con /api/billing/discounts) ───────────
 // Mantener el endpoint viejo para que cualquier llamada existente siga
@@ -696,20 +794,30 @@ router.get("/charges/invoice-summary", asyncHandler(async (req, res) => {
 // (tabla histórica) para mantener trazabilidad legacy.
 
 // BUG-029: migrado a asyncHandler.
-router.post("/discounts", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
-  const d = req.body as {
-    id: string;
-    propertyId: string;
-    type: string;
-    description: string;
-    amount: number;
-    monthPeriod: string;
-    attachmentUrl?: string;
-    recordedBy: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  await pool.query(
-    `INSERT INTO property_discounts
+router.post(
+  "/discounts",
+  requireRole("canAddFinancial"),
+  asyncHandler(async (req, res) => {
+    const d = req.body as {
+      id: string;
+      propertyId: string;
+      type: string;
+      description: string;
+      amount: number;
+      monthPeriod: string;
+      attachmentUrl?: string;
+      recordedBy: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    await pool.query(
+      `INSERT INTO property_discounts
        (id, organization_id, property_id, type, description, amount, month_period, attachment_url, recorded_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
@@ -717,23 +825,23 @@ router.post("/discounts", requireRole("canAddFinancial"), asyncHandler(async (re
        description = VALUES(description),
        amount = VALUES(amount),
        attachment_url = VALUES(attachment_url)`,
-    [
-      d.id,
-      orgId,
-      d.propertyId,
-      d.type,
-      d.description,
-      Number(d.amount),
-      d.monthPeriod,
-      d.attachmentUrl ?? null,
-      d.recordedBy,
-    ],
-  );
-  // Mirror en property_charges con charged_to='owner' — modelo unificado.
-  const chargeId =
-    d.id && String(d.id).length <= 36 ? d.id : `disc-${d.id}-${Date.now()}`;
-  await pool.query(
-    `INSERT INTO property_charges
+      [
+        d.id,
+        orgId,
+        d.propertyId,
+        d.type,
+        d.description,
+        Number(d.amount),
+        d.monthPeriod,
+        d.attachmentUrl ?? null,
+        d.recordedBy,
+      ],
+    );
+    // Mirror en property_charges con charged_to='owner' — modelo unificado.
+    const chargeId =
+      d.id && String(d.id).length <= 36 ? d.id : `disc-${d.id}-${Date.now()}`;
+    await pool.query(
+      `INSERT INTO property_charges
        (id, organization_id, property_id, period, type, description,
         amount, charged_to, applies_to_invoice, attachment_url, recorded_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'owner', 0, ?, ?)
@@ -742,54 +850,75 @@ router.post("/discounts", requireRole("canAddFinancial"), asyncHandler(async (re
        description = VALUES(description),
        amount = VALUES(amount),
        attachment_url = VALUES(attachment_url)`,
-    [
-      chargeId,
-      orgId,
-      d.propertyId,
-      d.monthPeriod,
-      d.type,
-      d.description,
-      Number(d.amount),
-      d.attachmentUrl ?? null,
-      d.recordedBy,
-    ],
-  );
-  res.json({ ok: true, id: d.id });
-}));
+      [
+        chargeId,
+        orgId,
+        d.propertyId,
+        d.monthPeriod,
+        d.type,
+        d.description,
+        Number(d.amount),
+        d.attachmentUrl ?? null,
+        d.recordedBy,
+      ],
+    );
+    res.json({ ok: true, id: d.id });
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/discounts", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const [rows] = propertyId
-    ? await pool.query(
-        `SELECT * FROM property_discounts WHERE property_id = ? AND organization_id = ? ORDER BY recorded_at DESC`,
-        [propertyId, orgId],
-      )
-    : await pool.query(
-        `SELECT * FROM property_discounts WHERE organization_id = ? ORDER BY recorded_at DESC`,
-        [orgId],
-      );
-  res.json(rows);
-}));
+router.get(
+  "/discounts",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = propertyId
+      ? await pool.query(
+          `SELECT * FROM property_discounts WHERE property_id = ? AND organization_id = ? ORDER BY recorded_at DESC`,
+          [propertyId, orgId],
+        )
+      : await pool.query(
+          `SELECT * FROM property_discounts WHERE organization_id = ? ORDER BY recorded_at DESC`,
+          [orgId],
+        );
+    res.json(rows);
+  }),
+);
 
 // ─── Aumentos (al inquilino) ────────────────────────────────────────────
 
 // BUG-029: migrado a asyncHandler.
-router.post("/increases", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
-  const i = req.body as {
-    id: string;
-    propertyId: string;
-    contractId: string;
-    type: "admin_change" | "ipc_annual";
-    description: string;
-    amount: number;
-    effectiveFrom: string;
-    recordedBy: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  await pool.query(
-    `INSERT INTO rent_increases
+router.post(
+  "/increases",
+  requireRole("canAddFinancial"),
+  asyncHandler(async (req, res) => {
+    const i = req.body as {
+      id: string;
+      propertyId: string;
+      contractId: string;
+      type: "admin_change" | "ipc_annual";
+      description: string;
+      amount: number;
+      effectiveFrom: string;
+      recordedBy: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    await pool.query(
+      `INSERT INTO rent_increases
        (id, organization_id, property_id, contract_id, type, description, amount, effective_from, recorded_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
@@ -797,101 +926,122 @@ router.post("/increases", requireRole("canAddFinancial"), asyncHandler(async (re
        description = VALUES(description),
        amount = VALUES(amount),
        effective_from = VALUES(effective_from)`,
-    [
-      i.id,
-      orgId,
-      i.propertyId,
-      i.contractId,
-      i.type,
-      i.description,
-      Number(i.amount),
-      i.effectiveFrom,
-      i.recordedBy,
-    ],
-  );
-  res.json({ ok: true, id: i.id });
-}));
+      [
+        i.id,
+        orgId,
+        i.propertyId,
+        i.contractId,
+        i.type,
+        i.description,
+        Number(i.amount),
+        i.effectiveFrom,
+        i.recordedBy,
+      ],
+    );
+    res.json({ ok: true, id: i.id });
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/increases", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const [rows] = propertyId
-    ? await pool.query(
-        `SELECT * FROM rent_increases WHERE property_id = ? AND organization_id = ? ORDER BY effective_from ASC`,
-        [propertyId, orgId],
-      )
-    : await pool.query(
-        `SELECT * FROM rent_increases WHERE organization_id = ? ORDER BY effective_from ASC`,
-        [orgId],
-      );
-  res.json(rows);
-}));
+router.get(
+  "/increases",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = propertyId
+      ? await pool.query(
+          `SELECT * FROM rent_increases WHERE property_id = ? AND organization_id = ? ORDER BY effective_from ASC`,
+          [propertyId, orgId],
+        )
+      : await pool.query(
+          `SELECT * FROM rent_increases WHERE organization_id = ? ORDER BY effective_from ASC`,
+          [orgId],
+        );
+    res.json(rows);
+  }),
+);
 
 // ─── Estado de cuenta ─────────────────────────────────────────────────
 
 // BUG-029: migrado a asyncHandler.
-router.get("/account-statement", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string;
-  const period = req.query.period as string; // 'YYYY-MM'
-  const orgId = await ensureDefaultOrg();
-  const [paidRows] = await pool.query(
-    `SELECT COALESCE(SUM(total), 0) AS gross
+router.get(
+  "/account-statement",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string;
+    const period = req.query.period as string; // 'YYYY-MM'
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [paidRows] = await pool.query(
+      `SELECT COALESCE(SUM(total), 0) AS gross
      FROM amortization_rows
      WHERE property_id = ? AND status = 'paid'
        AND period_start LIKE ?`,
-    [propertyId, `${period}%`],
-  );
-  const grossIncome = Number((paidRows as any[])[0]?.gross ?? 0);
+      [propertyId, `${period}%`],
+    );
+    const grossIncome = Number((paidRows as any[])[0]?.gross ?? 0);
 
-  // Fuente unificada: traer cargos chargedTo='owner'/'both' del período
-  // desde property_charges. Compat: si property_charges no tiene la fila
-  // (datos muy viejos), caemos a property_discounts.
-  const [chargeRows] = await pool.query(
-    `SELECT * FROM property_charges
+    // Fuente unificada: traer cargos chargedTo='owner'/'both' del período
+    // desde property_charges. Compat: si property_charges no tiene la fila
+    // (datos muy viejos), caemos a property_discounts.
+    const [chargeRows] = await pool.query(
+      `SELECT * FROM property_charges
      WHERE property_id = ? AND period = ?
        AND charged_to IN ('owner','both')`,
-    [propertyId, period],
-  );
-  let discountsOrCharges: any[] = (chargeRows as any[]).map((r) => ({
-    id: r.id,
-    propertyId: r.property_id,
-    type: r.type,
-    description: r.description,
-    amount: Number(r.amount),
-    monthPeriod: r.period,
-    attachmentUrl: r.attachment_url ?? undefined,
-    recordedAt: r.recorded_at,
-    recordedBy: r.recorded_by,
-  }));
-  if (discountsOrCharges.length === 0) {
-    // Fallback legacy
-    const [legacyRows] = await pool.query(
-      `SELECT * FROM property_discounts
-       WHERE property_id = ? AND month_period = ?`,
       [propertyId, period],
     );
-    discountsOrCharges = (legacyRows as any[]).map((r) => ({
+    let discountsOrCharges: any[] = (chargeRows as any[]).map((r) => ({
       id: r.id,
       propertyId: r.property_id,
       type: r.type,
       description: r.description,
       amount: Number(r.amount),
-      monthPeriod: r.month_period,
+      monthPeriod: r.period,
       attachmentUrl: r.attachment_url ?? undefined,
       recordedAt: r.recorded_at,
       recordedBy: r.recorded_by,
     }));
-  }
+    if (discountsOrCharges.length === 0) {
+      // Fallback legacy
+      const [legacyRows] = await pool.query(
+        `SELECT * FROM property_discounts
+       WHERE property_id = ? AND month_period = ?`,
+        [propertyId, period],
+      );
+      discountsOrCharges = (legacyRows as any[]).map((r) => ({
+        id: r.id,
+        propertyId: r.property_id,
+        type: r.type,
+        description: r.description,
+        amount: Number(r.amount),
+        monthPeriod: r.month_period,
+        attachmentUrl: r.attachment_url ?? undefined,
+        recordedAt: r.recorded_at,
+        recordedBy: r.recorded_by,
+      }));
+    }
 
-  const statement = calculateAccountStatement(
-    propertyId,
-    period,
-    grossIncome,
-    discountsOrCharges,
-  );
-  res.json(statement);
-}));
+    const statement = calculateAccountStatement(
+      propertyId,
+      period,
+      grossIncome,
+      discountsOrCharges,
+    );
+    res.json(statement);
+  }),
+);
 
 // ─── Cuenta de cobro ──────────────────────────────────────────────────
 
@@ -982,95 +1132,23 @@ function rowToInvoice(r: any): RentInvoice {
  // Enviar → /invoices/send que marca sent_at y genera invoice_number).
  */
 // BUG-029: migrado a asyncHandler.
-router.post("/invoices/generate", requireRole("canSendInvoice"), asyncHandler(async (req, res) => {
-  const { propertyId, contractId, period } = req.body as {
-    propertyId: string;
-    contractId: string;
-    period: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  const [rows] = await pool.query(
-    `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
-    [contractId, `${period}%`],
-  );
-  const list = rows as any[];
-  if (list.length === 0)
-    return res.status(404).json({ error: "no row for period" });
-  const row = rowToAmortization(list[0]);
-
-  const [bankRows] = await pool.query(
-    `SELECT id FROM bank_accounts WHERE property_id = ? AND is_primary = 1 LIMIT 1`,
-    [propertyId],
-  );
-  const primaryBankId = (bankRows as any[])[0]?.id ?? null;
-
-  const invoice = generateInvoiceFromRow(row, { paymentLink: primaryBankId });
-  await pool.query(
-    `INSERT INTO rent_invoices
-       (id, organization_id, property_id, contract_id, period,
-        due_date, subtotal, total_early, total_mid, total_late, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       due_date = VALUES(due_date),
-       subtotal = VALUES(subtotal),
-       total_early = VALUES(total_early),
-       total_mid = VALUES(total_mid),
-       total_late = VALUES(total_late)`,
-    [
-      invoice.id,
-      orgId,
-      propertyId,
-      contractId,
-      period,
-      invoice.dueDate,
-      invoice.subtotal,
-      invoice.totalEarly,
-      invoice.totalMid,
-      invoice.totalLate,
-      invoice.status,
-    ],
-  );
-  res.json(invoice);
-}));
-
-/**
- * POST /api/billing/invoices/send
- *
- * Marca la cuenta de cobro como ENVIADA: genera `invoice_number` (CC-YYYYMM-NNN)
- * y setea `sent_at`. Devuelve la invoice actualizada para que el frontend la
- // pinte en el PDF y guarde el consecutivo en el histórico.
- *
- * Body: { propertyId, contractId, period }
- */
-// BUG-029: migrado a asyncHandler. Errores no capturados van al errorHandler.
-router.post("/invoices/send", requireRole("canSendInvoice"), asyncHandler(async (req, res) => {
-  const { propertyId, contractId, period } = req.body as {
-    propertyId: string;
-    contractId: string;
-    period: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  // 0. Sumar cargos al inquilino para este período (chargedTo IN ('tenant','both'),
-  //    appliesToInvoice=true). Si hay cargos, los añadimos al subtotal.
-  const [chargeRows] = await pool.query(
-    `SELECT COALESCE(SUM(amount), 0) AS charges_total
-     FROM property_charges
-     WHERE organization_id = ?
-       AND property_id = ?
-       AND period = ?
-       AND applies_to_invoice = 1
-       AND charged_to IN ('tenant','both')`,
-    [orgId, propertyId, period],
-  );
-  const chargesTotal = Number((chargeRows as any[])[0]?.charges_total ?? 0);
-
-  // 1. Asegurar que existe la fila de rent_invoices
-  const [existing] = await pool.query(
-    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
-    [contractId, period],
-  );
-  if ((existing as any[]).length === 0) {
-    // No existe → la creamos primero con /generate
+router.post(
+  "/invoices/generate",
+  requireRole("canSendInvoice"),
+  asyncHandler(async (req, res) => {
+    const { propertyId, contractId, period } = req.body as {
+      propertyId: string;
+      contractId: string;
+      period: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const [rows] = await pool.query(
       `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
       [contractId, `${period}%`],
@@ -1086,19 +1164,18 @@ router.post("/invoices/send", requireRole("canSendInvoice"), asyncHandler(async 
     );
     const primaryBankId = (bankRows as any[])[0]?.id ?? null;
 
-    const invoice = generateInvoiceFromRow(row, {
-      paymentLink: primaryBankId,
-    });
-    // Sumar cargos al inquilino al subtotal (si los hay)
-    const subtotalWithCharges = invoice.subtotal + chargesTotal;
-    const totalEarlyWith = invoice.totalEarly + chargesTotal;
-    const totalMidWith = invoice.totalMid + chargesTotal;
-    const totalLateWith = invoice.totalLate + chargesTotal;
+    const invoice = generateInvoiceFromRow(row, { paymentLink: primaryBankId });
     await pool.query(
       `INSERT INTO rent_invoices
-         (id, organization_id, property_id, contract_id, period,
-          due_date, subtotal, total_early, total_mid, total_late, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, organization_id, property_id, contract_id, period,
+        due_date, subtotal, total_early, total_mid, total_late, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       due_date = VALUES(due_date),
+       subtotal = VALUES(subtotal),
+       total_early = VALUES(total_early),
+       total_mid = VALUES(total_mid),
+       total_late = VALUES(total_late)`,
       [
         invoice.id,
         orgId,
@@ -1106,121 +1183,236 @@ router.post("/invoices/send", requireRole("canSendInvoice"), asyncHandler(async 
         contractId,
         period,
         invoice.dueDate,
-        subtotalWithCharges,
-        totalEarlyWith,
-        totalMidWith,
-        totalLateWith,
+        invoice.subtotal,
+        invoice.totalEarly,
+        invoice.totalMid,
+        invoice.totalLate,
         invoice.status,
       ],
     );
-  } else if (chargesTotal > 0) {
-    // Ya existía: actualizar subtotales para incluir cargos nuevos.
-    // Solo si todavía no fue pagado (no bajamos un paid a pending para
-    // no perder trazabilidad).
-    await pool.query(
-      `UPDATE rent_invoices
+    res.json(invoice);
+  }),
+);
+
+/**
+ * POST /api/billing/invoices/send
+ *
+ * Marca la cuenta de cobro como ENVIADA: genera `invoice_number` (CC-YYYYMM-NNN)
+ * y setea `sent_at`. Devuelve la invoice actualizada para que el frontend la
+ // pinte en el PDF y guarde el consecutivo en el histórico.
+ *
+ * Body: { propertyId, contractId, period }
+ */
+// BUG-029: migrado a asyncHandler. Errores no capturados van al errorHandler.
+router.post(
+  "/invoices/send",
+  requireRole("canSendInvoice"),
+  asyncHandler(async (req, res) => {
+    const { propertyId, contractId, period } = req.body as {
+      propertyId: string;
+      contractId: string;
+      period: string;
+    };
+    // FIX 2026-09-25: validar campos requeridos ANTES de tocar la DB.
+    // Antes: si faltaba `period`, los queries siguientes tiraban 500 con
+    // `ER_BAD_FIELD_ERROR: Unknown column 'period' in 'where clause'`.
+    // Mismo patrón que wizard_property AC-6 / wizard_tenant AC-11.
+    if (!propertyId || !contractId || !period) {
+      return res.status(400).json({
+        error: "Faltan campos requeridos: propertyId, contractId, period",
+        code: "MISSING_REQUIRED_FIELDS",
+      });
+    }
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    // 0. Sumar cargos al inquilino para este período (chargedTo IN ('tenant','both'),
+    //    appliesToInvoice=true). Si hay cargos, los añadimos al subtotal.
+    const [chargeRows] = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS charges_total
+     FROM property_charges
+     WHERE organization_id = ?
+       AND property_id = ?
+       AND period = ?
+       AND applies_to_invoice = 1
+       AND charged_to IN ('tenant','both')`,
+      [orgId, propertyId, period],
+    );
+    const chargesTotal = Number((chargeRows as any[])[0]?.charges_total ?? 0);
+
+    // 1. Asegurar que existe la fila de rent_invoices
+    const [existing] = await pool.query(
+      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+      [contractId, period],
+    );
+    if ((existing as any[]).length === 0) {
+      // No existe → la creamos primero con /generate
+      const [rows] = await pool.query(
+        `SELECT * FROM amortization_rows WHERE contract_id = ? AND period_start LIKE ?`,
+        [contractId, `${period}%`],
+      );
+      const list = rows as any[];
+      if (list.length === 0)
+        return res.status(404).json({ error: "no row for period" });
+      const row = rowToAmortization(list[0]);
+
+      const [bankRows] = await pool.query(
+        `SELECT id FROM bank_accounts WHERE property_id = ? AND is_primary = 1 LIMIT 1`,
+        [propertyId],
+      );
+      const primaryBankId = (bankRows as any[])[0]?.id ?? null;
+
+      const invoice = generateInvoiceFromRow(row, {
+        paymentLink: primaryBankId,
+      });
+      // Sumar cargos al inquilino al subtotal (si los hay)
+      const subtotalWithCharges = invoice.subtotal + chargesTotal;
+      const totalEarlyWith = invoice.totalEarly + chargesTotal;
+      const totalMidWith = invoice.totalMid + chargesTotal;
+      const totalLateWith = invoice.totalLate + chargesTotal;
+      await pool.query(
+        `INSERT INTO rent_invoices
+         (id, organization_id, property_id, contract_id, period,
+          due_date, subtotal, total_early, total_mid, total_late, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          invoice.id,
+          orgId,
+          propertyId,
+          contractId,
+          period,
+          invoice.dueDate,
+          subtotalWithCharges,
+          totalEarlyWith,
+          totalMidWith,
+          totalLateWith,
+          invoice.status,
+        ],
+      );
+    } else if (chargesTotal > 0) {
+      // Ya existía: actualizar subtotales para incluir cargos nuevos.
+      // Solo si todavía no fue pagado (no bajamos un paid a pending para
+      // no perder trazabilidad).
+      await pool.query(
+        `UPDATE rent_invoices
        SET subtotal = subtotal + ?,
            total_early = total_early + ?,
            total_mid = total_mid + ?,
            total_late = total_late + ?
        WHERE contract_id = ? AND period = ? AND status <> 'paid'`,
-      [
-        chargesTotal,
-        chargesTotal,
-        chargesTotal,
-        chargesTotal,
-        contractId,
-        period,
-      ],
-    );
-  }
+        [
+          chargesTotal,
+          chargesTotal,
+          chargesTotal,
+          chargesTotal,
+          contractId,
+          period,
+        ],
+      );
+    }
 
-  // 2. Generar consecutivo si aún no tiene uno (re-envío es idempotente)
-  const [rowsAfter] = await pool.query(
-    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
-    [contractId, period],
-  );
-  const r = (rowsAfter as any[])[0];
-  let invoiceNumber = r.invoice_number as string | null;
-  if (!invoiceNumber) {
-    invoiceNumber = await generateInvoiceNumber(orgId, propertyId, period);
-    // BUG-007: el UNIQUE constraint en (org, property, period, invoice_number)
-    // puede tirar ER_DUP_ENTRY si dos POSTs simultáneos generaron el mismo
-    // número (el loop de generateInvoiceNumber no es perfecto bajo race
-    // extremo). Si pasa, retry UNA vez con un número nuevo.
-    try {
-      await pool.query(
-        `UPDATE rent_invoices
+    // 2. Generar consecutivo si aún no tiene uno (re-envío es idempotente)
+    const [rowsAfter] = await pool.query(
+      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
+      [contractId, period],
+    );
+    const r = (rowsAfter as any[])[0];
+    let invoiceNumber = r.invoice_number as string | null;
+    if (!invoiceNumber) {
+      invoiceNumber = await generateInvoiceNumber(orgId, propertyId, period);
+      // BUG-007: el UNIQUE constraint en (org, property, period, invoice_number)
+      // puede tirar ER_DUP_ENTRY si dos POSTs simultáneos generaron el mismo
+      // número (el loop de generateInvoiceNumber no es perfecto bajo race
+      // extremo). Si pasa, retry UNA vez con un número nuevo.
+      try {
+        await pool.query(
+          `UPDATE rent_invoices
          SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
            WHEN status = 'paid' THEN 'paid'  -- si ya estaba pagado (caso edge), no bajamos a pending
            ELSE 'pending'
          END
          WHERE contract_id = ? AND period = ?`,
-        [invoiceNumber, contractId, period],
-      );
-    } catch (err: any) {
-      if (
-        err?.code === "ER_DUP_ENTRY" &&
-        err?.message?.includes("uniq_invoice_org_prop_period_number")
-      ) {
-        // Re-generar y retry una vez
-        invoiceNumber = await generateInvoiceNumber(
-          orgId,
-          propertyId,
-          period,
+          [invoiceNumber, contractId, period],
         );
-        await pool.query(
-          `UPDATE rent_invoices
+      } catch (err: any) {
+        if (
+          err?.code === "ER_DUP_ENTRY" &&
+          err?.message?.includes("uniq_invoice_org_prop_period_number")
+        ) {
+          // Re-generar y retry una vez
+          invoiceNumber = await generateInvoiceNumber(
+            orgId,
+            propertyId,
+            period,
+          );
+          await pool.query(
+            `UPDATE rent_invoices
            SET invoice_number = ?, sent_at = COALESCE(sent_at, NOW()), status = CASE
              WHEN status = 'paid' THEN 'paid'
              ELSE 'pending'
            END
            WHERE contract_id = ? AND period = ?`,
-          [invoiceNumber, contractId, period],
-        );
-      } else {
-        throw err;
+            [invoiceNumber, contractId, period],
+          );
+        } else {
+          throw err;
+        }
       }
-    }
-  } else {
-    // Ya tenía invoice_number (re-envío): solo actualizar sent_at si es null
-    await pool.query(
-      `UPDATE rent_invoices
+    } else {
+      // Ya tenía invoice_number (re-envío): solo actualizar sent_at si es null
+      await pool.query(
+        `UPDATE rent_invoices
        SET sent_at = COALESCE(sent_at, NOW())
        WHERE contract_id = ? AND period = ? AND sent_at IS NULL`,
+        [contractId, period],
+      );
+    }
+
+    // 3. Devolver invoice actualizada
+    const [final] = await pool.query(
+      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
       [contractId, period],
     );
-  }
-
-  // 3. Devolver invoice actualizada
-  const [final] = await pool.query(
-    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ?`,
-    [contractId, period],
-  );
-  res.json(rowToInvoice((final as any[])[0]));
-}));
+    res.json(rowToInvoice((final as any[])[0]));
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/invoices", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const contractId = req.query.contractId as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const where: string[] = ["organization_id = ?"];
-  const args: any[] = [orgId];
-  if (propertyId) {
-    where.push("property_id = ?");
-    args.push(propertyId);
-  }
-  if (contractId) {
-    where.push("contract_id = ?");
-    args.push(contractId);
-  }
-  const [rows] = await pool.query(
-    `SELECT * FROM rent_invoices WHERE ${where.join(" AND ")} ORDER BY period DESC`,
-    args,
-  );
-  res.json((rows as any[]).map(rowToInvoice));
-}));
+router.get(
+  "/invoices",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    const contractId = req.query.contractId as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const where: string[] = ["organization_id = ?"];
+    const args: any[] = [orgId];
+    if (propertyId) {
+      where.push("property_id = ?");
+      args.push(propertyId);
+    }
+    if (contractId) {
+      where.push("contract_id = ?");
+      args.push(contractId);
+    }
+    const [rows] = await pool.query(
+      `SELECT * FROM rent_invoices WHERE ${where.join(" AND ")} ORDER BY period DESC`,
+      args,
+    );
+    res.json((rows as any[]).map(rowToInvoice));
+  }),
+);
 
 /**
  * GET /api/billing/invoices/lookup?contractId=&period=
@@ -1230,68 +1422,99 @@ router.get("/invoices", asyncHandler(async (req, res) => {
  * ¿tiene invoice_number?).
  */
 // BUG-029: migrado a asyncHandler.
-router.get("/invoices/lookup", asyncHandler(async (req, res) => {
-  const contractId = req.query.contractId as string | undefined;
-  const period = req.query.period as string | undefined;
-  if (!contractId || !period)
-    return res
-      .status(400)
-      .json({ error: "contractId y period son requeridos" });
-  const orgId = await ensureDefaultOrg();
-  const [rows] = await pool.query(
-    `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ? AND organization_id = ?`,
-    [contractId, period, orgId],
-  );
-  const list = rows as any[];
-  if (list.length === 0) return res.json(null);
-  res.json(rowToInvoice(list[0]));
-}));
+router.get(
+  "/invoices/lookup",
+  asyncHandler(async (req, res) => {
+    const contractId = req.query.contractId as string | undefined;
+    const period = req.query.period as string | undefined;
+    if (!contractId || !period)
+      return res
+        .status(400)
+        .json({ error: "contractId y period son requeridos" });
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = await pool.query(
+      `SELECT * FROM rent_invoices WHERE contract_id = ? AND period = ? AND organization_id = ?`,
+      [contractId, period, orgId],
+    );
+    const list = rows as any[];
+    if (list.length === 0) return res.json(null);
+    res.json(rowToInvoice(list[0]));
+  }),
+);
 
 // ─── Histórico (append-only) ───────────────────────────────────────────
 
 // BUG-029: migrado a asyncHandler.
-router.post("/actions", requireRole("canAddFinancial"), asyncHandler(async (req, res) => {
-  const a = req.body as {
-    id: string;
-    propertyId: string;
-    type: string;
-    description: string;
-    payload?: any;
-    actorName: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  await pool.query(
-    `INSERT INTO property_actions
+router.post(
+  "/actions",
+  requireRole("canAddFinancial"),
+  asyncHandler(async (req, res) => {
+    const a = req.body as {
+      id: string;
+      propertyId: string;
+      type: string;
+      description: string;
+      payload?: any;
+      actorName: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    await pool.query(
+      `INSERT INTO property_actions
        (id, organization_id, property_id, type, description, payload, actor_name)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
-      a.id,
-      orgId,
-      a.propertyId,
-      a.type,
-      a.description,
-      a.payload ? JSON.stringify(a.payload) : null,
-      a.actorName,
-    ],
-  );
-  res.json({ ok: true, id: a.id });
-}));
+      [
+        a.id,
+        orgId,
+        a.propertyId,
+        a.type,
+        a.description,
+        a.payload ? JSON.stringify(a.payload) : null,
+        a.actorName,
+      ],
+    );
+    res.json({ ok: true, id: a.id });
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/actions", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const [rows] = propertyId
-    ? await pool.query(
-        `SELECT * FROM property_actions WHERE property_id = ? AND organization_id = ? ORDER BY occurred_at DESC`,
-        [propertyId, orgId],
-      )
-    : await pool.query(
-        `SELECT * FROM property_actions WHERE organization_id = ? ORDER BY occurred_at DESC LIMIT 200`,
-        [orgId],
-      );
-  res.json(rows);
-}));
+router.get(
+  "/actions",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const [rows] = propertyId
+      ? await pool.query(
+          `SELECT * FROM property_actions WHERE property_id = ? AND organization_id = ? ORDER BY occurred_at DESC`,
+          [propertyId, orgId],
+        )
+      : await pool.query(
+          `SELECT * FROM property_actions WHERE organization_id = ? ORDER BY occurred_at DESC LIMIT 200`,
+          [orgId],
+        );
+    res.json(rows);
+  }),
+);
 
 // ─── Mora (utilidad de cálculo, útil para preview en UI) ───────────────
 
@@ -1332,15 +1555,25 @@ function rowToOwnerPayout(r: any): OwnerPayout {
 }
 
 // BUG-029: migrado a asyncHandler.
-router.post("/owner-payouts", requireRole("canRegisterOwnerPayout"), asyncHandler(async (req, res) => {
-  const p = req.body as Omit<OwnerPayout, "id" | "recordedAt"> & {
-    id?: string;
-  };
-  const orgId = await ensureDefaultOrg();
-  const id = p.id ?? crypto.randomUUID();
-  const recordedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
-  await pool.query(
-    `INSERT INTO owner_payouts
+router.post(
+  "/owner-payouts",
+  requireRole("canRegisterOwnerPayout"),
+  asyncHandler(async (req, res) => {
+    const p = req.body as Omit<OwnerPayout, "id" | "recordedAt"> & {
+      id?: string;
+    };
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const id = p.id ?? crypto.randomUUID();
+    const recordedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+    await pool.query(
+      `INSERT INTO owner_payouts
        (id, organization_id, property_id, contract_id, period,
         amount, paid_at, bank_account_id, reference, notes, recorded_by, recorded_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1353,60 +1586,82 @@ router.post("/owner-payouts", requireRole("canRegisterOwnerPayout"), asyncHandle
        reference = VALUES(reference),
        notes = VALUES(notes),
        recorded_by = VALUES(recorded_by)`,
-    [
-      id,
-      orgId,
-      p.propertyId,
-      p.contractId ?? null,
-      p.period,
-      Number(p.amount),
-      p.paidAt,
-      p.bankAccountId ?? null,
-      p.reference ?? null,
-      p.notes ?? null,
-      p.recordedBy,
-      recordedAt,
-    ],
-  );
-  // Devolver la fila creada
-  const [rows] = await pool.query(
-    `SELECT * FROM owner_payouts WHERE id = ?`,
-    [id],
-  );
-  res.json(rowToOwnerPayout((rows as any[])[0]));
-}));
+      [
+        id,
+        orgId,
+        p.propertyId,
+        p.contractId ?? null,
+        p.period,
+        Number(p.amount),
+        p.paidAt,
+        p.bankAccountId ?? null,
+        p.reference ?? null,
+        p.notes ?? null,
+        p.recordedBy,
+        recordedAt,
+      ],
+    );
+    // Devolver la fila creada
+    const [rows] = await pool.query(
+      `SELECT * FROM owner_payouts WHERE id = ?`,
+      [id],
+    );
+    res.json(rowToOwnerPayout((rows as any[])[0]));
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.get("/owner-payouts", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const period = req.query.period as string | undefined;
-  const orgId = await ensureDefaultOrg();
-  const where: string[] = ["organization_id = ?"];
-  const args: any[] = [orgId];
-  if (propertyId) {
-    where.push("property_id = ?");
-    args.push(propertyId);
-  }
-  if (period) {
-    where.push("period = ?");
-    args.push(period);
-  }
-  const [rows] = await pool.query(
-    `SELECT * FROM owner_payouts WHERE ${where.join(" AND ")} ORDER BY paid_at DESC`,
-    args,
-  );
-  res.json((rows as any[]).map(rowToOwnerPayout));
-}));
+router.get(
+  "/owner-payouts",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    const period = req.query.period as string | undefined;
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    const where: string[] = ["organization_id = ?"];
+    const args: any[] = [orgId];
+    if (propertyId) {
+      where.push("property_id = ?");
+      args.push(propertyId);
+    }
+    if (period) {
+      where.push("period = ?");
+      args.push(period);
+    }
+    const [rows] = await pool.query(
+      `SELECT * FROM owner_payouts WHERE ${where.join(" AND ")} ORDER BY paid_at DESC`,
+      args,
+    );
+    res.json((rows as any[]).map(rowToOwnerPayout));
+  }),
+);
 
 // BUG-029: migrado a asyncHandler.
-router.delete("/owner-payouts/:id", requireRole("canRegisterOwnerPayout"), asyncHandler(async (req, res) => {
-  const orgId = await ensureDefaultOrg();
-  await pool.query(
-    `DELETE FROM owner_payouts WHERE id = ? AND organization_id = ?`,
-    [req.params.id, orgId],
-  );
-  res.json({ ok: true });
-}));
+router.delete(
+  "/owner-payouts/:id",
+  requireRole("canRegisterOwnerPayout"),
+  asyncHandler(async (req, res) => {
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    await pool.query(
+      `DELETE FROM owner_payouts WHERE id = ? AND organization_id = ?`,
+      [req.params.id, orgId],
+    );
+    res.json({ ok: true });
+  }),
+);
 
 /**
  * GET /api/billing/owner-statement?propertyId=&period=
@@ -1416,164 +1671,174 @@ router.delete("/owner-payouts/:id", requireRole("canRegisterOwnerPayout"), async
  * reales. El PDF de estado de cuenta consume esta salida.
  */
 // BUG-029: migrado a asyncHandler.
-router.get("/owner-statement", asyncHandler(async (req, res) => {
-  const propertyId = req.query.propertyId as string | undefined;
-  const period = req.query.period as string;
-  if (!propertyId || !period) {
-    return res
-      .status(400)
-      .json({ error: "propertyId y period son requeridos" });
-  }
-  const orgId = await ensureDefaultOrg();
-  // 1) Ingresos del mes (amortization_rows pagados del period)
-  const [paidRows] = await pool.query(
-    `SELECT
+router.get(
+  "/owner-statement",
+  asyncHandler(async (req, res) => {
+    const propertyId = req.query.propertyId as string | undefined;
+    const period = req.query.period as string;
+    if (!propertyId || !period) {
+      return res
+        .status(400)
+        .json({ error: "propertyId y period son requeridos" });
+    }
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
+    // 1) Ingresos del mes (amortization_rows pagados del period)
+    const [paidRows] = await pool.query(
+      `SELECT
        COALESCE(SUM(base_rent), 0)        AS rent,
        COALESCE(SUM(base_admin), 0)       AS admin,
        COALESCE(SUM(late_fee_amount), 0)  AS late_fee,
        COALESCE(SUM(total), 0)            AS total
      FROM amortization_rows
      WHERE property_id = ? AND status = 'paid' AND period_start LIKE ?`,
-    [propertyId, `${period}%`],
-  );
-  const paid = (paidRows as any[])[0] ?? {};
-  const grossRent = Number(paid.rent ?? 0);
-  const grossAdmin = Number(paid.admin ?? 0);
-  const grossLateFee = Number(paid.late_fee ?? 0);
-  const totalGrossIncome = grossRent + grossAdmin + grossLateFee;
+      [propertyId, `${period}%`],
+    );
+    const paid = (paidRows as any[])[0] ?? {};
+    const grossRent = Number(paid.rent ?? 0);
+    const grossAdmin = Number(paid.admin ?? 0);
+    const grossLateFee = Number(paid.late_fee ?? 0);
+    const totalGrossIncome = grossRent + grossAdmin + grossLateFee;
 
-  // 2) Cargos del mes que aplican al propietario (property_charges
-  //    con charged_to IN ('owner','both')). Compat: si la tabla nueva está
-  //    vacía para esta propiedad/period, caemos a property_discounts.
-  const [chargeRowsOwner] = await pool.query(
-    `SELECT * FROM property_charges
+    // 2) Cargos del mes que aplican al propietario (property_charges
+    //    con charged_to IN ('owner','both')). Compat: si la tabla nueva está
+    //    vacía para esta propiedad/period, caemos a property_discounts.
+    const [chargeRowsOwner] = await pool.query(
+      `SELECT * FROM property_charges
      WHERE property_id = ? AND period = ?
        AND charged_to IN ('owner','both')
      ORDER BY recorded_at ASC`,
-    [propertyId, period],
-  );
-  let chargesForOwner = (chargeRowsOwner as any[]).map(rowToCharge);
-  if (chargesForOwner.length === 0) {
-    const [legacyRows] = await pool.query(
-      `SELECT * FROM property_discounts
-       WHERE property_id = ? AND month_period = ?
-       ORDER BY recorded_at ASC`,
       [propertyId, period],
     );
-    chargesForOwner = (legacyRows as any[]).map((r) => ({
-      id: r.id,
-      propertyId: r.property_id,
-      period: r.month_period,
-      type: r.type,
-      description: r.description,
-      amount: Number(r.amount),
-      chargedTo: "owner" as const,
-      appliesToInvoice: false,
-      attachmentUrl: r.attachment_url ?? undefined,
-      recordedAt: r.recorded_at,
-      recordedBy: r.recorded_by,
+    let chargesForOwner = (chargeRowsOwner as any[]).map(rowToCharge);
+    if (chargesForOwner.length === 0) {
+      const [legacyRows] = await pool.query(
+        `SELECT * FROM property_discounts
+       WHERE property_id = ? AND month_period = ?
+       ORDER BY recorded_at ASC`,
+        [propertyId, period],
+      );
+      chargesForOwner = (legacyRows as any[]).map((r) => ({
+        id: r.id,
+        propertyId: r.property_id,
+        period: r.month_period,
+        type: r.type,
+        description: r.description,
+        amount: Number(r.amount),
+        chargedTo: "owner" as const,
+        appliesToInvoice: false,
+        attachmentUrl: r.attachment_url ?? undefined,
+        recordedAt: r.recorded_at,
+        recordedBy: r.recorded_by,
+      }));
+    }
+    const totalDiscounts = chargesForOwner.reduce((s, c) => s + c.amount, 0);
+    // Mapear a la forma legacy `PropertyDiscount` para no romper la UI actual.
+    const discounts = chargesForOwner.map((c) => ({
+      id: c.id,
+      propertyId: c.propertyId,
+      type: c.type,
+      description: c.description,
+      amount: c.amount,
+      monthPeriod: c.period,
+      attachmentUrl: c.attachmentUrl,
+      recordedAt: c.recordedAt,
+      recordedBy: c.recordedBy,
     }));
-  }
-  const totalDiscounts = chargesForOwner.reduce((s, c) => s + c.amount, 0);
-  // Mapear a la forma legacy `PropertyDiscount` para no romper la UI actual.
-  const discounts = chargesForOwner.map((c) => ({
-    id: c.id,
-    propertyId: c.propertyId,
-    type: c.type,
-    description: c.description,
-    amount: c.amount,
-    monthPeriod: c.period,
-    attachmentUrl: c.attachmentUrl,
-    recordedAt: c.recordedAt,
-    recordedBy: c.recordedBy,
-  }));
 
-  // 2b) Cargos pasados al inquilino (solo auditoría — no afecta el neto)
-  const [chargeRowsTenant] = await pool.query(
-    `SELECT * FROM property_charges
+    // 2b) Cargos pasados al inquilino (solo auditoría — no afecta el neto)
+    const [chargeRowsTenant] = await pool.query(
+      `SELECT * FROM property_charges
      WHERE property_id = ? AND period = ?
        AND charged_to IN ('tenant','both')
      ORDER BY recorded_at ASC`,
-    [propertyId, period],
-  );
-  const chargesToTenant = (chargeRowsTenant as any[]).map(rowToCharge);
-  const totalChargesToTenant = chargesToTenant.reduce(
-    (s, c) => s + c.amount,
-    0,
-  );
+      [propertyId, period],
+    );
+    const chargesToTenant = (chargeRowsTenant as any[]).map(rowToCharge);
+    const totalChargesToTenant = chargesToTenant.reduce(
+      (s, c) => s + c.amount,
+      0,
+    );
 
-  // 3) Retenciones del motor de liquidación (calculateMonthlySettlement)
-  const policy = await loadPolicy(orgId, propertyId);
-  const [contracts] = await pool.query(
-    `SELECT * FROM contracts WHERE property_id = ? AND status = 'active' ORDER BY start_date DESC LIMIT 1`,
-    [propertyId],
-  );
-  const contract = (contracts as any[])[0];
-  const rentAmount = contract
-    ? Number(contract.rent_amount)
-    : (policy?.rentAmount ?? 0);
-  const adminFee = contract
-    ? Number(contract.admin_fee)
-    : (policy?.adminFee ?? 0);
-  const commissionPct = contract?.commission_pct ?? 8;
+    // 3) Retenciones del motor de liquidación (calculateMonthlySettlement)
+    const policy = await loadPolicy(orgId, propertyId);
+    const [contracts] = await pool.query(
+      `SELECT * FROM contracts WHERE property_id = ? AND status = 'active' ORDER BY start_date DESC LIMIT 1`,
+      [propertyId],
+    );
+    const contract = (contracts as any[])[0];
+    const rentAmount = contract
+      ? Number(contract.rent_amount)
+      : (policy?.rentAmount ?? 0);
+    const adminFee = contract
+      ? Number(contract.admin_fee)
+      : (policy?.adminFee ?? 0);
+    const commissionPct = contract?.commission_pct ?? 8;
 
-  const settlementInputs: SettlementInputs = {
-    canon: rentAmount,
-    administracionPH: adminFee,
-    otrosIngresos: 0,
-    gastosOperativos: totalDiscounts,
-    comisionPct: Number(commissionPct),
-    seguroPct: 0,
-    ownerTaxType: "natural",
-    tenantTaxType: "natural",
-    period,
-    closed: false,
-  };
-  const settlementResult = calculateMonthlySettlement(settlementInputs);
+    const settlementInputs: SettlementInputs = {
+      canon: rentAmount,
+      administracionPH: adminFee,
+      otrosIngresos: 0,
+      gastosOperativos: totalDiscounts,
+      comisionPct: Number(commissionPct),
+      seguroPct: 0,
+      ownerTaxType: "natural",
+      tenantTaxType: "natural",
+      period,
+      closed: false,
+    };
+    const settlementResult = calculateMonthlySettlement(settlementInputs);
 
-  // 4) Payouts reales del mes
-  const [payoutRows] = await pool.query(
-    `SELECT * FROM owner_payouts
+    // 4) Payouts reales del mes
+    const [payoutRows] = await pool.query(
+      `SELECT * FROM owner_payouts
      WHERE property_id = ? AND period = ? AND organization_id = ?
      ORDER BY paid_at ASC`,
-    [propertyId, period, orgId],
-  );
-  const payouts = (payoutRows as any[]).map(rowToOwnerPayout);
-  const totalPayouts = payouts.reduce((s, p) => s + p.amount, 0);
+      [propertyId, period, orgId],
+    );
+    const payouts = (payoutRows as any[]).map(rowToOwnerPayout);
+    const totalPayouts = payouts.reduce((s, p) => s + p.amount, 0);
 
-  // 5) Saldo final
-  const netCalculated = settlementResult.totales.saldoTransferir;
-  const finalBalance = netCalculated - totalPayouts;
+    // 5) Saldo final
+    const netCalculated = settlementResult.totales.saldoTransferir;
+    const finalBalance = netCalculated - totalPayouts;
 
-  const stmt: OwnerStatement = {
-    propertyId,
-    period,
-    grossRent,
-    grossAdmin,
-    grossLateFee,
-    totalGrossIncome,
-    totalDiscounts,
-    discounts,
-    charges: chargesForOwner,
-    settlement: {
-      commission: settlementResult.trace.comision,
-      ivaOnCommission: settlementResult.trace.ivaSobreComision,
-      retefuente: settlementResult.trace.retefuente,
-      gmf: settlementResult.trace.gmf,
-      totalRetentions:
-        settlementResult.totales.impuestos +
-        settlementResult.trace.comision +
-        settlementResult.trace.gmf,
-      commissionPct: Number(commissionPct),
-    },
-    netCalculated,
-    totalPayouts,
-    payouts,
-    totalChargesToTenant,
-    finalBalance,
-  };
-  res.json(stmt);
-}));
+    const stmt: OwnerStatement = {
+      propertyId,
+      period,
+      grossRent,
+      grossAdmin,
+      grossLateFee,
+      totalGrossIncome,
+      totalDiscounts,
+      discounts,
+      charges: chargesForOwner,
+      settlement: {
+        commission: settlementResult.trace.comision,
+        ivaOnCommission: settlementResult.trace.ivaSobreComision,
+        retefuente: settlementResult.trace.retefuente,
+        gmf: settlementResult.trace.gmf,
+        totalRetentions:
+          settlementResult.totales.impuestos +
+          settlementResult.trace.comision +
+          settlementResult.trace.gmf,
+        commissionPct: Number(commissionPct),
+      },
+      netCalculated,
+      totalPayouts,
+      payouts,
+      totalChargesToTenant,
+      finalBalance,
+    };
+    res.json(stmt);
+  }),
+);
 
 // ============================================================================
 // Bank Accounts (consolidado de banks.ts — BUG-028)
@@ -1583,8 +1848,14 @@ router.get(
   "/bank-accounts",
   asyncHandler(async (req, res) => {
     const propertyId = req.query.propertyId as string | undefined;
-    // BUG-006: ensureDefaultOrg adentro del asyncHandler.
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const [rows] = propertyId
       ? await pool.query(
           `SELECT * FROM bank_accounts WHERE organization_id = ? AND (property_id = ? OR property_id IS NULL) ORDER BY is_primary DESC, created_at ASC`,
@@ -1602,7 +1873,14 @@ router.post(
   "/bank-accounts",
   requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const b = req.body as {
       id: string;
       propertyId?: string | null;
@@ -1675,7 +1953,14 @@ router.delete(
 router.get(
   "/insurance-policies/:propertyId",
   asyncHandler(async (req, res) => {
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const [rows] = await pool.query(
       `SELECT * FROM policies WHERE organization_id = ? AND property_id = ? ORDER BY approved_at DESC`,
       [orgId, req.params.propertyId],
@@ -1688,7 +1973,14 @@ router.post(
   "/insurance-policies",
   requireRole("canAddFinancial"),
   asyncHandler(async (req, res) => {
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
     const p = req.body as {
       id?: string;
       propertyId: string;

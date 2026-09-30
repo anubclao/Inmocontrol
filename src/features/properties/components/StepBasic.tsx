@@ -1,6 +1,8 @@
 import { Button } from "../../../shared/ui";
 import {
-  formatAddress,
+  // FIX #10: importar también previewAddressFormat para mostrarlo como hint
+  // al lado del input, sin mutar lo que el usuario tipea.
+  previewAddressFormat,
   isValidCHIP,
   isValidEmail,
   isValidColombianPhone,
@@ -219,9 +221,17 @@ export function StepBasic({
             <input
               className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
               placeholder="Ej: calle 145 # 13-45"
+              // FIX #10: NO mutar el input. El usuario tipea "calle 93" y ve
+              // "calle 93", no "CL 93" (eso rompía la edición).
               value={address}
-              onChange={(e) => setAddress(formatAddress(e.target.value))}
+              onChange={(e) => setAddress(e.target.value)}
             />
+            {/* Preview formateado (solo display) */}
+            {address.trim() && address !== previewAddressFormat(address) && (
+              <p className="text-[10px] text-slate-500 mt-1">
+                Formato Secretaría del Hábitat: <span className="font-mono">{previewAddressFormat(address)}</span>
+              </p>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

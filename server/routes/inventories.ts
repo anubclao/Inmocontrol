@@ -4,7 +4,11 @@ import express from "express";
 import { google } from "googleapis";
 import crypto from "crypto";
 import { Readable } from "stream";
-import pool, { ensureDefaultOrg } from "../db.js";
+import pool from "../db.js";
+// FIX 2026-09-25 (saas_multitenant.md): usar getOrgIdForRequest en vez de
+// ensureDefaultOrg() para que el orgId venga del req.user, no del primero
+// de la tabla. ensureDefaultOrg() se mantiene para bootstrap/tests.
+import { getOrgIdForRequest } from "../lib/orgContext.js";
 import { isTokenExpiringSoon } from "../lib/googleAuth.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
@@ -113,35 +117,38 @@ async function getOrCreateSubfolder(
  * Lista los inventarios (inicial y final) de una propiedad.
  */
 // BUG-029: migrado a asyncHandler.
-router.get("/", asyncHandler(async (req, res) => {
-  const { propertyId } = req.query as Record<string, string>;
-  if (!propertyId) {
-    res.status(400).json({ error: "Falta propertyId" });
-    return;
-  }
-  // FIX: el JSON `photos` puede pesar >500KB por fila (base64). MySQL
-  // "Out of sort memory" cuando ORDER BY usa una columna de tamaño comparable.
-  // Solución: primero listar IDs (liviano), luego traer las filas completas
-  // sin ORDER BY (solo 1 fila por phase normalmente).
-  const [idRows] = await pool.query<any[]>(
-    `SELECT id, phase FROM inventories WHERE property_id = ? ORDER BY id DESC`,
-    [propertyId],
-  );
-  if (idRows.length === 0) {
-    res.json({ inventories: [] });
-    return;
-  }
-  const ids = idRows.map((r) => r.id);
-  const [rows] = await pool.query<any[]>(
-    `SELECT id, property_id, contract_id, phase, property_type, counters, areas, photos,
+router.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const { propertyId } = req.query as Record<string, string>;
+    if (!propertyId) {
+      res.status(400).json({ error: "Falta propertyId" });
+      return;
+    }
+    // FIX: el JSON `photos` puede pesar >500KB por fila (base64). MySQL
+    // "Out of sort memory" cuando ORDER BY usa una columna de tamaño comparable.
+    // Solución: primero listar IDs (liviano), luego traer las filas completas
+    // sin ORDER BY (solo 1 fila por phase normalmente).
+    const [idRows] = await pool.query<any[]>(
+      `SELECT id, phase FROM inventories WHERE property_id = ? ORDER BY id DESC`,
+      [propertyId],
+    );
+    if (idRows.length === 0) {
+      res.json({ inventories: [] });
+      return;
+    }
+    const ids = idRows.map((r) => r.id);
+    const [rows] = await pool.query<any[]>(
+      `SELECT id, property_id, contract_id, phase, property_type, counters, areas, photos,
             signatures, custom_areas, signed_at, created_at, updated_at
      FROM inventories
      WHERE id IN (${ids.map(() => "?").join(",")})`,
-    ids,
-  );
-  // mysql2 ya devuelve JSON como parsed object
-  res.json({ inventories: rows });
-}));
+      ids,
+    );
+    // mysql2 ya devuelve JSON como parsed object
+    res.json({ inventories: rows });
+  }),
+);
 
 /**
  * POST /api/inventories
@@ -177,7 +184,14 @@ router.post(
       res.status(400).json({ error: "phase debe ser 'inicial' o 'final'" });
       return;
     }
-    const orgId = await ensureDefaultOrg();
+    // FIX 2026-09-25 (saas_multitenant.md): orgId del request.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      return res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+    }
+    const orgId = _ctx.orgId;
 
     // `inventories.id` es CHAR(36) en MySQL. Si el cliente envía un id ≤36 chars lo usamos
     // (compat con la convención UUID). Si no, generamos uno nuevo — NUNCA concatenar con ':'.
@@ -230,110 +244,122 @@ router.post(
  * lectura rápida, pero Drive queda como fuente de verdad (cross-device).
  */
 // BUG-029: migrado a asyncHandler.
-router.post("/upload-photos", requireRole("canAddInventory"), asyncHandler(async (req, res) => {
-  const { propertyId, phase, photos } = req.body as {
-    propertyId: string;
-    phase: "inicial" | "final";
-    photos: Array<{ name: string; base64Data: string }>;
-  };
+router.post(
+  "/upload-photos",
+  requireRole("canAddInventory"),
+  asyncHandler(async (req, res) => {
+    const { propertyId, phase, photos } = req.body as {
+      propertyId: string;
+      phase: "inicial" | "final";
+      photos: Array<{ name: string; base64Data: string }>;
+    };
 
-  if (!propertyId || !phase || !Array.isArray(photos) || photos.length === 0) {
-    res.status(400).json({ error: "Faltan: propertyId, phase, photos[]" });
-    return;
-  }
-
-  let drive: any = null;
-  try {
-    drive = await getFreshDriveClient();
-  } catch {
-    // sin drive
-  }
-  if (!drive) {
-    res.status(401).json({ error: "No conectado a Google Drive" });
-    return;
-  }
-
-  const [propRows] = await pool.query<any[]>(
-    "SELECT address, drive_folder_id FROM properties WHERE id = ?",
-    [propertyId],
-  );
-  if (!propRows.length || !propRows[0].drive_folder_id) {
-    res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
-    return;
-  }
-  const propertyFolderId = propRows[0].drive_folder_id;
-
-  // Carpeta específica para fotos. "Inventario captacion" / "Inventario colocacion"
-  // (singular) — separa las fotos individuales del PDF consolidado que va en "Inventarios/".
-  const folderName =
-    phase === "inicial" ? "Inventario captacion" : "Inventario colocacion";
-  const photosFolderId = await getOrCreateSubfolder(
-    drive,
-    propertyFolderId,
-    folderName,
-  );
-
-  const uploaded: Array<{ name: string; webViewLink: string; fileId: string }> =
-    [];
-  const failed: Array<{ name: string; error: string }> = [];
-
-  for (const photo of photos) {
-    if (!photo?.name || !photo?.base64Data) {
-      failed.push({
-        name: photo?.name ?? "?",
-        error: "missing name or base64Data",
-      });
-      continue;
+    if (
+      !propertyId ||
+      !phase ||
+      !Array.isArray(photos) ||
+      photos.length === 0
+    ) {
+      res.status(400).json({ error: "Faltan: propertyId, phase, photos[]" });
+      return;
     }
+
+    let drive: any = null;
     try {
-      let mimeType = "image/jpeg";
-      const m = /^data:([^;]+);base64,/.exec(photo.base64Data);
-      if (m) mimeType = m[1];
-      const cleanBase64 = photo.base64Data.replace(/^data:[^;]+;base64,/, "");
-
-      const buffer = Buffer.from(cleanBase64, "base64");
-      // BUG-015: con withTimeout para que una foto colgada no bloquee el resto.
-      const result = await withTimeout(
-        drive.files.create({
-          requestBody: { name: photo.name, parents: [photosFolderId] },
-          media: { mimeType, body: Readable.from(buffer) },
-          fields: "id, webViewLink",
-        }),
-        DRIVE_TIMEOUT_MS,
-        `drive.files.create (photo ${photo.name})`,
-      );
-
-      await withTimeout(
-        drive.permissions.create({
-          fileId: result.data.id!,
-          requestBody: { role: "reader", type: "anyone" },
-        }),
-        DRIVE_TIMEOUT_MS,
-        `drive.permissions.create (photo ${photo.name})`,
-      );
-
-      uploaded.push({
-        name: photo.name,
-        webViewLink: result.data.webViewLink!,
-        fileId: result.data.id!,
-      });
-    } catch (err) {
-      console.warn(
-        `[upload-photos] falló ${photo.name}:`,
-        (err as Error).message,
-      );
-      failed.push({ name: photo.name, error: (err as Error).message });
+      drive = await getFreshDriveClient();
+    } catch {
+      // sin drive
     }
-  }
+    if (!drive) {
+      res.status(401).json({ error: "No conectado a Google Drive" });
+      return;
+    }
 
-  res.json({
-    success: failed.length === 0,
-    folderName,
-    folderId: photosFolderId,
-    uploaded,
-    failed,
-  });
-}));
+    const [propRows] = await pool.query<any[]>(
+      "SELECT address, drive_folder_id FROM properties WHERE id = ?",
+      [propertyId],
+    );
+    if (!propRows.length || !propRows[0].drive_folder_id) {
+      res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
+      return;
+    }
+    const propertyFolderId = propRows[0].drive_folder_id;
+
+    // Carpeta específica para fotos. "Inventario captacion" / "Inventario colocacion"
+    // (singular) — separa las fotos individuales del PDF consolidado que va en "Inventarios/".
+    const folderName =
+      phase === "inicial" ? "Inventario captacion" : "Inventario colocacion";
+    const photosFolderId = await getOrCreateSubfolder(
+      drive,
+      propertyFolderId,
+      folderName,
+    );
+
+    const uploaded: Array<{
+      name: string;
+      webViewLink: string;
+      fileId: string;
+    }> = [];
+    const failed: Array<{ name: string; error: string }> = [];
+
+    for (const photo of photos) {
+      if (!photo?.name || !photo?.base64Data) {
+        failed.push({
+          name: photo?.name ?? "?",
+          error: "missing name or base64Data",
+        });
+        continue;
+      }
+      try {
+        let mimeType = "image/jpeg";
+        const m = /^data:([^;]+);base64,/.exec(photo.base64Data);
+        if (m) mimeType = m[1];
+        const cleanBase64 = photo.base64Data.replace(/^data:[^;]+;base64,/, "");
+
+        const buffer = Buffer.from(cleanBase64, "base64");
+        // BUG-015: con withTimeout para que una foto colgada no bloquee el resto.
+        const result = await withTimeout(
+          drive.files.create({
+            requestBody: { name: photo.name, parents: [photosFolderId] },
+            media: { mimeType, body: Readable.from(buffer) },
+            fields: "id, webViewLink",
+          }),
+          DRIVE_TIMEOUT_MS,
+          `drive.files.create (photo ${photo.name})`,
+        );
+
+        await withTimeout(
+          drive.permissions.create({
+            fileId: result.data.id!,
+            requestBody: { role: "reader", type: "anyone" },
+          }),
+          DRIVE_TIMEOUT_MS,
+          `drive.permissions.create (photo ${photo.name})`,
+        );
+
+        uploaded.push({
+          name: photo.name,
+          webViewLink: result.data.webViewLink!,
+          fileId: result.data.id!,
+        });
+      } catch (err) {
+        console.warn(
+          `[upload-photos] falló ${photo.name}:`,
+          (err as Error).message,
+        );
+        failed.push({ name: photo.name, error: (err as Error).message });
+      }
+    }
+
+    res.json({
+      success: failed.length === 0,
+      folderName,
+      folderId: photosFolderId,
+      uploaded,
+      failed,
+    });
+  }),
+);
 
 /**
  * POST /api/inventories/upload-pdf
@@ -342,115 +368,119 @@ router.post("/upload-photos", requireRole("canAddInventory"), asyncHandler(async
  * Guarda la URL en la propiedad (drive_folder_path) para referencia futura.
  */
 // BUG-029: migrado a asyncHandler.
-router.post("/upload-pdf", requireRole("canAddInventory"), asyncHandler(async (req, res) => {
-  const { propertyId, phase, base64Data, inventoryDate } = req.body as {
-    propertyId: string;
-    phase: "inicial" | "final";
-    base64Data: string;
-    inventoryDate?: string;
-  };
+router.post(
+  "/upload-pdf",
+  requireRole("canAddInventory"),
+  asyncHandler(async (req, res) => {
+    const { propertyId, phase, base64Data, inventoryDate } = req.body as {
+      propertyId: string;
+      phase: "inicial" | "final";
+      base64Data: string;
+      inventoryDate?: string;
+    };
 
-  if (!propertyId || !phase || !base64Data) {
-    res.status(400).json({ error: "Faltan: propertyId, phase, base64Data" });
-    return;
-  }
-
-  let drive: any = null;
-  try {
-    drive = await getFreshDriveClient();
-  } catch {
-    // sin drive
-  }
-  if (!drive) {
-    res.status(401).json({ error: "No conectado a Google Drive" });
-    return;
-  }
-
-  // 1. Buscar la carpeta del inmueble
-  const [propRows] = await pool.query<any[]>(
-    "SELECT address, drive_folder_id, drive_folder_path FROM properties WHERE id = ?",
-    [propertyId],
-  );
-  if (!propRows.length || !propRows[0].drive_folder_id) {
-    res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
-    return;
-  }
-  const propertyFolderId = propRows[0].drive_folder_id;
-
-  // 2. Buscar/crear subcarpeta "Inventarios"
-  const inventariosFolderId = await getOrCreateSubfolder(
-    drive,
-    propertyFolderId,
-    "Inventarios",
-  );
-
-  // 3. Generar nombre de archivo
-  const phaseLabel = phase === "inicial" ? "Captacion" : "Colocacion";
-  const date = inventoryDate ?? new Date().toISOString().slice(0, 10);
-  const fileName = `Inventario_${phaseLabel}_${date}.pdf`;
-
-  // 4. Subir el PDF
-  const buffer = Buffer.from(
-    base64Data.replace(/^data:application\/pdf;base64,/, ""),
-    "base64",
-  );
-  // BUG-014: con withTimeout + try/catch para que un timeout no devuelva
-  // HTML 500. El catch devuelve 503 con mensaje accionable.
-  let uploaded;
-  try {
-    uploaded = await withTimeout(
-      drive.files.create({
-        requestBody: { name: fileName, parents: [inventariosFolderId] },
-        media: { mimeType: "application/pdf", body: Readable.from(buffer) },
-        fields: "id, webViewLink",
-      }),
-      DRIVE_TIMEOUT_MS,
-      `drive.files.create (${fileName})`,
-    );
-
-    // Hacer público el link
-    await withTimeout(
-      drive.permissions.create({
-        fileId: uploaded.data.id!,
-        requestBody: { role: "reader", type: "anyone" },
-      }),
-      DRIVE_TIMEOUT_MS,
-      `drive.permissions.create (${fileName})`,
-    );
-  } catch (err: any) {
-    console.error("[upload-pdf] drive failed:", err);
-    if (err?.message?.includes("Timeout")) {
-      return res.status(503).json({
-        error: "Drive no responde. Reintentá en unos segundos.",
-      });
+    if (!propertyId || !phase || !base64Data) {
+      res.status(400).json({ error: "Faltan: propertyId, phase, base64Data" });
+      return;
     }
-    return res
-      .status(500)
-      .json({ error: err?.message ?? "Error subiendo PDF" });
-  }
 
-  // 5. Guardar la URL en la propiedad según la fase.
-  //    Las columnas `inventory_captacion_pdf_url` / `inventory_colocacion_pdf_url`
-  //    se crean en la migración 009. Si el server se deploya antes de aplicarla,
-  //    este UPDATE va a fallar con ER_BAD_FIELD_ERROR — el flujo retorna 500
-  //    limpio (sin la rama defensiva de antes, que usaba `ADD COLUMN IF NOT EXISTS`,
-  //    sintaxis de PostgreSQL que rompe en MySQL 8).
-  const urlField =
-    phase === "inicial"
-      ? "inventory_captacion_pdf_url"
-      : "inventory_colocacion_pdf_url";
-  await pool.query(`UPDATE properties SET ${urlField} = ? WHERE id = ?`, [
-    uploaded.data.webViewLink,
-    propertyId,
-  ]);
+    let drive: any = null;
+    try {
+      drive = await getFreshDriveClient();
+    } catch {
+      // sin drive
+    }
+    if (!drive) {
+      res.status(401).json({ error: "No conectado a Google Drive" });
+      return;
+    }
 
-  res.json({
-    success: true,
-    fileId: uploaded.data.id,
-    fileName,
-    webViewLink: uploaded.data.webViewLink,
-    folderPath: `${propRows[0].drive_folder_path ?? ""}/Inventarios`,
-  });
-}));
+    // 1. Buscar la carpeta del inmueble
+    const [propRows] = await pool.query<any[]>(
+      "SELECT address, drive_folder_id, drive_folder_path FROM properties WHERE id = ?",
+      [propertyId],
+    );
+    if (!propRows.length || !propRows[0].drive_folder_id) {
+      res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
+      return;
+    }
+    const propertyFolderId = propRows[0].drive_folder_id;
+
+    // 2. Buscar/crear subcarpeta "Inventarios"
+    const inventariosFolderId = await getOrCreateSubfolder(
+      drive,
+      propertyFolderId,
+      "Inventarios",
+    );
+
+    // 3. Generar nombre de archivo
+    const phaseLabel = phase === "inicial" ? "Captacion" : "Colocacion";
+    const date = inventoryDate ?? new Date().toISOString().slice(0, 10);
+    const fileName = `Inventario_${phaseLabel}_${date}.pdf`;
+
+    // 4. Subir el PDF
+    const buffer = Buffer.from(
+      base64Data.replace(/^data:application\/pdf;base64,/, ""),
+      "base64",
+    );
+    // BUG-014: con withTimeout + try/catch para que un timeout no devuelva
+    // HTML 500. El catch devuelve 503 con mensaje accionable.
+    let uploaded;
+    try {
+      uploaded = await withTimeout(
+        drive.files.create({
+          requestBody: { name: fileName, parents: [inventariosFolderId] },
+          media: { mimeType: "application/pdf", body: Readable.from(buffer) },
+          fields: "id, webViewLink",
+        }),
+        DRIVE_TIMEOUT_MS,
+        `drive.files.create (${fileName})`,
+      );
+
+      // Hacer público el link
+      await withTimeout(
+        drive.permissions.create({
+          fileId: uploaded.data.id!,
+          requestBody: { role: "reader", type: "anyone" },
+        }),
+        DRIVE_TIMEOUT_MS,
+        `drive.permissions.create (${fileName})`,
+      );
+    } catch (err: any) {
+      console.error("[upload-pdf] drive failed:", err);
+      if (err?.message?.includes("Timeout")) {
+        return res.status(503).json({
+          error: "Drive no responde. Reintentá en unos segundos.",
+        });
+      }
+      return res
+        .status(500)
+        .json({ error: err?.message ?? "Error subiendo PDF" });
+    }
+
+    // 5. Guardar la URL en la propiedad según la fase.
+    //    Las columnas `inventory_captacion_pdf_url` / `inventory_colocacion_pdf_url`
+    //    se crean en la migración 009. Si el server se deploya antes de aplicarla,
+    //    este UPDATE va a fallar con ER_BAD_FIELD_ERROR — el flujo retorna 500
+    //    limpio (sin la rama defensiva de antes, que usaba `ADD COLUMN IF NOT EXISTS`,
+    //    sintaxis de PostgreSQL que rompe en MySQL 8).
+    const urlField =
+      phase === "inicial"
+        ? "inventory_captacion_pdf_url"
+        : "inventory_colocacion_pdf_url";
+    await pool.query(`UPDATE properties SET ${urlField} = ? WHERE id = ?`, [
+      uploaded.data.webViewLink,
+      propertyId,
+    ]);
+
+    res.json({
+      success: true,
+      fileId: uploaded.data.id,
+      fileName,
+      webViewLink: uploaded.data.webViewLink,
+      folderPath: `${propRows[0].drive_folder_path ?? ""}/Inventarios`,
+    });
+  }),
+);
 
 export default router;

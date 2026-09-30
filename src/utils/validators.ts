@@ -1,8 +1,19 @@
 /**
- * Address Validator (Secretaría del Hábitat)
- * Transforms common address words into official abbreviations.
+ * Address Formatter (Secretaría del Hábitat) — Bogotá standard.
+ * Transforma palabras comunes de dirección en abreviaturas oficiales.
+ *
+ * FIX #10: Esta función NO debe usarse en `onChange` de inputs porque
+ * muta el input que el usuario está tipeando ("calle 93" se vuelve "CL 93"
+ * inmediatamente, lo cual confunde y rompe la edición). Usar solo para
+ * PREVIEW/display (label al lado del input, PDF, exports, etc.).
+ *
+ * Renombrada a `previewAddressFormat` para hacer explícita la semántica.
+ * `formatAddress` queda como alias deprecated por compat temporal.
+ *
+ * Ej: "calle 93 11 27" → "CL 93 11 27"
+ *     "carrera 7 # 72-43" → "KR 7 # 72-43"
  */
-export const formatAddress = (address: string): string => {
+export const previewAddressFormat = (address: string): string => {
   const abbreviations: Record<string, string> = {
     'calle': 'CL',
     'cll': 'CL',
@@ -52,6 +63,13 @@ export const formatAddress = (address: string): string => {
 
   return formatted.toUpperCase();
 };
+
+/**
+ * @deprecated Usar `previewAddressFormat` (semántica más explícita).
+ * Se mantiene como alias por compat temporal. Migrar call sites en
+ * próxima iteración (FIX #10).
+ */
+export const formatAddress = previewAddressFormat;
 
 /**
  * CHIP Validator

@@ -31,7 +31,16 @@ function openDB(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    // FIX #17: si open() falla, resetear dbPromise para que el próximo
+    // intento reintente. Antes el rechazo quedaba cacheado para siempre
+    // y la app quedaba rota hasta reload.
+    req.onerror = () => {
+      dbPromise = null;
+      reject(req.error);
+    };
+    req.onblocked = () => {
+      console.warn('[inventoryDB] open() bloqueado por otra conexión');
+    };
   });
   return dbPromise;
 }

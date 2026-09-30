@@ -36,8 +36,13 @@ export type DocStorageState = "drive" | "local" | "pending";
 export function getDocStorageState(url: string): DocStorageState {
   if (!url) return "pending";
   if (url.startsWith("blob:")) return "local";
-  if (/^https:\/\/(drive|docs)\.google\.com\//.test(url)) return "drive";
-  if (/^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(url)) return "drive";
+  // FIX #18: testear solo el path (sin query params como ?usp=drivesdk).
+  // Antes la regex testeaba desde el inicio hasta el final del string,
+  // fallando si Drive agregaba query params.
+  const pathOnly = url.split("?")[0];
+  if (/^https:\/\/(drive|docs)\.google\.com\//.test(pathOnly)) return "drive";
+  if (/^https:\/\/lh[0-9]+\.googleusercontent\.com\//.test(pathOnly))
+    return "drive";
   return "local";
 }
 
