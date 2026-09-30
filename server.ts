@@ -66,6 +66,22 @@ async function startServer() {
   app.use(express.json({ limit: "15mb" })); // PDFs en base64 pueden ser grandes
   app.use(cookieParser()); // necesario para sesiones httpOnly de /api/auth/*
 
+  // ─── DEBUG (temporal — ver fix-bug-body-parser-empty) ─────────────
+  // Loguea CADA request entrante y si el body parser tiró un error
+  // silencioso. Es para diagnosticar por qué `requireAuth` no corre en
+  // requests autenticadas (devuelve 401 con body vacío).
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - start;
+      const cookiePresent = req.headers.cookie ? "yes" : "no";
+      console.log(
+        `[req] ${req.method} ${req.path} → ${res.statusCode} (${ms}ms, cookie=${cookiePresent}, len=${res.getHeader("content-length") ?? "?"})`,
+      );
+    });
+    next();
+  });
+
   // ─── API routes ─────────────────────────────────────────────────────
   app.get("/api/health", async (req, res) => {
     const dbStatus = await checkDb();
