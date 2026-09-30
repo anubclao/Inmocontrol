@@ -283,16 +283,31 @@ Este fix es server-side, no tiene toasts. Pero el cliente puede mejorar los mens
 ### Archivos a modificar
 
 - `server.ts` (1 import + 1 línea `app.use(errorHandler)`)
-- `server/routes/billing.ts` (2 endpoints migrados)
-- `server/routes/inventories.ts` (1 endpoint migrado)
+- `server/routes/billing.ts` (2 endpoints migrados en el spec original)
+- `server/routes/inventories.ts` (1 endpoint migrado en el spec original)
 - `server/routes/properties.ts` (1 endpoint migrado, parcial)
 - `server/routes/googleAuth.ts` (revisar cuántos endpoints requieren migración)
 
+> **Update 2026-08-04** — Alcance ampliado por el user ("b") para migrar TODOS
+> los endpoints async a `asyncHandler`. Resultado real:
+>
+> | Archivo | Endpoints migrados |
+> |---|---|
+> | `server/routes/billing.ts` | ~30 (todas las que no tenían ya try local semántico) |
+> | `server/routes/properties.ts` | 9 |
+> | `server/routes/tenants.ts` | 9 |
+> | `server/routes/entities.ts` | 9 (preserva FK violations 4xx) |
+> | `server/routes/googleAuth.ts` | 9 (8 privadas + OAuth callback; `/auth/google` sync queda sin wrapper porque no es async) |
+> | `server/routes/financialRecords.ts` | 4 |
+> | `server/routes/notifications.ts` | 7 |
+> | `server/routes/saasBilling.ts` | 17 |
+> | `server/routes/inventories.ts` | 3 |
+> | **TOTAL** | **~97 endpoints** |
+
 ### Archivos a NO tocar
 
-- `server/routes/tenants.ts` (ya tiene try local)
-- `server/routes/entities.ts` (ya tiene try local)
-- `server/routes/saasBilling.ts` (ya tiene try local)
+- `server/routes/auth.ts` (rutas de auth: login/register/refresh, sin async issues)
+- `server/routes/index.ts` (health-check, sync)
 - `server/db.ts` (helpers, no se toca)
 - Todos los archivos de `src/` (cliente no afectado)
 
@@ -305,6 +320,34 @@ Este fix es server-side, no tiene toasts. Pero el cliente puede mejorar los mens
 
 ## 10. Approval
 
-**Status:** ✅ Aprobado
+**Status:** ✅ Aprobado + ✅ **Implementado**
 **Aprobado por:** user (Karpathy cycle, ago-2026)
 **Fecha de aprobación:** 2026-08-03
+**Fecha de cierre:** 2026-08-04 (sesión "b")
+**Lint:** `tsc --noEmit` pasa sin errores (verificado post-migración)
+
+### Resumen de la implementación
+
+1. ✅ `server/lib/asyncHandler.ts` y `server/lib/errorHandler.ts` creados (sesión previa).
+2. ✅ `server.ts` registra `errorHandler` middleware.
+3. ✅ ~97 endpoints async migrados en 9 archivos de `server/routes/`.
+4. ✅ Patrón: preservar inner try/catch con mappings 4xx específicos (FK violations, ER_DUP_ENTRY, Drive 401/403/404); remover solo catch-all 500s; usar `throw err` para re-emitir errores no específicos al middleware.
+5. ✅ Lint pasa.
+
+### Verifier runtime
+
+Para verificar AC-2 contra un server real:
+
+```bash
+# 1. Arrancar server
+npm run dev
+
+# 2. En otra terminal, forzar error 500 simulando DB caída:
+DB_HOST=127.0.0.1 DB_PORT=3399 npm run dev
+
+# 3. Cualquier request a /api/properties debe devolver:
+# Content-Type: application/json
+# Status: 500
+# Body: { "error": "...", "code": "INTERNAL" }
+# (NO HTML 500)
+```
