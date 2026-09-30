@@ -8,6 +8,7 @@ import { ReportsView } from "./features/reports/ReportsView";
 import { AlertsView } from "./features/alerts/AlertsView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { LoginScreen } from "./features/auth/LoginScreen";
+import { SignupScreen } from "./features/auth/SignupScreen";
 import { AppShell, TabId } from "./features/shell/AppShell";
 import { LoadingScreen } from "./features/shell/LoadingScreen";
 import { ContractsView } from "./features/contracts/ContractsView";
@@ -46,6 +47,16 @@ export default function App() {
   const role = useAuthStore(selectRole);
   const setUser = useAuthStore((s) => s.setUser);
   const clearAuth = useAuthStore((s) => s.clear);
+
+  // saas_signup.md: state para alternar entre Login y Signup. Vive solo
+  // cuando el user es null (pre-auth).
+  const [authView, setAuthView] = useState<"login" | "signup">("login");
+
+  // Cuando se loguea/signea OK, vuelve a "login" para que el proximo
+  // logout arranque en la pantalla de login.
+  useEffect(() => {
+    if (user && authView !== "login") setAuthView("login");
+  }, [user, authView]);
 
   // Data layer
   const properties = useAppStore((s) => s.properties);
@@ -145,7 +156,35 @@ export default function App() {
   };
 
   if (loading) return <LoadingScreen />;
-  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  if (!user) {
+    if (authView === "signup") {
+      return (
+        <SignupScreen
+          onSignup={(u) => {
+            setUser({
+              uid: u.id,
+              displayName: u.displayName,
+              email: u.email,
+              role: u.role as any,
+            });
+            setAuthView("login");
+            // saas_signup.md AC-17: toast de bienvenida con el copy exacto.
+            showToast(
+              "Bienvenido a InmoControl! Tu trial de 14 dias esta activo.",
+              "success",
+            );
+          }}
+          onGoToLogin={() => setAuthView("login")}
+        />
+      );
+    }
+    return (
+      <LoginScreen
+        onLogin={handleLogin}
+        onGoToSignup={() => setAuthView("signup")}
+      />
+    );
+  }
 
   return (
     <AppShell

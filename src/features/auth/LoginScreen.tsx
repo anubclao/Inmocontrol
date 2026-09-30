@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type * as React from "react";
-import { Building2, Shield, Loader2, AlertCircle } from "lucide-react";
+import { Building2, Shield, Loader2, AlertCircle, UserPlus } from "lucide-react";
 import { Button, Card, Input } from "../../shared/ui";
 
 export interface LoginScreenProps {
@@ -15,6 +15,11 @@ export interface LoginScreenProps {
     role: string;
     organizationId: string;
   }) => void;
+  /**
+   * Saas_signup: se llama cuando el user hace click en "Crear cuenta
+   * gratis" para ir a la pantalla de signup.
+   */
+  onGoToSignup?: () => void;
 }
 
 /**
@@ -28,7 +33,7 @@ export interface LoginScreenProps {
  * bcrypt + sesión de 12 horas. Cuando se migre a SaaS multi-tenant, esta
  * pantalla se reemplaza por OAuth Google.
  */
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+export function LoginScreen({ onLogin, onGoToSignup }: LoginScreenProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -137,8 +142,19 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
           </Button>
         </form>
 
-        <div className="pt-4 border-t border-slate-800">
-          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-4 text-center">
+        <div className="pt-4 border-t border-slate-800 space-y-3">
+          {onGoToSignup && (
+            <button
+              type="button"
+              onClick={onGoToSignup}
+              disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 text-sm text-blue-400 hover:text-blue-300 transition-colors disabled:opacity-50"
+            >
+              <UserPlus className="w-4 h-4" />
+              No tenés cuenta? Crear cuenta gratis
+            </button>
+          )}
+          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold text-center">
             Acceso Seguro · Sesión 12h
           </p>
           <div className="flex justify-center gap-4">

@@ -12,7 +12,10 @@
  * Verifier: tests/verifiers/fix-issue-permissions-by-endpoint.md
  */
 
-export type Role = 'admin' | 'propietario' | 'inquilino';
+// FIX 2026-09-30 (saas_user_mgmt.md): rol 'gestor' agregado al type.
+// El CHECK constraint de la DB ya lo aceptaba, pero el type no (drift).
+// Frontend (`src/features/auth/permissions.ts`) ya estaba sincronizado.
+export type Role = "admin" | "gestor" | "propietario" | "inquilino";
 
 /**
  * Catálogo completo de acciones. Si agregás una acción nueva, agregá
@@ -21,40 +24,44 @@ export type Role = 'admin' | 'propietario' | 'inquilino';
  */
 export type Action =
   // Properties
-  | 'canAddProperty'
-  | 'canEditProperty'
-  | 'canDeleteProperty'
+  | "canAddProperty"
+  | "canEditProperty"
+  | "canDeleteProperty"
   // Tenants
-  | 'canAddTenant'
-  | 'canEditTenant'
-  | 'canDeleteTenant'
+  | "canAddTenant"
+  | "canEditTenant"
+  | "canDeleteTenant"
   // Financial
-  | 'canAddFinancial'
-  | 'canDeleteFinancial'
+  | "canAddFinancial"
+  | "canDeleteFinancial"
   // Contracts
-  | 'canAddContract'
-  | 'canEditContract'
-  | 'canDeleteContract'
+  | "canAddContract"
+  | "canEditContract"
+  | "canDeleteContract"
   // Inventory
-  | 'canAddInventory'
-  | 'canEditInventory'
-  | 'canDeleteInventory'
+  | "canAddInventory"
+  | "canEditInventory"
+  | "canDeleteInventory"
   // Billing
-  | 'canSendInvoice'
-  | 'canRegisterPayment'
+  | "canSendInvoice"
+  | "canRegisterPayment"
   // Owner statement
-  | 'canViewOwnerStatement'
-  | 'canRegisterOwnerPayout'
+  | "canViewOwnerStatement"
+  | "canRegisterOwnerPayout"
   // Drive
-  | 'canManageDrive'
+  | "canManageDrive"
   // Notifications
-  | 'canManageNotifications'
+  | "canManageNotifications"
   // SaaS billing
-  | 'canManageSaasBilling'
+  | "canManageSaasBilling"
   // Reports
-  | 'canViewReports'
+  | "canViewReports"
   // Settings
-  | 'canViewSettings';
+  | "canViewSettings"
+  // User management (saas_user_mgmt.md)
+  | "canManageOrgUsers"
+  | "canInviteUsers"
+  | "canChangeMemberRole";
 
 export const ROLE_PERMISSIONS: Record<Role, Record<Action, boolean>> = {
   admin: {
@@ -81,6 +88,37 @@ export const ROLE_PERMISSIONS: Record<Role, Record<Action, boolean>> = {
     canManageSaasBilling: true,
     canViewReports: true,
     canViewSettings: true,
+    canManageOrgUsers: true,
+    canInviteUsers: true,
+    canChangeMemberRole: true,
+  },
+  gestor: {
+    canAddProperty: true,
+    canEditProperty: true,
+    canDeleteProperty: false,
+    canAddTenant: true,
+    canEditTenant: true,
+    canDeleteTenant: false,
+    canAddFinancial: true,
+    canDeleteFinancial: false,
+    canAddContract: true,
+    canEditContract: true,
+    canDeleteContract: false,
+    canAddInventory: false,
+    canEditInventory: false,
+    canDeleteInventory: false,
+    canSendInvoice: false,
+    canRegisterPayment: false,
+    canViewOwnerStatement: true,
+    canRegisterOwnerPayout: false,
+    canManageDrive: true,
+    canManageNotifications: true,
+    canManageSaasBilling: false,
+    canViewReports: true,
+    canViewSettings: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
   },
   propietario: {
     canAddProperty: true,
@@ -106,6 +144,9 @@ export const ROLE_PERMISSIONS: Record<Role, Record<Action, boolean>> = {
     canManageSaasBilling: false,
     canViewReports: true,
     canViewSettings: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
   },
   inquilino: {
     canAddProperty: false,
@@ -131,6 +172,9 @@ export const ROLE_PERMISSIONS: Record<Role, Record<Action, boolean>> = {
     canManageSaasBilling: false,
     canViewReports: false,
     canViewSettings: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
   },
 };
 

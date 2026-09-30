@@ -9,9 +9,11 @@
   },
   "scripts": {
     "server": "tsx watch server.ts",
+    "server:nowatch": "tsx server.ts",
     "dev": "node scripts/dev-all.mjs",
     "dev:client": "vite",
     "dev:server": "tsx watch server.ts",
+    "dev:server:nowatch": "tsx server.ts",
     "dev:all": "node scripts/dev-all.mjs",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",

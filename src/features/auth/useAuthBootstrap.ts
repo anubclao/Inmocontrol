@@ -9,44 +9,37 @@
  * DEVUELVE `loading` que App usa para mostrar LoadingScreen solo en
  * el primer render.
  */
-import { useEffect, useState } from 'react';
-import { useAuthStore } from '../../shared/store/authStore';
-import { useAppStore } from '../../shared/store/appStore';
-import { useGoogleDriveStore } from '../../shared/store/googleDriveStore';
-import { STORAGE_KEYS } from '../../shared/hooks/storageKeys';
-import type { Role } from '../auth/permissions';
+import { useEffect, useState } from "react";
+import { useAuthStore } from "../../shared/store/authStore";
+import { useAppStore } from "../../shared/store/appStore";
+import { useGoogleDriveStore } from "../../shared/store/googleDriveStore";
+import type { Role } from "../auth/permissions";
 
-const DEFAULT_USER = {
-  uid: 'admin-local',
-  displayName: 'Administrador Inmobiliario',
-  email: 'admin@inmocontrol.com',
-  role: 'admin' as const,
-  photoURL:
-    'https://api.dicebear.com/7.x/avataaars/svg?seed=admin',
-};
+// FIX 2026-09-25: ya NO inyectamos un DEFAULT_USER fake. Si no hay sesión
+// persistida Y /api/auth/me responde 401, el user queda en null y la app
+// muestra la pantalla de login. Antes, este DEFAULT_USER mentía al usuario
+// ("Sistema Online") mientras el backend rechazaba todo con 401, causando
+// una contradicción visible entre la UI y el server.
+// FIX 2026-09-26: el primer useEffect que wipeaba TODO el localStorage en
+// cada mount era destructivo (borraba properties, tenants, wizard drafts
+// además de user). El fix real es limpiar SOLO el state de auth cuando
+// /api/auth/me responde 401 (3er useEffect, sin cambios). El store de
+// Zustand (`inmocontrol:auth:v1`) ya tiene su propia clave persistente
+// y la cookie httpOnly del server mantiene la sesión.
+// El seed del piloto sigue funcionando: el admin@inmocontrol.local puede
+// loguearse via /api/auth/login y la cookie httpOnly se persiste.
 
 export function useAuthBootstrap() {
   const [loading, setLoading] = useState(true);
   const setUser = useAuthStore((s) => s.setUser);
   const user = useAuthStore((s) => s.user);
 
-  // Hidratación inicial: DEFAULT_USER si no hay sesión persistida +
-  // limpia localStorage legacy + carga datos de MySQL.
+  // Loading inicial. No tocamos localStorage — el store de Zustand se
+  // rehidrata solo desde `inmocontrol:auth:v1`, y la cookie httpOnly
+  // mantiene la sesión real contra el server.
   useEffect(() => {
-    if (!useAuthStore.getState().user) {
-      setUser(DEFAULT_USER);
-    }
-    Object.values(STORAGE_KEYS).forEach((key) => {
-      try {
-        localStorage.removeItem(key);
-      } catch {
-        /* silent */
-      }
-    });
-    void useAppStore.getState().hydrate();
-    void useGoogleDriveStore.getState().checkStatus();
     setLoading(false);
-  }, [setUser]);
+  }, []);
 
   // Re-hidratar cuando el user pasa de null → !null (post-login).
   useEffect(() => {
@@ -57,9 +50,12 @@ export function useAuthBootstrap() {
   }, [user]);
 
   // Restore sesión via cookie httpOnly si no hay user persistido.
+  // FIX 2026-09-25: si el server responde 401, llamar clear() para
+  // sincronizar el state con la realidad. Antes, el silencio dejaba
+  // un user fake en localStorage y la UI mentía ("Sistema Online").
   useEffect(() => {
     if (user) return; // ya hay user, no llamar al server
-    fetch('/api/auth/me', { credentials: 'include' })
+    fetch("/api/auth/me", { credentials: "include" })
       .then(async (res) => {
         if (res.ok) {
           const data = await res.json();
@@ -69,10 +65,14 @@ export function useAuthBootstrap() {
             email: data.user.email,
             role: data.user.role as Role,
           });
+        } else {
+          // 401 (o cualquier no-200): limpiar state para forzar login.
+          useAuthStore.getState().clear();
         }
       })
       .catch(() => {
-        /* silent */
+        // Network error: NO asumir autenticado. Limpiar state.
+        useAuthStore.getState().clear();
       });
     // setUser es estable; ejecutamos solo al montar.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -10,7 +10,9 @@
  * Spec: docs/specs/fix-issue-permissions-by-endpoint.md
  */
 
-export type Role = 'admin' | 'propietario' | 'inquilino';
+// FIX 2026-09-26 (saas_user_mgmt.md): rol 'gestor' agregado al type.
+// El CHECK constraint de la DB ya lo aceptaba, pero el type no (drift).
+export type Role = "admin" | "gestor" | "propietario" | "inquilino";
 
 export interface RolePermissions {
   // Properties
@@ -48,6 +50,10 @@ export interface RolePermissions {
   canViewReports: boolean;
   // Settings
   canViewSettings: boolean;
+  // User management (saas_user_mgmt.md)
+  canManageOrgUsers: boolean;
+  canInviteUsers: boolean;
+  canChangeMemberRole: boolean;
 }
 
 export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
@@ -75,6 +81,37 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
     canManageSaasBilling: true,
     canViewReports: true,
     canViewSettings: true,
+    canManageOrgUsers: true,
+    canInviteUsers: true,
+    canChangeMemberRole: true,
+  },
+  gestor: {
+    canAddProperty: true,
+    canEditProperty: true,
+    canDeleteProperty: false,
+    canAddTenant: true,
+    canEditTenant: true,
+    canDeleteTenant: false,
+    canAddFinancial: true,
+    canDeleteFinancial: false,
+    canAddContract: true,
+    canEditContract: true,
+    canDeleteContract: false,
+    canAddInventory: false,
+    canEditInventory: false,
+    canDeleteInventory: false,
+    canSendInvoice: false,
+    canRegisterPayment: false,
+    canViewOwnerStatement: true,
+    canRegisterOwnerPayout: false,
+    canManageDrive: true,
+    canManageNotifications: true,
+    canManageSaasBilling: false,
+    canViewReports: true,
+    canViewSettings: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
   },
   propietario: {
     canAddProperty: true,
@@ -100,6 +137,9 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
     canManageSaasBilling: false,
     canViewReports: true,
     canViewSettings: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
   },
   inquilino: {
     canAddProperty: false,
@@ -122,6 +162,9 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
     canRegisterOwnerPayout: false,
     canManageDrive: false,
     canManageNotifications: false,
+    canManageOrgUsers: false,
+    canInviteUsers: false,
+    canChangeMemberRole: false,
     canManageSaasBilling: false,
     canViewReports: false,
     canViewSettings: false,
@@ -129,7 +172,10 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
 };
 
 /** Helper de uso: `can(role, 'canAddProperty')` */
-export const can = (role: Role | null | undefined, action: keyof RolePermissions): boolean => {
+export const can = (
+  role: Role | null | undefined,
+  action: keyof RolePermissions,
+): boolean => {
   if (!role) return false;
   return ROLE_PERMISSIONS[role]?.[action] ?? false;
 };
