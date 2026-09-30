@@ -232,26 +232,26 @@ $content -match "import\s*\{[^}]*TimeoutError[^}]*\}\s*from\s*['""]\./fetchWithT
 
 ## Resumen del verifier
 
-| AC | Descripción | Cómo verificar | Estado |
-|---|---|---|---|
-| 1.1 | apiClient.ts existe | test-path | ⏳ |
-| 1.2 | Exports obligatorios | grep exports | ⏳ |
-| 1.3 | ApiError con 3 params | regex | ⏳ |
-| 1.4 | apiRequest es async | regex | ⏳ |
-| 1.5 | credentials: include | regex | ⏳ |
-| 1.6 | Maneja 204 | regex | ⏳ |
-| 1.7 | Tira ApiError si !ok | regex | ⏳ |
-| 3.1 | useAuthBootstrap importa apiRequest | grep | ⏳ |
-| 3.2 | fetch directo eliminado | grep -c 0 | ⏳ |
-| 3.3 | apiRequest presente | grep -c ≥1 | ⏳ |
-| 3.4 | Server sigue respondiendo | curl /api/auth/me | ⏳ |
-| 4.1 | Helper local api<T> borrado | grep -c 0 | ⏳ |
-| 4.2 | billing/api importa apiRequest | grep | ⏳ |
-| 4.3 | Re-export con alias `api` | regex | ⏳ |
-| 4.4 | detectMode se mantiene | grep | ⏳ |
-| 2.1 | ApiError.name | regex | ⏳ |
-| 2.2 | ApiTimeoutError extends | regex | ⏳ |
-| 2.3 | TimeoutError re-importado | regex | ⏳ |
+| AC  | Descripción                         | Cómo verificar    | Estado |
+| --- | ----------------------------------- | ----------------- | ------ |
+| 1.1 | apiClient.ts existe                 | test-path         | ⏳     |
+| 1.2 | Exports obligatorios                | grep exports      | ⏳     |
+| 1.3 | ApiError con 3 params               | regex             | ⏳     |
+| 1.4 | apiRequest es async                 | regex             | ⏳     |
+| 1.5 | credentials: include                | regex             | ⏳     |
+| 1.6 | Maneja 204                          | regex             | ⏳     |
+| 1.7 | Tira ApiError si !ok                | regex             | ⏳     |
+| 3.1 | useAuthBootstrap importa apiRequest | grep              | ⏳     |
+| 3.2 | fetch directo eliminado             | grep -c 0         | ⏳     |
+| 3.3 | apiRequest presente                 | grep -c ≥1        | ⏳     |
+| 3.4 | Server sigue respondiendo           | curl /api/auth/me | ⏳     |
+| 4.1 | Helper local api<T> borrado         | grep -c 0         | ⏳     |
+| 4.2 | billing/api importa apiRequest      | grep              | ⏳     |
+| 4.3 | Re-export con alias `api`           | regex             | ⏳     |
+| 4.4 | detectMode se mantiene              | grep              | ⏳     |
+| 2.1 | ApiError.name                       | regex             | ⏳     |
+| 2.2 | ApiTimeoutError extends             | regex             | ⏳     |
+| 2.3 | TimeoutError re-importado           | regex             | ⏳     |
 
 ## Antes de implementar (baseline esperado)
 

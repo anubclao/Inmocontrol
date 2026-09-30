@@ -108,7 +108,10 @@ export async function apiRequest<T = unknown>(
       // por herencia, asi que callers viejos siguen funcionando).
       throw new ApiTimeoutError(err.url, err.timeoutMs);
     }
-    if (err instanceof Error && err.message === "fetch aborted by caller signal") {
+    if (
+      err instanceof Error &&
+      err.message === "fetch aborted by caller signal"
+    ) {
       throw new ApiError(0, "ABORTED", undefined, err.message);
     }
     // Network error generico (DNS, ECONNREFUSED, server caido, etc).

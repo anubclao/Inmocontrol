@@ -15,17 +15,17 @@
 
 **Inventario confirmado** (12 `fetch()` directos en 10 archivos):
 
-| Archivo | Función/usos | Patrón actual |
-|---|---|---|
-| `src/features/auth/useAuthBootstrap.ts:58` | `/api/auth/me` (1 vez) | `fetch()` directo, sin timeout, sin parse |
-| `src/features/billing/api.ts:57, 78` | `api<T>()` local (10+ usos) | Helper local con `api<T>(method, path, body)`, sin timeout, shape inconsistente |
-| `src/features/contracts/contractApi.ts:25` | contratos (1+ usos) | `fetch()` directo, sin timeout |
-| `src/features/saasBilling/api.ts:30` | subscripciones (1+ usos) | `fetch()` directo, sin timeout |
-| `src/features/alerts/channels.ts:88, 121` | Twilio/email (2 usos) | `fetch()` directo, sin timeout |
-| `src/features/shell/useCrudHandlers.ts:50` | CRUD genérico (1 uso) | `fetch()` directo |
-| `src/shared/hooks/useDraftPersistence.ts:20` | POST de drafts (1 uso) | `fetchWithTimeout` (sí) |
-| `src/shared/lib/fetchWithTimeout.ts:31, 65` | helper base (lo reusa) | **ya existe**, bien hecho |
-| `src/shared/store/googleDriveStore.ts:40` | `/api/drive/*` (1+ usos) | `fetch()` directo |
+| Archivo                                      | Función/usos                | Patrón actual                                                                   |
+| -------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------- |
+| `src/features/auth/useAuthBootstrap.ts:58`   | `/api/auth/me` (1 vez)      | `fetch()` directo, sin timeout, sin parse                                       |
+| `src/features/billing/api.ts:57, 78`         | `api<T>()` local (10+ usos) | Helper local con `api<T>(method, path, body)`, sin timeout, shape inconsistente |
+| `src/features/contracts/contractApi.ts:25`   | contratos (1+ usos)         | `fetch()` directo, sin timeout                                                  |
+| `src/features/saasBilling/api.ts:30`         | subscripciones (1+ usos)    | `fetch()` directo, sin timeout                                                  |
+| `src/features/alerts/channels.ts:88, 121`    | Twilio/email (2 usos)       | `fetch()` directo, sin timeout                                                  |
+| `src/features/shell/useCrudHandlers.ts:50`   | CRUD genérico (1 uso)       | `fetch()` directo                                                               |
+| `src/shared/hooks/useDraftPersistence.ts:20` | POST de drafts (1 uso)      | `fetchWithTimeout` (sí)                                                         |
+| `src/shared/lib/fetchWithTimeout.ts:31, 65`  | helper base (lo reusa)      | **ya existe**, bien hecho                                                       |
+| `src/shared/store/googleDriveStore.ts:40`    | `/api/drive/*` (1+ usos)    | `fetch()` directo                                                               |
 
 **3 problemas concretos**:
 
@@ -55,8 +55,8 @@
 // src/shared/lib/apiClient.ts
 
 export interface ApiRequestOptions {
-  timeoutMs?: number;        // default 15_000
-  signal?: AbortSignal;      // propagado a fetchWithTimeout
+  timeoutMs?: number; // default 15_000
+  signal?: AbortSignal; // propagado a fetchWithTimeout
   headers?: Record<string, string>;
   // sin credentials: 'include' option — siempre va
 }
@@ -122,20 +122,25 @@ Este spec **NO** cubre:
 ## 5. Edge Cases
 
 ### E-1: Backend devuelve HTML (caso pre-fix-issue-27)
+
 - `apiRequest` intenta `await res.json()`. Si el body no es JSON válido, **catch** del JSON parse y devuelve `ApiError` con `code: "INVALID_JSON_BODY"`, `status: 200` (porque `res.ok` es true), `body: "<raw html>"`.
 - **Decisión**: `apiRequest` debe hacer un `try { JSON.parse } catch` antes de confiar en el body. Si falla, igual devuelve el body como text pero con `code: "INVALID_JSON_BODY"`. El caller puede decidir qué hacer.
 
 ### E-2: Network error (no hay server, ECONNREFUSED, server caído)
+
 - `fetchWithTimeout` tira `Error` nativo (no `TimeoutError` porque el abort no se disparó). `apiRequest` lo envuelve en `ApiError` con `status: 0`, `code: "NETWORK_ERROR"`, `body: undefined`.
 
 ### E-3: 204 No Content
+
 - `apiRequest` devuelve `undefined as T` (mismo shape que ya tenía `billing/api.ts`).
 
 ### E-4: Body es `null` o `undefined`
+
 - Si `body` es `undefined`, NO se manda header `Content-Type` ni se serializa.
 - Si `body` es `null`, sí se manda `Content-Type: application/json` con body `"null"`.
 
 ### E-5: Timeout del caller (`AbortSignal` externo)
+
 - `apiRequest` propaga el `signal` a `fetchWithTimeout`. Si el caller aborta, `fetchWithTimeout` tira `Error("fetch aborted by caller signal")` que `apiRequest` envuelve en `ApiError(code: "ABORTED")`.
 
 ## 6. Technical Contract
@@ -192,9 +197,13 @@ export async function apiRequest<T = unknown>(
   try {
     res = await fetchWithTimeout(url, init, options.timeoutMs ?? 15_000);
   } catch (err) {
-    if (err instanceof TimeoutError) throw new ApiTimeoutError(err.url, err.timeoutMs);
+    if (err instanceof TimeoutError)
+      throw new ApiTimeoutError(err.url, err.timeoutMs);
     // Network error o aborted
-    if (err instanceof Error && err.message === "fetch aborted by caller signal") {
+    if (
+      err instanceof Error &&
+      err.message === "fetch aborted by caller signal"
+    ) {
       throw new ApiError(0, "ABORTED", undefined, err.message);
     }
     throw new ApiError(0, "NETWORK_ERROR", undefined, (err as Error).message);
@@ -217,7 +226,9 @@ export async function apiRequest<T = unknown>(
   }
 
   if (!res.ok) {
-    const code = (parsed as any)?.code ?? (res.status >= 500 ? "INTERNAL" : "CLIENT_ERROR");
+    const code =
+      (parsed as any)?.code ??
+      (res.status >= 500 ? "INTERNAL" : "CLIENT_ERROR");
     throw new ApiError(res.status, code, parsed);
   }
 
@@ -265,13 +276,16 @@ apiRequest<{ user: { id: string; displayName: string; email: string; role: strin
 ## 9. Dependencias
 
 ### Archivos a crear
+
 - `src/shared/lib/apiClient.ts` (nuevo, ~80 líneas)
 
 ### Archivos a modificar
+
 - `src/features/auth/useAuthBootstrap.ts` (~10 líneas modificadas: el fetch directo → apiRequest)
 - `src/features/billing/api.ts` (~20 líneas: borrar helper local, importar apiRequest)
 
 ### Archivos a NO tocar (out of scope)
+
 - `src/shared/lib/fetchWithTimeout.ts` (se re-exporta, no se modifica)
 - `src/features/saasBilling/api.ts` (spec aparte: fix-issue-29)
 - `src/features/contracts/contractApi.ts` (spec aparte: fix-issue-29)
