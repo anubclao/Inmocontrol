@@ -13,6 +13,9 @@ import { useEffect, useState } from "react";
 import { useAuthStore } from "../../shared/store/authStore";
 import { useAppStore } from "../../shared/store/appStore";
 import { useGoogleDriveStore } from "../../shared/store/googleDriveStore";
+// fix-issue-28: apiRequest reemplaza fetch() directo. Timeout 15s, parse
+// JSON uniforme, ApiError tipado con status/code/body.
+import { apiRequest, ApiError } from "../../shared/lib/apiClient";
 import type { Role } from "../auth/permissions";
 
 // FIX 2026-09-25: ya NO inyectamos un DEFAULT_USER fake. Si no hay sesión
@@ -53,25 +56,33 @@ export function useAuthBootstrap() {
   // FIX 2026-09-25: si el server responde 401, llamar clear() para
   // sincronizar el state con la realidad. Antes, el silencio dejaba
   // un user fake en localStorage y la UI mentía ("Sistema Online").
+  // fix-issue-28: apiRequest en vez de fetch directo. El ApiError tiene
+  // status/code/body. Si status=401, es el caso "sesion expirada" — clear.
   useEffect(() => {
     if (user) return; // ya hay user, no llamar al server
-    fetch("/api/auth/me", { credentials: "include" })
-      .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setUser({
-            uid: data.user.id,
-            displayName: data.user.displayName,
-            email: data.user.email,
-            role: data.user.role as Role,
-          });
-        } else {
-          // 401 (o cualquier no-200): limpiar state para forzar login.
-          useAuthStore.getState().clear();
-        }
+    interface AuthMeResponse {
+      user: { id: string; displayName: string; email: string; role: string };
+    }
+    apiRequest<AuthMeResponse>("GET", "/api/auth/me")
+      .then((data) => {
+        setUser({
+          uid: data.user.id,
+          displayName: data.user.displayName,
+          email: data.user.email,
+          role: data.user.role as Role,
+        });
       })
-      .catch(() => {
-        // Network error: NO asumir autenticado. Limpiar state.
+      .catch((err: unknown) => {
+        // Cualquier error (401, network, timeout) = no autenticado.
+        // ApiError.status === 401 es el caso "sesion expirada" — es
+        // esperado y silencioso. Otros errores (NETWORK_ERROR,
+        // TIMEOUT) tambien deben limpiar el state para que la UI
+        // muestre el login en vez de mentir con un user fake.
+        if (err instanceof ApiError && err.status === 401) {
+          // Sesion expirada — caso normal, no loguear.
+        } else {
+          console.warn("[useAuthBootstrap] /api/auth/me fallo:", err);
+        }
         useAuthStore.getState().clear();
       });
     // setUser es estable; ejecutamos solo al montar.

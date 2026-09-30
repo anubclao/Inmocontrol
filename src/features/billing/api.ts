@@ -19,6 +19,9 @@
  *   /api/entities/sync
  */
 import { useBillingStore } from "./billingStore";
+// fix-issue-28: apiRequest reemplaza el helper local `api<T>(method, path, body)`.
+// Re-exportamos con el nombre `api` para no tocar los 10+ callers.
+import { apiRequest } from "../../shared/lib/apiClient";
 import {
   generateAmortization,
   generateInvoiceFromRow,
@@ -70,22 +73,20 @@ async function detectMode(): Promise<Mode> {
   return currentMode;
 }
 
-async function api<T>(method: string, path: string, body?: any): Promise<T> {
+// fix-issue-28: este helper local se BORRO. Lo reemplazamos con `apiRequest`
+// del nuevo shared/lib/apiClient.ts. La firma cambio de `string` a un union
+// literal de metodos, pero los 10+ callers usan strings ("GET", "POST", etc.)
+// que son miembros del union, asi que compilan sin cambios.
+async function api<T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: any,
+): Promise<T> {
   const mode = await detectMode();
   if (mode === "local") {
     throw new Error("backend unavailable");
   }
-  const r = await fetch(`/api${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    throw new Error(`HTTP ${r.status}: ${text}`);
-  }
-  if (r.status === 204) return undefined as T;
-  return (await r.json()) as T;
+  return apiRequest<T>(method, path, body);
 }
 
 // BUG-025: el helper original devolvía silenciosamente el fallback si el
