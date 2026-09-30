@@ -26,6 +26,21 @@ import dotenv from 'dotenv';
 dotenv.config();
 dotenv.config({ path: '.env.local', override: true });
 
+// FIX #3 (P0 seguridad): si NODE_ENV=production y no hay DB_PASSWORD, hard-fail.
+// Antes el server arrancaba con MySQL root sin password si el operador olvidó
+// configurar las env vars en el panel de Hostinger → exposición total.
+// En dev (NODE_ENV !== production) se mantiene compat con MySQL local sin
+// password (default de Windows).
+if (
+  process.env.NODE_ENV === 'production' &&
+  (!process.env.DB_PASSWORD || process.env.DB_PASSWORD === '')
+) {
+  console.error(
+    '[server] FATAL: DB_PASSWORD no configurado. Definilo en el panel de Hostinger antes de continuar.',
+  );
+  process.exit(1);
+}
+
 import mysql from 'mysql2/promise';
 
 const pool = mysql.createPool({
