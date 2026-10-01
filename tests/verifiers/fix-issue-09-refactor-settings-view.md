@@ -97,26 +97,32 @@ Write-Host "AC-4: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 - **PASS**: 4/4 exportan
 - **FAIL**: alguno no exporta
 
-## AC-5: `SettingsView.tsx` importa los sub-componentes y NO los redeclara
+## AC-5: Los sub-componentes están accesibles desde sus callers
 
 ```powershell
-$tv = Get-Content "src\features\settings\SettingsView.tsx" -Raw
 $ok = $true
-# 1) imports de los 4 sub-componentes
-$imports = @("WhatsAppConfigForm", "EmailIntegrationsCard", "EmailConfigManager", "EmailMailboxForm")
-foreach ($name in $imports) {
-    if ($tv -match "import .*\{?\s*\b$name\b\s*\}?\s*from .*['""]\\./integrations/$name['""]") { Write-Host "  OK: importa $name" } else { Write-Host "  MISSING: no importa $name desde ./integrations/$name"; $ok = $false }
+# 1) SettingsView importa los 3 que renderiza directamente
+$svImports = @("WhatsAppConfigForm", "EmailIntegrationsCard", "EmailConfigManager")
+foreach ($name in $svImports) {
+    $importLine = Select-String -Path "src\features\settings\SettingsView.tsx" -Pattern "from .*integrations/$name"
+    if ($importLine) { Write-Host "  OK: SettingsView importa $name" } else { Write-Host "  MISSING: SettingsView no importa $name"; $ok = $false }
 }
-# 2) NO redeclara los sub-componentes (regex con (^|\n) para tolerar comentarios al inicio)
-foreach ($name in $imports) {
+# 2) EmailConfigManager importa EmailMailboxForm (lo renderiza cuando editing != null)
+$cmImport = Select-String -Path "src\features\settings\integrations\EmailConfigManager.tsx" -Pattern "from .*EmailMailboxForm"
+if ($cmImport) { Write-Host "  OK: EmailConfigManager importa EmailMailboxForm" } else { Write-Host "  MISSING: EmailConfigManager no importa EmailMailboxForm"; $ok = $false }
+# 3) SettingsView.tsx NO redeclara los 4 sub-componentes
+$tv = Get-Content "src\features\settings\SettingsView.tsx" -Raw
+foreach ($name in @("WhatsAppConfigForm", "EmailIntegrationsCard", "EmailConfigManager", "EmailMailboxForm")) {
     $redeclares = ([regex]::Matches($tv, "(^|\n)(export )?function $name\b")).Count
-    if ($redeclares -eq 0) { Write-Host "  OK: $name no redeclarado" } else { Write-Host "  FAIL: $name redeclarado $redeclares veces"; $ok = $false }
+    if ($redeclares -eq 0) { Write-Host "  OK: $name no redeclarado en SettingsView" } else { Write-Host "  FAIL: $name redeclarado $redeclares veces"; $ok = $false }
 }
 Write-Host "AC-5: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: 4/4 importados + 4/4 no redeclarados
+- **PASS**: 3 imports en SettingsView + 1 import en EmailConfigManager + 0 redeclaraciones
 - **FAIL**: alguno falta o se redeclara
+
+> **Nota**: `EmailMailboxForm` lo importa `EmailConfigManager` (que lo renderiza en modo edit), NO `SettingsView` directamente. El verifier lo refleja: 3 imports en SettingsView + 1 import transitivo.
 
 ## AC-6: Cero cambio funcional observable
 
