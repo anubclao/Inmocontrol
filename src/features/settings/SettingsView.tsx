@@ -39,7 +39,9 @@ import type { EmailMailbox, EmailPurpose } from "../alerts/ruleTypes";
 import { EMAIL_PURPOSES, EMAIL_PURPOSE_LABEL } from "../alerts/ruleTypes";
 import { SaasBillingView } from "../saasBilling/SaasBillingView";
 import { PlanAdminView } from "../saasBilling/PlanAdminView";
-
+import { NotificationsTab } from "./tabs/NotificationsTab";
+import { BillingTab } from "./tabs/BillingTab";
+import { IntegrationsTab } from "./tabs/IntegrationsTab";
 export interface SettingsViewProps {
   showToast: (msg: string, type?: "success" | "error") => void;
 }
@@ -562,181 +564,24 @@ export function SettingsView({ showToast }: SettingsViewProps) {
             )}
 
             {activeSubTab === "notifications" && (
-              <motion.div
-                key="notifications"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-              >
-                <Card className="p-6">
-                  <h3 className="font-bold text-lg mb-6 flex items-center gap-2">
-                    <Bell className="w-5 h-5 text-blue-600" />
-                    Preferencias de Notificación
-                  </h3>
-                  <div className="space-y-4">
-                    {[
-                      {
-                        title: "Alertas de Mora",
-                        desc: "Recibir notificaciones cuando un inquilino se retrasa en el pago.",
-                      },
-                      {
-                        title: "Solicitudes de Reparación",
-                        desc: "Notificar sobre nuevas solicitudes de mantenimiento.",
-                      },
-                      {
-                        title: "Vencimiento de Contratos",
-                        desc: "Avisar 30 días antes del vencimiento de un contrato.",
-                      },
-                      {
-                        title: "Reportes Mensuales",
-                        desc: "Enviar resumen financiero mensual por correo.",
-                      },
-                    ].map((pref, i) => (
-                      <div
-                        key={i}
-                        className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg transition-colors"
-                      >
-                        <div>
-                          <h4 className="text-sm font-semibold text-slate-900">
-                            {pref.title}
-                          </h4>
-                          <p className="text-xs text-slate-500">{pref.desc}</p>
-                        </div>
-                        <div
-                          onClick={() => toggleNotification(i)}
-                          className={`w-10 h-5 rounded-full relative cursor-pointer transition-all ${notifications[i] ? "bg-blue-600" : "bg-slate-300"}`}
-                        >
-                          <div
-                            className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${notifications[i] ? "right-0.5" : "left-0.5"}`}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </motion.div>
+              <NotificationsTab
+                notifications={notifications}
+                toggleNotification={toggleNotification}
+              />
             )}
 
             {activeSubTab === "billing" && (
-              <motion.div
-                key="billing"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-              >
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div>
-                      <h3 className="font-bold text-lg flex items-center gap-2">
-                        <CreditCard className="w-5 h-5 text-blue-600" />
-                        Facturación y Plan
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        Tu subscripción al SaaS InmoControl. Planes, métodos de
-                        pago y facturas.
-                      </p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPlanAdminOpen(true)}
-                      className="gap-1"
-                    >
-                      <CreditCard className="w-3.5 h-3.5" /> Administrar planes
-                    </Button>
-                  </div>
-                  <SaasBillingView showToast={showToast} />
-                </div>
-              </motion.div>
+              <BillingTab
+                setPlanAdminOpen={setPlanAdminOpen}
+                showToast={showToast}
+              />
             )}
 
             {activeSubTab === "integrations" && (
-              <motion.div
-                key="integrations"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-              >
-                <Card className="p-6">
-                  <h3 className="font-bold text-lg mb-6 flex items-center gap-2">
-                    <Globe className="w-5 h-5 text-blue-600" />
-                    Integraciones
-                  </h3>
-                  <div className="grid grid-cols-1 gap-4">
-                    {/* ── Google Drive — componente interactivo ── */}
-                    <GoogleDriveIntegration showToast={showToast} />
-
-                    {/* ── Email — componente interactivo (Fase 7) ── */}
-                    <EmailIntegrationsCard
-                      onConfigure={() =>
-                        setSelectedIntegration({
-                          name: "Email",
-                          desc: "Envío de alertas automáticas vía correo electrónico. Configura buzones por propósito: cobros, contratos, alertas, etc.",
-                        })
-                      }
-                    />
-
-                    {/* ── Resto de integraciones (placeholder) ── */}
-                    {[
-                      {
-                        name: "WhatsApp Business",
-                        desc: "Envío de alertas automáticas vía WhatsApp.",
-                        status: "Conectado",
-                        icon: "📱",
-                      },
-                      {
-                        name: "PSE / Pagos",
-                        desc: "Recaudo de arriendos en línea.",
-                        status: "Conectado",
-                        icon: "💰",
-                      },
-                      {
-                        name: "Facturación Electrónica",
-                        desc: "Emisión automática de facturas DIAN.",
-                        status: "En Proceso",
-                        icon: "📄",
-                      },
-                    ].map((int, i) => (
-                      <div
-                        key={i}
-                        className="flex items-center justify-between p-4 border border-slate-100 rounded-xl hover:bg-slate-50 transition-colors"
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white border border-slate-100 rounded-lg flex items-center justify-center text-xl shadow-sm">
-                            {int.icon}
-                          </div>
-                          <div>
-                            <h4 className="text-sm font-bold text-slate-900">
-                              {int.name}
-                            </h4>
-                            <p className="text-xs text-slate-500">{int.desc}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span
-                            className={`text-[10px] font-bold px-2 py-1 rounded-full ${
-                              int.status === "Conectado"
-                                ? "bg-emerald-100 text-emerald-600"
-                                : int.status === "En Proceso"
-                                  ? "bg-amber-100 text-amber-600"
-                                  : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {int.status.toUpperCase()}
-                          </span>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSelectedIntegration(int)}
-                          >
-                            Configurar
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </motion.div>
+              <IntegrationsTab
+                setSelectedIntegration={setSelectedIntegration}
+                showToast={showToast}
+              />
             )}
           </AnimatePresence>
         </div>

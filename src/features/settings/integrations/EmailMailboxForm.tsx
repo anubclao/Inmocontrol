@@ -161,7 +161,10 @@ export function EmailMailboxForm({
         );
         return;
       }
-      showToast("âœ… ConexiÃ³n verificada â€” ahora guarda el buzÃ³n", "success");
+      showToast(
+        "âœ… ConexiÃ³n verificada â€” ahora guarda el buzÃ³n",
+        "success",
+      );
     } catch (err: any) {
       showToast(`Error de red: ${err?.message ?? "desconocido"}`, "error");
     } finally {
@@ -191,7 +194,10 @@ export function EmailMailboxForm({
         );
         return;
       }
-      showToast("âœ… Email de prueba enviado â€” revisÃ¡ tu bandeja", "success");
+      showToast(
+        "âœ… Email de prueba enviado â€” revisÃ¡ tu bandeja",
+        "success",
+      );
     } catch (err: any) {
       showToast(`Error de red: ${err?.message ?? "desconocido"}`, "error");
     } finally {
@@ -325,7 +331,9 @@ export function EmailMailboxForm({
               value={smtpPass}
               onChange={(e) => setSmtpPass(e.target.value)}
               placeholder={
-                mode === "edit" ? "â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢ (dejar vacÃ­o para mantener)" : ""
+                mode === "edit"
+                  ? "â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢ (dejar vacÃ­o para mantener)"
+                  : ""
               }
             />
             <label className="flex items-center gap-2 text-xs">
@@ -415,4 +423,3 @@ export function EmailMailboxForm({
     </div>
   );
 }
-

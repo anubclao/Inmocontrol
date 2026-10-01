@@ -8,6 +8,7 @@
 ## Cambios respecto al spec original
 
 El spec original pedía <250 por archivo. Tras implementación:
+
 - ✅ WhatsAppConfigForm: 232 (cumple)
 - ✅ EmailIntegrationsCard: 54 (cumple)
 - ⚠️ EmailConfigManager: 261 (excede por 11 — extracción de sub-componentes inside requeriría partir el state de editing/notifications, fuera de scope)
