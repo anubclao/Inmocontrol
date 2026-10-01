@@ -7,12 +7,14 @@ import { motion, AnimatePresence } from "motion/react";
 import { Bell, CheckCircle2, RefreshCw, Send, X } from "lucide-react";
 import { Button, cn } from "../../../shared/ui";
 import type { Alert } from "../types";
-import {
-  AUDIENCE_LABEL,
-  CHANNEL_LABEL,
-} from "../ruleTypes";
+import { AUDIENCE_LABEL, CHANNEL_LABEL } from "../ruleTypes";
 import { previewForAlert } from "../useNotificationEngine";
-import { CATEGORY_ICON, CHANNEL_ICON, CHANNEL_COLOR, SEVERITY_BADGE } from "./constants";
+import {
+  CATEGORY_ICON,
+  CHANNEL_ICON,
+  CHANNEL_COLOR,
+  SEVERITY_BADGE,
+} from "./constants";
 import { ALERT_CATEGORY_LABEL } from "../types";
 
 export interface AlertListProps {

@@ -4,10 +4,7 @@
  * Sale de AlertsView.tsx como parte del refactor #11.
  */
 import { cn } from "../../../shared/ui";
-import {
-  AUDIENCE_LABEL,
-  CHANNEL_LABEL,
-} from "../ruleTypes";
+import { AUDIENCE_LABEL, CHANNEL_LABEL } from "../ruleTypes";
 import type { NotificationEntry } from "../notificationLogStore";
 import { CHANNEL_COLOR, CHANNEL_ICON } from "./constants";
 

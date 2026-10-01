@@ -6,11 +6,12 @@
  *
  * Sale de StepInventory.tsx como parte del refactor #10 (commit 2/2).
  */
-import {
-  getPropertyTypeConfig,
-  resolveAreas,
-} from "../../inventoryConfig";
-import type { Inventory, InventoryArea, InventoryItem } from "../../inventoryTypes";
+import { getPropertyTypeConfig, resolveAreas } from "../../inventoryConfig";
+import type {
+  Inventory,
+  InventoryArea,
+  InventoryItem,
+} from "../../inventoryTypes";
 import { AreaConfigPanel } from "../AreaConfigPanel";
 
 export interface InventoryConfigStageProps {

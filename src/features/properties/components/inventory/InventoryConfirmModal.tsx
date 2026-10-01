@@ -67,11 +67,7 @@ export function InventoryConfirmModal({
           </p>
 
           <div className="flex gap-3 pt-2">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={onClose}
-            >
+            <Button variant="outline" className="flex-1" onClick={onClose}>
               Revisar inventario
             </Button>
             <Button className="flex-1" onClick={() => void onConfirm()}>

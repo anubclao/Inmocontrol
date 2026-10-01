@@ -11,14 +11,14 @@
 `StepInventory.tsx` (ya refactorizado en fix-issue-10 a 302). Contiene 6
 sub-componentes inline que se pueden extraer limpiamente:
 
-| Sub-componente       | Líneas | Tipo                  |
-| -------------------- | ------ | --------------------- |
-| `StatCard`           | ~30    | Card con ícono + stat |
-| `AlertList`          | ~170   | Lista colapsable      |
-| `RuleRow`            | ~135   | Fila de regla         |
-| `ChannelConfigRow`   | ~130   | Fila de canal         |
-| `LogRow`             | ~30    | Fila de log           |
-| `EmailChannelSummary`| ~30    | Resumen de buzones    |
+| Sub-componente        | Líneas | Tipo                  |
+| --------------------- | ------ | --------------------- |
+| `StatCard`            | ~30    | Card con ícono + stat |
+| `AlertList`           | ~170   | Lista colapsable      |
+| `RuleRow`             | ~135   | Fila de regla         |
+| `ChannelConfigRow`    | ~130   | Fila de canal         |
+| `LogRow`              | ~30    | Fila de log           |
+| `EmailChannelSummary` | ~30    | Resumen de buzones    |
 
 Las constantes `SEVERITY_BADGE`, `CATEGORY_ICON`, `CHANNEL_ICON`, `CHANNEL_COLOR`
 también se extraen a un `constants.ts` para que los sub-componentes las reusen.

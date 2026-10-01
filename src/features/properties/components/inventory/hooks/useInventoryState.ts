@@ -78,9 +78,8 @@ export function useInventoryState({
   );
   const [stage, setStage] = useState<InventoryStage>(initialStage);
   const [currentAreaIndex, setCurrentAreaIndex] = useState(0);
-  const [customAreas, setCustomAreas] = useState<
-    { id: string; label: string }[]
-  >(initialCustomAreas);
+  const [customAreas, setCustomAreas] =
+    useState<{ id: string; label: string }[]>(initialCustomAreas);
 
   // Sincronizar cuando la hidratación termina.
   useEffect(() => {

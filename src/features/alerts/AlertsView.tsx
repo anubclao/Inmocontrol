@@ -14,17 +14,9 @@ import { Button, Card, Modal, cn } from "../../shared/ui";
 import { selectVisibleAlerts, useAlertsStore } from "./alertsStore";
 import { type Alert } from "./types";
 import { useNotificationConfigStore } from "./notificationConfigStore";
-import {
-  useNotificationLogStore,
-} from "./notificationLogStore";
-import {
-  CHANNEL_LABEL,
-  CONFIGURABLE_CATEGORIES,
-} from "./ruleTypes";
-import {
-  sendForAlert,
-  sendAll,
-} from "./useNotificationEngine";
+import { useNotificationLogStore } from "./notificationLogStore";
+import { CHANNEL_LABEL, CONFIGURABLE_CATEGORIES } from "./ruleTypes";
+import { sendForAlert, sendAll } from "./useNotificationEngine";
 import { StatCard } from "./components/StatCard";
 import { AlertList } from "./components/AlertList";
 import { RuleRow } from "./components/RuleRow";

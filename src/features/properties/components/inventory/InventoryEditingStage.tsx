@@ -60,8 +60,8 @@ export function InventoryEditingStage({
       {phase === "final" && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
           <span className="font-bold uppercase">Inventario Final —</span> los
-          items se prellenan desde el Inventario Inicial. Ajusta los estados
-          si hubo cambios durante el arriendo.
+          items se prellenan desde el Inventario Inicial. Ajusta los estados si
+          hubo cambios durante el arriendo.
         </div>
       )}
       <Card className="p-6">
@@ -76,9 +76,7 @@ export function InventoryEditingStage({
           onRemovePhoto={onRemovePhoto}
           onSaveItemMedia={onSaveItemMedia}
           onDeleteItemMedia={onDeleteItemMedia}
-          onBack={() =>
-            setCurrentAreaIndex(Math.max(0, currentAreaIndex - 1))
-          }
+          onBack={() => setCurrentAreaIndex(Math.max(0, currentAreaIndex - 1))}
           onNext={() => {
             const area = inventory.areas[currentAreaIndex];
             const areaPhotoCount = inventory.photos.filter(
@@ -144,8 +142,7 @@ export function InventoryEditingStage({
                   (p) => p.areaId === a.id,
                 ).length;
                 const itemMediaCount = Object.values(a.items).reduce<number>(
-                  (acc, it) =>
-                    acc + ((it as InventoryItem).media?.length ?? 0),
+                  (acc, it) => acc + ((it as InventoryItem).media?.length ?? 0),
                   0,
                 );
                 if (
