@@ -9,12 +9,12 @@
 `StepBasic.tsx` (552 líneas) tiene 2 secciones inline grandes que se
 pueden extraer limpiamente:
 
-| Sección                | Líneas (aprox) | Tipo               |
-| ---------------------- | -------------- | ------------------ |
-| Header + datos básicos | ~140           | inline en shell    |
-| Propietarios (N)       | ~190           | extraer            |
-| Unidades adicionales   | ~140           | extraer            |
-| Footer (botones)       | ~30            | inline en shell    |
+| Sección                | Líneas (aprox) | Tipo            |
+| ---------------------- | -------------- | --------------- |
+| Header + datos básicos | ~140           | inline en shell |
+| Propietarios (N)       | ~190           | extraer         |
+| Unidades adicionales   | ~140           | extraer         |
+| Footer (botones)       | ~30            | inline en shell |
 
 ## 2. Estado objetivo
 
@@ -31,10 +31,12 @@ src/features/properties/components/
 ## 3. Acceptance Criteria
 
 ### AC-1: 2 archivos nuevos en `src/features/properties/components/stepBasic/`
+
 - `stepBasic/WizardOwnersSection.tsx` ✓
 - `stepBasic/WizardUnitsSection.tsx` ✓
 
 ### AC-2: `StepBasic.tsx` < 250 líneas
+
 Reducción esperada: 552 → ~200 (-64%).
 
 ### AC-3: Cada archivo nuevo < 250 líneas
@@ -44,6 +46,7 @@ Reducción esperada: 552 → ~200 (-64%).
 ### AC-5: 80/80 tests pass
 
 ### AC-6: Sin cambios funcionales
+
 - Validación de campos sigue funcionando
 - Botones "Agregar propietario" / "Garaje/Depósito/Otro" funcionan
 - La suma de % de participación se valida igual

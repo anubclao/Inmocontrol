@@ -1,8 +1,8 @@
 // filepath: src/features/properties/components/areaEditor/AreaPhotosSection.tsx
-import { useRef } from 'react';
-import { Camera, Eye, Trash2 } from 'lucide-react';
-import { Button, Input } from '../../../../shared/ui';
-import type { InventoryPhoto } from '../../inventoryTypes';
+import { useRef } from "react";
+import { Camera, Eye, Trash2 } from "lucide-react";
+import { Button, Input } from "../../../../shared/ui";
+import type { InventoryPhoto } from "../../inventoryTypes";
 
 export interface AreaPhotosSectionProps {
   photos: InventoryPhoto[];
@@ -38,10 +38,10 @@ export function AreaPhotosSection({
     const fileList = e.target.files as FileList | null;
     if (!fileList) return;
     for (const file of Array.from(fileList)) {
-      if (!file.type.startsWith('image/')) continue;
+      if (!file.type.startsWith("image/")) continue;
       await onAddPhoto(file);
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
@@ -60,12 +60,19 @@ export function AreaPhotosSection({
       <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <p className="text-sm font-bold text-slate-900">Fotos generales del área</p>
+            <p className="text-sm font-bold text-slate-900">
+              Fotos generales del área
+            </p>
             <p className="text-xs text-slate-500">
-              {photosForArea.length} / {recommendedPhotos} sugeridas · sin asociar a un item
+              {photosForArea.length} / {recommendedPhotos} sugeridas · sin
+              asociar a un item
             </p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+          >
             <Camera className="w-3.5 h-3.5 mr-1.5" />
             Subir foto
           </Button>
@@ -81,13 +88,21 @@ export function AreaPhotosSection({
         </div>
         {photosForArea.length === 0 ? (
           <div className="py-4 text-center text-slate-400 text-xs uppercase tracking-wider">
-            Sin fotos generales — las fotos por item ya cuentan para el inventario
+            Sin fotos generales — las fotos por item ya cuentan para el
+            inventario
           </div>
         ) : (
           <div className="grid grid-cols-4 gap-2">
             {photosForArea.map((p) => (
-              <div key={p.id} className="relative group aspect-square bg-slate-200 rounded-lg overflow-hidden">
-                <img src={p.dataUrl} alt="" className="w-full h-full object-cover" />
+              <div
+                key={p.id}
+                className="relative group aspect-square bg-slate-200 rounded-lg overflow-hidden"
+              >
+                <img
+                  src={p.dataUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
                 <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/40 transition-colors flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
                   <button
                     type="button"

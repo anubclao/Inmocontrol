@@ -164,7 +164,10 @@ export function StepBasic({
             {/* Preview formateado (solo display) */}
             {address.trim() && address !== previewAddressFormat(address) && (
               <p className="text-[10px] text-slate-500 mt-1">
-                Formato Secretaría del Hábitat: <span className="font-mono">{previewAddressFormat(address)}</span>
+                Formato Secretaría del Hábitat:{" "}
+                <span className="font-mono">
+                  {previewAddressFormat(address)}
+                </span>
               </p>
             )}
           </div>
@@ -213,10 +216,7 @@ export function StepBasic({
         />
 
         {/* ── Sección: Unidades adicionales (N) ── */}
-        <WizardUnitsSection
-          units={units}
-          setUnits={setUnits}
-        />
+        <WizardUnitsSection units={units} setUnits={setUnits} />
 
         <div className="flex flex-col sm:flex-row gap-3 pt-2">
           <Button

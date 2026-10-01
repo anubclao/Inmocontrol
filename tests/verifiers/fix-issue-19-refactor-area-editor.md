@@ -50,7 +50,7 @@ foreach ($f in $files) {
 
 ## AC-4: Componentes exportados
 
-```powershell
+````powershell
 $ok =useAreaEditor" = "src\features\properties\components\areaEditor\useAreaEditor.ts"
     "AreaItemsChecklist" = "src\features\properties\components\areaEditor\AreaItemsChecklist.tsx"
     "AreaPhotosSection" = "src\features\properties\components\areaEditor\AreaPhotosSection.tsx"
@@ -85,7 +85,7 @@ foreach ($n in $tabs) {
     if ($r -eq 0) { "  OK: $n no redeclarado" } else { "  FAIL: $n redeclarado"; $ok = $false }
 }
 "AC-5: $(if ($ok) {'PASS'} else {'FAIL'})"
-```
+````
 
 ## AC-6.1: tsc --noEmit exit 0
 

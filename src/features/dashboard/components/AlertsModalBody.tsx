@@ -1,13 +1,23 @@
 // filepath: src/features/dashboard/components/AlertsModalBody.tsx
-import { Bell, ClipboardCheck, Inbox, X, ExternalLink, DollarSign, Clock, AlertTriangle, FileX } from 'lucide-react';
-import { Button } from '../../../shared/ui';
-import { useAlertsStore } from '../../alerts/alertsStore';
+import {
+  Bell,
+  ClipboardCheck,
+  Inbox,
+  X,
+  ExternalLink,
+  DollarSign,
+  Clock,
+  AlertTriangle,
+  FileX,
+} from "lucide-react";
+import { Button } from "../../../shared/ui";
+import { useAlertsStore } from "../../alerts/alertsStore";
 import {
   ALERT_CATEGORY_LABEL,
   type Alert,
   type AlertCategory,
   type AlertSeverity,
-} from '../../alerts/types';
+} from "../../alerts/types";
 
 /** Icono por categoría de alerta. Usado solo por AlertsModalBody. */
 const CATEGORY_ICON: Record<AlertCategory, typeof Bell> = {
@@ -20,9 +30,12 @@ const CATEGORY_ICON: Record<AlertCategory, typeof Bell> = {
 
 /** Badge de severidad (color + label corto). */
 const SEVERITY_BADGE: Record<AlertSeverity, { label: string; cls: string }> = {
-  critical: { label: 'Crítica', cls: 'bg-red-100 text-red-700 border-red-200' },
-  warning: { label: 'Alerta', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
-  info: { label: 'Info', cls: 'bg-sky-100 text-sky-700 border-sky-200' },
+  critical: { label: "Crítica", cls: "bg-red-100 text-red-700 border-red-200" },
+  warning: {
+    label: "Alerta",
+    cls: "bg-amber-100 text-amber-700 border-amber-200",
+  },
+  info: { label: "Info", cls: "bg-sky-100 text-sky-700 border-sky-200" },
 };
 
 export interface AlertsModalBodyProps {
@@ -53,13 +66,16 @@ export function AlertsModalBody({
         <div className="inline-flex p-4 bg-emerald-50 rounded-full mb-4">
           <ClipboardCheck className="w-8 h-8 text-emerald-600" />
         </div>
-        <h4 className="font-bold text-slate-900 text-lg">Sin alertas activas</h4>
+        <h4 className="font-bold text-slate-900 text-lg">
+          Sin alertas activas
+        </h4>
         <p className="text-sm text-slate-500 mt-1">
-          No hay mora, vencimientos próximos ni documentos pendientes. El sistema
-          seguirá monitoreando y te avisará cuando algo cambie.
+          No hay mora, vencimientos próximos ni documentos pendientes. El
+          sistema seguirá monitoreando y te avisará cuando algo cambie.
         </p>
         <p className="text-xs text-slate-400 mt-4">
-          Las alertas se derivan en tiempo real de contratos, facturas y propiedades.
+          Las alertas se derivan en tiempo real de contratos, facturas y
+          propiedades.
         </p>
       </div>
     );
@@ -75,7 +91,9 @@ export function AlertsModalBody({
         <p className="text-sm text-slate-500">
           Hay {allCount} alerta(s) pero todas están marcadas como descartadas.
         </p>
-        <Button variant="outline" onClick={onClearDismissed}>Restaurar todas</Button>
+        <Button variant="outline" onClick={onClearDismissed}>
+          Restaurar todas
+        </Button>
       </div>
     );
   }
@@ -105,26 +123,42 @@ export function AlertsModalBody({
               key={alert.id}
               className="flex items-start gap-3 p-4 bg-white hover:bg-slate-50 transition-colors"
             >
-              <div className={`p-2 rounded-lg shrink-0 ${
-                alert.severity === 'critical' ? 'bg-red-50' :
-                alert.severity === 'warning' ? 'bg-amber-50' : 'bg-sky-50'
-              }`}>
-                <Icon className={`w-4 h-4 ${
-                  alert.severity === 'critical' ? 'text-red-600' :
-                  alert.severity === 'warning' ? 'text-amber-600' : 'text-sky-600'
-                }`} />
+              <div
+                className={`p-2 rounded-lg shrink-0 ${
+                  alert.severity === "critical"
+                    ? "bg-red-50"
+                    : alert.severity === "warning"
+                      ? "bg-amber-50"
+                      : "bg-sky-50"
+                }`}
+              >
+                <Icon
+                  className={`w-4 h-4 ${
+                    alert.severity === "critical"
+                      ? "text-red-600"
+                      : alert.severity === "warning"
+                        ? "text-amber-600"
+                        : "text-sky-600"
+                  }`}
+                />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="text-sm font-semibold text-slate-900 truncate">{alert.title}</h4>
-                  <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${badge.cls}`}>
+                  <h4 className="text-sm font-semibold text-slate-900 truncate">
+                    {alert.title}
+                  </h4>
+                  <span
+                    className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${badge.cls}`}
+                  >
                     {badge.label}
                   </span>
                   <span className="text-[10px] font-medium text-slate-400 uppercase">
                     {ALERT_CATEGORY_LABEL[alert.category]}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5 truncate">{alert.description}</p>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                  {alert.description}
+                </p>
               </div>
               <button
                 type="button"
@@ -141,9 +175,15 @@ export function AlertsModalBody({
 
       <div className="flex justify-between items-center pt-2">
         <p className="text-xs text-slate-400">
-          Las alertas se recalculan automáticamente al cambiar contratos o facturas.
+          Las alertas se recalculan automáticamente al cambiar contratos o
+          facturas.
         </p>
-        <Button variant="outline" size="sm" onClick={onNavigateToAlerts} className="gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onNavigateToAlerts}
+          className="gap-1"
+        >
           Ir a Alertas <ExternalLink className="w-3 h-3" />
         </Button>
       </div>

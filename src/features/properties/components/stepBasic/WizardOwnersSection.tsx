@@ -1,12 +1,12 @@
 // filepath: src/features/properties/components/stepBasic/WizardOwnersSection.tsx
-import { Plus, Trash2, User, Phone, Mail, IdCard, Percent } from 'lucide-react';
-import { Button } from '../../../../shared/ui';
-import type { WizardOwner } from '../StepBasic';
+import { Plus, Trash2, User, Phone, Mail, IdCard, Percent } from "lucide-react";
+import { Button } from "../../../../shared/ui";
+import type { WizardOwner } from "../StepBasic";
 
 export interface WizardOwnersSectionProps {
   owners: WizardOwner[];
   setOwners: (v: WizardOwner[]) => void;
-  showToast: (msg: string, type?: 'success' | 'error') => void;
+  showToast: (msg: string, type?: "success" | "error") => void;
 }
 
 const genWizardId = (prefix: string) =>
@@ -18,23 +18,27 @@ const genWizardId = (prefix: string) =>
  * participación. El padre pasa el estado + setter; este componente define
  * las operaciones add/remove/update internamente.
  */
-export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwnersSectionProps) {
+export function WizardOwnersSection({
+  owners,
+  setOwners,
+  showToast,
+}: WizardOwnersSectionProps) {
   const addOwner = () => {
     setOwners([
       ...owners,
       {
-        id: genWizardId('wizard-owner'),
-        name: '',
-        idNumber: '',
-        phone: '',
-        email: '',
-        ownershipPct: '',
+        id: genWizardId("wizard-owner"),
+        name: "",
+        idNumber: "",
+        phone: "",
+        email: "",
+        ownershipPct: "",
       },
     ]);
   };
   const removeOwner = (idx: number) => {
     if (owners.length === 1) {
-      showToast('Tiene que haber al menos un propietario', 'error');
+      showToast("Tiene que haber al menos un propietario", "error");
       return;
     }
     setOwners(owners.filter((_, i) => i !== idx));
@@ -52,7 +56,7 @@ export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwne
           </p>
           <p className="text-xs text-slate-500 mt-0.5">
             {owners.length === 1
-              ? '1 propietario registrado. Agregá más si la propiedad tiene varios dueños.'
+              ? "1 propietario registrado. Agregá más si la propiedad tiene varios dueños."
               : `${owners.length} propietarios registrados. Cada uno firma el Contrato de Mandato (PDF multi-firmado).`}
           </p>
         </div>
@@ -107,9 +111,7 @@ export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwne
                   className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   placeholder="Ej: Tatiana Prieto"
                   value={o.name}
-                  onChange={(e) =>
-                    updateOwner(idx, { name: e.target.value })
-                  }
+                  onChange={(e) => updateOwner(idx, { name: e.target.value })}
                 />
               </div>
             </div>
@@ -139,9 +141,7 @@ export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwne
                   className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   placeholder="Ej: 300 123 4567"
                   value={o.phone}
-                  onChange={(e) =>
-                    updateOwner(idx, { phone: e.target.value })
-                  }
+                  onChange={(e) => updateOwner(idx, { phone: e.target.value })}
                 />
               </div>
             </div>
@@ -155,9 +155,7 @@ export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwne
                   className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   placeholder="ejemplo@correo.com"
                   value={o.email}
-                  onChange={(e) =>
-                    updateOwner(idx, { email: e.target.value })
-                  }
+                  onChange={(e) => updateOwner(idx, { email: e.target.value })}
                 />
               </div>
             </div>
@@ -178,8 +176,8 @@ export function WizardOwnersSection({ owners, setOwners, showToast }: WizardOwne
                 />
               </div>
               <p className="text-[10px] text-slate-400">
-                Si hay 2+ dueños y definís %, la suma tiene que ser 100. Si
-                los dejás vacíos, se asume 100% al primer propietario.
+                Si hay 2+ dueños y definís %, la suma tiene que ser 100. Si los
+                dejás vacíos, se asume 100% al primer propietario.
               </p>
             </div>
           </div>

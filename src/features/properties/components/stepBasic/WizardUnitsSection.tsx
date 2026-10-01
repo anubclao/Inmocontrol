@@ -1,7 +1,7 @@
 // filepath: src/features/properties/components/stepBasic/WizardUnitsSection.tsx
-import { Trash2, Car, Package, Box } from 'lucide-react';
-import type { PropertyUnitType } from '../../../../types';
-import type { WizardUnit } from '../StepBasic';
+import { Trash2, Car, Package, Box } from "lucide-react";
+import type { PropertyUnitType } from "../../../../types";
+import type { WizardUnit } from "../StepBasic";
 
 export interface WizardUnitsSectionProps {
   units: WizardUnit[];
@@ -13,9 +13,9 @@ const UNIT_TYPE_LABELS: Record<
   PropertyUnitType,
   { label: string; icon: typeof Car }
 > = {
-  parking: { label: 'Garaje', icon: Car },
-  storage: { label: 'Depósito', icon: Package },
-  other: { label: 'Otro', icon: Box },
+  parking: { label: "Garaje", icon: Car },
+  storage: { label: "Depósito", icon: Package },
+  other: { label: "Otro", icon: Box },
 };
 
 const genWizardId = (prefix: string) =>
@@ -27,16 +27,19 @@ const genWizardId = (prefix: string) =>
  * y área m². El padre pasa el estado + setter; este componente define
  * las operaciones add/remove/update internamente.
  */
-export function WizardUnitsSection({ units, setUnits }: WizardUnitsSectionProps) {
+export function WizardUnitsSection({
+  units,
+  setUnits,
+}: WizardUnitsSectionProps) {
   const addUnit = (type: PropertyUnitType) => {
     setUnits([
       ...units,
       {
-        id: genWizardId('wizard-unit'),
+        id: genWizardId("wizard-unit"),
         type,
-        label: '',
-        folioMatricula: '',
-        areaM2: '',
+        label: "",
+        folioMatricula: "",
+        areaM2: "",
       },
     ]);
   };
@@ -55,28 +58,28 @@ export function WizardUnitsSection({ units, setUnits }: WizardUnitsSectionProps)
             Unidades adicionales
           </p>
           <p className="text-xs text-slate-500 mt-0.5">
-            Garajes, depósitos u otros con matrícula propia. Cada uno
-            requiere su propio Certificado de Tradición.
+            Garajes, depósitos u otros con matrícula propia. Cada uno requiere
+            su propio Certificado de Tradición.
           </p>
         </div>
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => addUnit('parking')}
+            onClick={() => addUnit("parking")}
             className="px-2.5 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1"
           >
             <Car className="w-3.5 h-3.5" />+ Garaje
           </button>
           <button
             type="button"
-            onClick={() => addUnit('storage')}
+            onClick={() => addUnit("storage")}
             className="px-2.5 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1"
           >
             <Package className="w-3.5 h-3.5" />+ Depósito
           </button>
           <button
             type="button"
-            onClick={() => addUnit('other')}
+            onClick={() => addUnit("other")}
             className="px-2.5 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1"
           >
             <Box className="w-3.5 h-3.5" />+ Otro
@@ -86,8 +89,8 @@ export function WizardUnitsSection({ units, setUnits }: WizardUnitsSectionProps)
 
       {units.length === 0 ? (
         <div className="p-3 bg-slate-50 border border-dashed border-slate-200 rounded-lg text-xs text-slate-500 text-center">
-          Sin unidades adicionales. Si la propiedad solo es el
-          apartamento/casa, dejá esto vacío.
+          Sin unidades adicionales. Si la propiedad solo es el apartamento/casa,
+          dejá esto vacío.
         </div>
       ) : (
         <div className="space-y-3">
@@ -125,11 +128,11 @@ export function WizardUnitsSection({ units, setUnits }: WizardUnitsSectionProps)
                     <input
                       className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                       placeholder={
-                        u.type === 'parking'
-                          ? 'Ej: Garaje 12'
-                          : u.type === 'storage'
-                            ? 'Ej: Depósito 3B'
-                            : 'Ej: Cuarto útil'
+                        u.type === "parking"
+                          ? "Ej: Garaje 12"
+                          : u.type === "storage"
+                            ? "Ej: Depósito 3B"
+                            : "Ej: Cuarto útil"
                       }
                       value={u.label}
                       onChange={(e) =>

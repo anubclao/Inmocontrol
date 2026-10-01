@@ -1,5 +1,5 @@
 // filepath: src/features/properties/components/areaEditor/RemoveItemModal.tsx
-import { Button, Input, Modal } from '../../../../shared/ui';
+import { Button, Input, Modal } from "../../../../shared/ui";
 
 export interface RemoveItemModalState {
   itemId: string;
@@ -38,11 +38,13 @@ export function RemoveItemModal({
       {state && (
         <div className="space-y-4">
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
-            Vas a marcar <strong>{state.label}</strong> como "no aplica" en este inmueble.
+            Vas a marcar <strong>{state.label}</strong> como "no aplica" en este
+            inmueble.
             <br />
             <span className="text-xs text-amber-700">
-              Úsalo cuando el item no existe físicamente (ej: este apto no tiene tina, no tiene horno, etc.).
-              Quedará registrado en el PDF como excluido con tu motivo.
+              Úsalo cuando el item no existe físicamente (ej: este apto no tiene
+              tina, no tiene horno, etc.). Quedará registrado en el PDF como
+              excluido con tu motivo.
             </span>
           </div>
 

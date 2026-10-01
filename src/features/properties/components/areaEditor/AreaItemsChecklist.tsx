@@ -1,21 +1,21 @@
 // filepath: src/features/properties/components/areaEditor/AreaItemsChecklist.tsx
-import type { RefObject } from 'react';
-import { Camera, Video, X, Eye, Trash2 } from 'lucide-react';
+import type { RefObject } from "react";
+import { Camera, Video, X, Eye, Trash2 } from "lucide-react";
 import {
   ITEM_STATUS_COLOR,
   ITEM_STATUS_LABEL,
   MATERIAL_CATALOG,
   type ItemDef,
   type ItemStatus,
-} from '../../inventoryConfig';
+} from "../../inventoryConfig";
 import type {
   InventoryArea,
   InventoryItem,
   ItemMedia,
-} from '../../inventoryTypes';
-import { RemovedItemRow } from './RemovedItemRow';
+} from "../../inventoryTypes";
+import { RemovedItemRow } from "./RemovedItemRow";
 
-const STATUSES: ItemStatus[] = ['bueno', 'regular', 'malo', 'na'];
+const STATUSES: ItemStatus[] = ["bueno", "regular", "malo", "na"];
 
 /** Compat: si el item viejo no tiene `qty`, `material`, `observations`,
  *  devuelve defaults razonables al renderizar. */
@@ -26,13 +26,13 @@ function fillItemDefaults(
   return {
     id: def.id,
     label: def.label,
-    status: raw?.status ?? 'na',
+    status: raw?.status ?? "na",
     qty: raw?.qty ?? 1,
-    material: raw?.material ?? '',
-    observations: raw?.observations ?? raw?.notes ?? '',
+    material: raw?.material ?? "",
+    observations: raw?.observations ?? raw?.notes ?? "",
     media: raw?.media ?? [],
     removed: raw?.removed ?? false,
-    removalReason: raw?.removalReason ?? '',
+    removalReason: raw?.removalReason ?? "",
   };
 }
 
@@ -44,7 +44,11 @@ export interface AreaItemsChecklistHandlers {
   setItemObservations: (itemId: string, observations: string) => void;
   onRequestRemoveItem: (itemId: string, label: string) => void;
   onRestoreItem: (itemId: string) => void;
-  onAddItemMedia: (itemId: string, file: File, kind: 'photo' | 'video') => Promise<void> | void;
+  onAddItemMedia: (
+    itemId: string,
+    file: File,
+    kind: "photo" | "video",
+  ) => Promise<void> | void;
   onRemoveItemMedia: (itemId: string, mediaId: string) => Promise<void> | void;
   onViewMedia: (m: ItemMedia) => void;
 }
@@ -57,8 +61,12 @@ export interface AreaItemsChecklistProps {
   setMediaTargetItemId: (id: string | null) => void;
   itemPhotoInputRef: RefObject<HTMLInputElement | null>;
   itemVideoInputRef: RefObject<HTMLInputElement | null>;
-  onItemPhotoFile: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void> | void;
-  onItemVideoFile: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void> | void;
+  onItemPhotoFile: (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => Promise<void> | void;
+  onItemVideoFile: (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => Promise<void> | void;
 }
 
 /**
@@ -100,24 +108,35 @@ export function AreaItemsChecklist({
         }
 
         return (
-          <div key={item.id} className="p-3 bg-slate-50 rounded-lg border border-slate-100 space-y-2">
+          <div
+            key={item.id}
+            className="p-3 bg-slate-50 rounded-lg border border-slate-100 space-y-2"
+          >
             {/* Fila 1: Label + Cantidad + Estado + Acciones */}
             <div className="flex items-start gap-2">
-              <p className="text-sm font-bold text-slate-900 flex-1 min-w-0">{item.label}</p>
+              <p className="text-sm font-bold text-slate-900 flex-1 min-w-0">
+                {item.label}
+              </p>
               <div className="w-14 flex-shrink-0">
-                <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Cant.</label>
+                <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">
+                  Cant.
+                </label>
                 <input
                   type="number"
                   min="1"
                   value={current.qty}
-                  onChange={(e) => handlers.setItemQty(item.id, Number(e.target.value))}
+                  onChange={(e) =>
+                    handlers.setItemQty(item.id, Number(e.target.value))
+                  }
                   className="w-full px-1.5 py-1 bg-white border border-slate-200 rounded text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
               {/* Botón "no aplica" — saca el item del inventario */}
               <button
                 type="button"
-                onClick={() => handlers.onRequestRemoveItem(item.id, item.label)}
+                onClick={() =>
+                  handlers.onRequestRemoveItem(item.id, item.label)
+                }
                 className="flex-shrink-0 self-end p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-colors"
                 title="Marcar como 'No aplica en este inmueble' (ej: este apto no tiene tina)"
               >
@@ -127,21 +146,29 @@ export function AreaItemsChecklist({
             <div className="grid grid-cols-2 gap-2">
               {materialOptions.length > 0 && (
                 <div>
-                  <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Material</label>
+                  <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">
+                    Material
+                  </label>
                   <select
-                    value={current.material ?? ''}
-                    onChange={(e) => handlers.setItemMaterial(item.id, e.target.value)}
+                    value={current.material ?? ""}
+                    onChange={(e) =>
+                      handlers.setItemMaterial(item.id, e.target.value)
+                    }
                     className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   >
                     <option value="">— Seleccionar —</option>
                     {materialOptions.map((m) => (
-                      <option key={m} value={m}>{m}</option>
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
                     ))}
                   </select>
                 </div>
               )}
               <div>
-                <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">Estado</label>
+                <label className="text-[9px] uppercase text-slate-500 font-bold block leading-tight mb-0.5">
+                  Estado
+                </label>
                 <div className="grid grid-cols-4 gap-1">
                   {STATUSES.map((s) => (
                     <button
@@ -150,8 +177,8 @@ export function AreaItemsChecklist({
                       onClick={() => handlers.setItemStatus(item.id, s)}
                       className={`py-1 text-[9px] font-bold rounded uppercase transition-all ${
                         current.status === s
-                          ? ITEM_STATUS_COLOR[s] + ' shadow-sm'
-                          : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-400'
+                          ? ITEM_STATUS_COLOR[s] + " shadow-sm"
+                          : "bg-white text-slate-500 border border-slate-200 hover:border-slate-400"
                       }`}
                       title={ITEM_STATUS_LABEL[s]}
                     >
@@ -164,8 +191,10 @@ export function AreaItemsChecklist({
             {/* Fila 2: Observaciones */}
             <input
               type="text"
-              value={current.observations ?? ''}
-              onChange={(e) => handlers.setItemObservations(item.id, e.target.value)}
+              value={current.observations ?? ""}
+              onChange={(e) =>
+                handlers.setItemObservations(item.id, e.target.value)
+              }
               placeholder="Observaciones (rayones, manchas, piezas faltantes...)"
               className="w-full px-2 py-1 bg-white border border-slate-200 rounded text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
@@ -198,7 +227,7 @@ export function AreaItemsChecklist({
               </button>
               {itemMedia.length > 0 && (
                 <span className="text-[10px] text-slate-500 ml-1">
-                  {itemMedia.length} adjunto{itemMedia.length === 1 ? '' : 's'}
+                  {itemMedia.length} adjunto{itemMedia.length === 1 ? "" : "s"}
                 </span>
               )}
             </div>
@@ -211,9 +240,13 @@ export function AreaItemsChecklist({
                     key={m.id}
                     className="relative group aspect-square bg-slate-200 rounded overflow-hidden border border-slate-200"
                   >
-                    {m.type === 'video' ? (
+                    {m.type === "video" ? (
                       <>
-                        <img src={m.dataUrl} alt="" className="w-full h-full object-cover" />
+                        <img
+                          src={m.dataUrl}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
                         <div className="absolute inset-0 bg-slate-900/30 flex items-center justify-center pointer-events-none">
                           <div className="w-6 h-6 rounded-full bg-white/90 flex items-center justify-center">
                             <Video className="w-3 h-3 text-slate-700" />
@@ -226,7 +259,11 @@ export function AreaItemsChecklist({
                         ) : null}
                       </>
                     ) : (
-                      <img src={m.dataUrl} alt="" className="w-full h-full object-cover" />
+                      <img
+                        src={m.dataUrl}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
                     )}
                     <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/40 transition-colors flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
                       <button
@@ -238,7 +275,9 @@ export function AreaItemsChecklist({
                       </button>
                       <button
                         type="button"
-                        onClick={() => void handlers.onRemoveItemMedia(item.id, m.id)}
+                        onClick={() =>
+                          void handlers.onRemoveItemMedia(item.id, m.id)
+                        }
                         className="p-1 bg-white rounded text-slate-700 hover:text-red-600"
                       >
                         <Trash2 className="w-3 h-3" />
@@ -248,7 +287,6 @@ export function AreaItemsChecklist({
                 ))}
               </div>
             )}
-
           </div>
         );
       })}

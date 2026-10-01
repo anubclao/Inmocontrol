@@ -1,18 +1,23 @@
 // filepath: src/features/properties/components/SignatureStep.tsx
-import { CheckCircle, FileText, Share2 } from 'lucide-react';
-import { Button } from '../../../shared/ui';
-import { useSettingsStore } from '../../../shared/store/settingsStore';
-import type { Inventory, Signature } from '../inventoryTypes';
-import { useSignatureStep } from './signatureStep/useSignatureStep';
-import { SignerCard } from './signatureStep/SignerCard';
-import { LegalTextsCard } from './signatureStep/LegalTextsCard';
-import { SharePdfModal } from './signatureStep/SharePdfModal';
+import { CheckCircle, FileText, Share2 } from "lucide-react";
+import { Button } from "../../../shared/ui";
+import { useSettingsStore } from "../../../shared/store/settingsStore";
+import type { Inventory, Signature } from "../inventoryTypes";
+import { useSignatureStep } from "./signatureStep/useSignatureStep";
+import { SignerCard } from "./signatureStep/SignerCard";
+import { LegalTextsCard } from "./signatureStep/LegalTextsCard";
+import { SharePdfModal } from "./signatureStep/SharePdfModal";
 
 interface SignatureStepProps {
   inventory: Inventory;
   propertyOwner?: string;
   propertyOwnerIdNumber?: string;
-  tenantData?: { name: string; idNumber: string; email?: string; phone?: string } | null;
+  tenantData?: {
+    name: string;
+    idNumber: string;
+    email?: string;
+    phone?: string;
+  } | null;
   onSaveSignatures: (signatures: Signature[]) => void;
   onGeneratePDF: () => void;
   onBack: () => void;
@@ -50,9 +55,12 @@ export function SignatureStep({
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-bold text-slate-900">Firmas del Inventario {isFinal ? 'Final' : 'Inicial'}</h3>
+        <h3 className="text-lg font-bold text-slate-900">
+          Firmas del Inventario {isFinal ? "Final" : "Inicial"}
+        </h3>
         <p className="text-sm text-slate-500">
-          Las partes firman en conformidad con el estado del inmueble descrito y los textos jurídicos adjuntos.
+          Las partes firman en conformidad con el estado del inmueble descrito y
+          los textos jurídicos adjuntos.
         </p>
       </div>
 
@@ -68,12 +76,18 @@ export function SignatureStep({
       {/* ── Firmante: Arrendatario ───────────────────────────────── */}
       <SignerCard
         title="Arrendatario"
-        name={tenant.name} onName={tenant.setName}
-        idNumber={tenant.idNumber} onIdNumber={tenant.setIdNumber}
-        phone={tenant.phone} onPhone={tenant.setPhone}
-        email={tenant.email} onEmail={tenant.setEmail}
-        photo={tenant.photo} onPhoto={tenant.setPhoto}
-        padRef={tenant.padRef} onValid={tenant.setValid}
+        name={tenant.name}
+        onName={tenant.setName}
+        idNumber={tenant.idNumber}
+        onIdNumber={tenant.setIdNumber}
+        phone={tenant.phone}
+        onPhone={tenant.setPhone}
+        email={tenant.email}
+        onEmail={tenant.setEmail}
+        photo={tenant.photo}
+        onPhoto={tenant.setPhoto}
+        padRef={tenant.padRef}
+        onValid={tenant.setValid}
         onFieldsValid={tenant.setFieldsValid}
         fileInputRef={tenant.fileInputRef}
         onUploadPhoto={tenant.onUploadPhoto}
@@ -82,13 +96,19 @@ export function SignatureStep({
 
       {/* ── Firmante: Agente (representante de la agencia) ─────── */}
       <SignerCard
-        title={`Agente (${profile.role || 'Representante de la agencia'})`}
-        name={agent.name} onName={agent.setName}
-        idNumber={agent.idNumber} onIdNumber={agent.setIdNumber}
-        phone={agent.phone} onPhone={agent.setPhone}
-        email={agent.email} onEmail={agent.setEmail}
-        photo={agent.photo} onPhoto={agent.setPhoto}
-        padRef={agent.padRef} onValid={agent.setValid}
+        title={`Agente (${profile.role || "Representante de la agencia"})`}
+        name={agent.name}
+        onName={agent.setName}
+        idNumber={agent.idNumber}
+        onIdNumber={agent.setIdNumber}
+        phone={agent.phone}
+        onPhone={agent.setPhone}
+        email={agent.email}
+        onEmail={agent.setEmail}
+        photo={agent.photo}
+        onPhoto={agent.setPhoto}
+        padRef={agent.padRef}
+        onValid={agent.setValid}
         onFieldsValid={agent.setFieldsValid}
         fileInputRef={agent.fileInputRef}
         onUploadPhoto={agent.onUploadPhoto}
@@ -115,7 +135,9 @@ export function SignatureStep({
       )}
 
       <div className="flex flex-wrap gap-3">
-        <Button variant="outline" onClick={onBack}>← Volver al inventario</Button>
+        <Button variant="outline" onClick={onBack}>
+          ← Volver al inventario
+        </Button>
         <div className="flex-1" />
         <Button
           onClick={handleFinish}

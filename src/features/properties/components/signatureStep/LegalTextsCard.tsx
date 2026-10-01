@@ -1,7 +1,7 @@
 // filepath: src/features/properties/components/signatureStep/LegalTextsCard.tsx
-import { FileText, ChevronDown, ChevronUp } from 'lucide-react';
-import { Card } from '../../../../shared/ui';
-import { LEGAL_TEXTS } from './legalTexts';
+import { FileText, ChevronDown, ChevronUp } from "lucide-react";
+import { Card } from "../../../../shared/ui";
+import { LEGAL_TEXTS } from "./legalTexts";
 
 export interface LegalTextsCardProps {
   propertyLabel: string;
@@ -35,23 +35,29 @@ export function LegalTextsCard({
         <div className="flex items-center gap-3">
           <FileText className="w-5 h-5 text-blue-600" />
           <div className="text-left">
-            <p className="font-bold text-slate-900">Textos Jurídicos del Inventario</p>
+            <p className="font-bold text-slate-900">
+              Textos Jurídicos del Inventario
+            </p>
             <p className="text-xs text-slate-500">
               {accepted
-                ? 'Aceptados. Las partes firman en conformidad con los textos.'
-                : 'Obligatorio leer y aceptar antes de firmar.'}
+                ? "Aceptados. Las partes firman en conformidad con los textos."
+                : "Obligatorio leer y aceptar antes de firmar."}
             </p>
           </div>
         </div>
-        {expanded ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}
+        {expanded ? (
+          <ChevronUp className="w-5 h-5 text-slate-400" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-slate-400" />
+        )}
       </button>
       {expanded && (
         <div className="border-t border-slate-100 p-4 max-h-96 overflow-y-auto bg-slate-50">
           <div className="space-y-4 text-sm text-slate-700 leading-relaxed">
             {LEGAL_TEXTS.map((t) => {
               const body = t.body
-                .replaceAll('{propertyType}', propertyLabel)
-                .replaceAll('{empresa}', '{nombre de la agencia}');
+                .replaceAll("{propertyType}", propertyLabel)
+                .replaceAll("{empresa}", "{nombre de la agencia}");
               return (
                 <div key={t.title}>
                   <p className="font-bold text-slate-900 mb-1">{t.title}.</p>
@@ -68,7 +74,8 @@ export function LegalTextsCard({
               className="mt-0.5 w-4 h-4"
             />
             <span className="text-sm text-slate-700">
-              Declaro haber leído y aceptado los textos jurídicos anteriores. Las partes firman en conformidad.
+              Declaro haber leído y aceptado los textos jurídicos anteriores.
+              Las partes firman en conformidad.
             </span>
           </label>
         </div>
@@ -82,7 +89,9 @@ export function LegalTextsCard({
               onChange={(e) => onAcceptChange(e.target.checked)}
               className="w-4 h-4"
             />
-            <span className="text-sm text-slate-700">Acepto los textos jurídicos del inventario.</span>
+            <span className="text-sm text-slate-700">
+              Acepto los textos jurídicos del inventario.
+            </span>
           </label>
         </div>
       )}

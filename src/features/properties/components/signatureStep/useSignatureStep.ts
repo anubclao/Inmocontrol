@@ -1,10 +1,17 @@
 // filepath: src/features/properties/components/signatureStep/useSignatureStep.ts
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type RefObject } from 'react';
-import type { SignaturePadRef } from '../../SignaturePad';
-import { compressImage } from '../../imageCompress';
-import { useSettingsStore } from '../../../../shared/store/settingsStore';
-import type { Inventory, Signature } from '../../inventoryTypes';
-import { PROPERTY_TYPE_LABEL } from './legalTexts';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type RefObject,
+} from "react";
+import type { SignaturePadRef } from "../../SignaturePad";
+import { compressImage } from "../../imageCompress";
+import { useSettingsStore } from "../../../../shared/store/settingsStore";
+import type { Inventory, Signature } from "../../inventoryTypes";
+import { PROPERTY_TYPE_LABEL } from "./legalTexts";
 
 export type TenantData = {
   name: string;
@@ -65,11 +72,11 @@ export interface UseSignatureStepResult {
 
 function slugify(s: string): string {
   return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 /**
@@ -90,20 +97,28 @@ export function useSignatureStep({
   const agentFileInput = useRef<HTMLInputElement>(null);
 
   // ── Tenant state ──
-  const [tenantName, setTenantName] = useState(tenantData?.name ?? inventory.tenantName ?? '');
-  const [tenantId, setTenantId] = useState(tenantData?.idNumber ?? inventory.tenantId ?? '');
-  const [tenantPhone, setTenantPhone] = useState(tenantData?.phone ?? '');
-  const [tenantEmail, setTenantEmail] = useState(tenantData?.email ?? '');
+  const [tenantName, setTenantName] = useState(
+    tenantData?.name ?? inventory.tenantName ?? "",
+  );
+  const [tenantId, setTenantId] = useState(
+    tenantData?.idNumber ?? inventory.tenantId ?? "",
+  );
+  const [tenantPhone, setTenantPhone] = useState(tenantData?.phone ?? "");
+  const [tenantEmail, setTenantEmail] = useState(tenantData?.email ?? "");
   const [tenantPhoto, setTenantPhoto] = useState<string | null>(null);
   const [tenantValid, setTenantValid] = useState(false);
   const [tenantFieldsValid, setTenantFieldsValid] = useState(false);
 
   // ── Agent state ──
-  const [agentName, setAgentName] = useState(inventory.agentName ?? profile.name);
-  const [agentId, setAgentId] = useState('');
+  const [agentName, setAgentName] = useState(
+    inventory.agentName ?? profile.name,
+  );
+  const [agentId, setAgentId] = useState("");
   const [agentPhone, setAgentPhone] = useState(profile.phone);
   const [agentEmail, setAgentEmail] = useState(profile.email);
-  const [agentPhoto, setAgentPhoto] = useState<string | null>(profile.photoDataUrl ?? null);
+  const [agentPhoto, setAgentPhoto] = useState<string | null>(
+    profile.photoDataUrl ?? null,
+  );
   const [agentValid, setAgentValid] = useState(false);
   const [agentFieldsValid, setAgentFieldsValid] = useState(false);
 
@@ -130,15 +145,15 @@ export function useSignatureStep({
   }, [profile.photoDataUrl, agentPhoto]);
 
   // ── Handlers ──
-  const makePhotoUpload = (
-    setter: (v: string | null) => void,
-  ) => async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    const dataUrl = await compressImage(file);
-    setter(dataUrl);
-    if (e.target) e.target.value = '';
-  };
+  const makePhotoUpload =
+    (setter: (v: string | null) => void) =>
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !file.type.startsWith("image/")) return;
+      const dataUrl = await compressImage(file);
+      setter(dataUrl);
+      if (e.target) e.target.value = "";
+    };
 
   const handleFinish = () => {
     const tenantDataUrl = tenantPad.current?.toDataURL();
@@ -146,13 +161,13 @@ export function useSignatureStep({
     if (!tenantDataUrl || !agentDataUrl) return;
 
     const now = new Date().toISOString();
-    const tenantSlug = slugify(tenantName.trim() || 'arrendatario');
-    const agentSlug = slugify(agentName.trim() || 'agente');
+    const tenantSlug = slugify(tenantName.trim() || "arrendatario");
+    const agentSlug = slugify(agentName.trim() || "agente");
 
     const signatures: Signature[] = [
       {
         signerName: tenantName.trim(),
-        signerRole: 'arrendatario',
+        signerRole: "arrendatario",
         signerIdNumber: tenantId || undefined,
         signerPhone: tenantPhone || undefined,
         signerEmail: tenantEmail || undefined,
@@ -164,7 +179,7 @@ export function useSignatureStep({
       },
       {
         signerName: agentName.trim(),
-        signerRole: 'agente',
+        signerRole: "agente",
         signerIdNumber: agentId || undefined,
         signerPhone: agentPhone || undefined,
         signerEmail: agentEmail || undefined,
@@ -179,55 +194,90 @@ export function useSignatureStep({
   };
 
   // ── Derived ──
-  const isFinal = inventory.phase === 'final';
+  const isFinal = inventory.phase === "final";
   const allValid =
-    tenantFieldsValid && agentFieldsValid &&
-    tenantValid && agentValid &&
-    !!tenantPhoto && !!agentPhoto;
+    tenantFieldsValid &&
+    agentFieldsValid &&
+    tenantValid &&
+    agentValid &&
+    !!tenantPhoto &&
+    !!agentPhoto;
   const allNamesValid = !!tenantName.trim() && !!agentName.trim();
 
   const missingReasons = useMemo<string[]>(() => {
     const out: string[] = [];
-    if (!tenantFieldsValid) out.push('Revisá los datos del arrendatario (cédula/teléfono/correo/nombre)');
-    if (!agentFieldsValid) out.push('Revisá los datos del agente (cédula/teléfono/correo/nombre)');
-    if (!tenantValid) out.push('Falta la firma del arrendatario');
-    if (!agentValid) out.push('Falta la firma del agente');
-    if (!tenantPhoto) out.push('Falta la foto del arrendatario');
-    if (!agentPhoto) out.push('Falta la foto del agente');
-    if (!legalAccepted) out.push('Aceptá los textos jurídicos');
+    if (!tenantFieldsValid)
+      out.push(
+        "Revisá los datos del arrendatario (cédula/teléfono/correo/nombre)",
+      );
+    if (!agentFieldsValid)
+      out.push("Revisá los datos del agente (cédula/teléfono/correo/nombre)");
+    if (!tenantValid) out.push("Falta la firma del arrendatario");
+    if (!agentValid) out.push("Falta la firma del agente");
+    if (!tenantPhoto) out.push("Falta la foto del arrendatario");
+    if (!agentPhoto) out.push("Falta la foto del agente");
+    if (!legalAccepted) out.push("Aceptá los textos jurídicos");
     return out;
-  }, [tenantFieldsValid, agentFieldsValid, tenantValid, agentValid, tenantPhoto, agentPhoto, legalAccepted]);
+  }, [
+    tenantFieldsValid,
+    agentFieldsValid,
+    tenantValid,
+    agentValid,
+    tenantPhoto,
+    agentPhoto,
+    legalAccepted,
+  ]);
 
-  const propertyLabel = PROPERTY_TYPE_LABEL[inventory.propertyType] ?? 'inmueble';
+  const propertyLabel =
+    PROPERTY_TYPE_LABEL[inventory.propertyType] ?? "inmueble";
 
   return {
     tenant: {
-      name: tenantName, setName: setTenantName,
-      idNumber: tenantId, setIdNumber: setTenantId,
-      phone: tenantPhone, setPhone: setTenantPhone,
-      email: tenantEmail, setEmail: setTenantEmail,
-      photo: tenantPhoto, setPhoto: setTenantPhoto,
-      valid: tenantValid, setValid: setTenantValid,
-      fieldsValid: tenantFieldsValid, setFieldsValid: setTenantFieldsValid,
+      name: tenantName,
+      setName: setTenantName,
+      idNumber: tenantId,
+      setIdNumber: setTenantId,
+      phone: tenantPhone,
+      setPhone: setTenantPhone,
+      email: tenantEmail,
+      setEmail: setTenantEmail,
+      photo: tenantPhoto,
+      setPhoto: setTenantPhoto,
+      valid: tenantValid,
+      setValid: setTenantValid,
+      fieldsValid: tenantFieldsValid,
+      setFieldsValid: setTenantFieldsValid,
       padRef: tenantPad,
       fileInputRef: tenantFileInput,
       onUploadPhoto: makePhotoUpload(setTenantPhoto),
-      uploadLabel: 'Subir cédula (obligatorio)',
+      uploadLabel: "Subir cédula (obligatorio)",
     },
     agent: {
-      name: agentName, setName: setAgentName,
-      idNumber: agentId, setIdNumber: setAgentId,
-      phone: agentPhone, setPhone: setAgentPhone,
-      email: agentEmail, setEmail: setAgentEmail,
-      photo: agentPhoto, setPhoto: setAgentPhoto,
-      valid: agentValid, setValid: setAgentValid,
-      fieldsValid: agentFieldsValid, setFieldsValid: setAgentFieldsValid,
+      name: agentName,
+      setName: setAgentName,
+      idNumber: agentId,
+      setIdNumber: setAgentId,
+      phone: agentPhone,
+      setPhone: setAgentPhone,
+      email: agentEmail,
+      setEmail: setAgentEmail,
+      photo: agentPhoto,
+      setPhoto: setAgentPhoto,
+      valid: agentValid,
+      setValid: setAgentValid,
+      fieldsValid: agentFieldsValid,
+      setFieldsValid: setAgentFieldsValid,
       padRef: agentPad,
       fileInputRef: agentFileInput,
       onUploadPhoto: makePhotoUpload(setAgentPhoto),
-      uploadLabel: 'Subir foto (obligatorio)',
+      uploadLabel: "Subir foto (obligatorio)",
     },
-    legal: { accepted: legalAccepted, setAccepted: setLegalAccepted, expanded: legalExpanded, setExpanded: setLegalExpanded },
+    legal: {
+      accepted: legalAccepted,
+      setAccepted: setLegalAccepted,
+      expanded: legalExpanded,
+      setExpanded: setLegalExpanded,
+    },
     share: { open: shareModalOpen, setOpen: setShareModalOpen },
     propertyLabel,
     isFinal,

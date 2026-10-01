@@ -1,15 +1,15 @@
 // filepath: src/features/properties/components/AreaEditor.tsx
-import { Button } from '../../../shared/ui';
+import { Button } from "../../../shared/ui";
 import type {
   InventoryArea,
   InventoryPhoto,
   ItemMedia,
-} from '../inventoryTypes';
-import { AreaItemsChecklist } from './areaEditor/AreaItemsChecklist';
-import { AreaPhotosSection } from './areaEditor/AreaPhotosSection';
-import { RemoveItemModal } from './areaEditor/RemoveItemModal';
-import { MediaViewers } from './areaEditor/MediaViewers';
-import { useAreaEditor } from './areaEditor/useAreaEditor';
+} from "../inventoryTypes";
+import { AreaItemsChecklist } from "./areaEditor/AreaItemsChecklist";
+import { AreaPhotosSection } from "./areaEditor/AreaPhotosSection";
+import { RemoveItemModal } from "./areaEditor/RemoveItemModal";
+import { MediaViewers } from "./areaEditor/MediaViewers";
+import { useAreaEditor } from "./areaEditor/useAreaEditor";
 
 interface AreaEditorProps {
   area: InventoryArea;
@@ -37,9 +37,21 @@ interface AreaEditorProps {
 }
 
 export function AreaEditor({
-  area, index, total, recommendedPhotos, photos, onChange, onPhotosChange,
-  onAddPhoto, onRemovePhoto, onBack, onNext, onSkipToSign, hideSignatures,
-  onSaveItemMedia, onDeleteItemMedia,
+  area,
+  index,
+  total,
+  recommendedPhotos,
+  photos,
+  onChange,
+  onPhotosChange,
+  onAddPhoto,
+  onRemovePhoto,
+  onBack,
+  onNext,
+  onSkipToSign,
+  hideSignatures,
+  onSaveItemMedia,
+  onDeleteItemMedia,
 }: AreaEditorProps) {
   const {
     itemPhotoInputRef,
@@ -78,15 +90,27 @@ export function AreaEditor({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-bold text-slate-900">{area.label}</h3>
-          <p className="text-xs text-slate-500">Área {index + 1} de {total} · {removedItems > 0 && <span className="text-amber-600">{removedItems} ítem(s) no aplica</span>}</p>
+          <p className="text-xs text-slate-500">
+            Área {index + 1} de {total} ·{" "}
+            {removedItems > 0 && (
+              <span className="text-amber-600">
+                {removedItems} ítem(s) no aplica
+              </span>
+            )}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-xs text-slate-500 font-bold uppercase">Progreso</p>
-          <p className="text-sm font-bold text-blue-600">{Math.round(progress)}%</p>
+          <p className="text-sm font-bold text-blue-600">
+            {Math.round(progress)}%
+          </p>
         </div>
       </div>
       <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className="h-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
+        <div
+          className="h-full bg-blue-600 transition-all"
+          style={{ width: `${progress}%` }}
+        />
       </div>
 
       {/* Checklist de items */}
@@ -107,7 +131,7 @@ export function AreaEditor({
         photos={photos}
         areaId={area.id}
         recommendedPhotos={recommendedPhotos}
-        observations={area.observations ?? ''}
+        observations={area.observations ?? ""}
         onChangeObservations={(v) => onChange({ ...area, observations: v })}
         onAddPhoto={handleAddPhoto}
         onRemovePhoto={onRemovePhoto}
@@ -134,13 +158,15 @@ export function AreaEditor({
 
       {/* Navegación */}
       <div className="flex gap-3 pt-2">
-        <Button variant="outline" onClick={onBack} disabled={index === 0}>← Atrás</Button>
+        <Button variant="outline" onClick={onBack} disabled={index === 0}>
+          ← Atrás
+        </Button>
         <div className="flex-1" />
         {index < total - 1 ? (
           <Button onClick={onNext}>Siguiente área →</Button>
         ) : (
           <Button onClick={onSkipToSign}>
-            {hideSignatures ? 'Finalizar inventario →' : 'Ir a firmas →'}
+            {hideSignatures ? "Finalizar inventario →" : "Ir a firmas →"}
           </Button>
         )}
       </div>

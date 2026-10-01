@@ -1,6 +1,6 @@
 // filepath: src/features/properties/components/areaEditor/MediaViewers.tsx
-import { Modal } from '../../../../shared/ui';
-import type { InventoryPhoto, ItemMedia } from '../../inventoryTypes';
+import { Modal } from "../../../../shared/ui";
+import type { InventoryPhoto, ItemMedia } from "../../inventoryTypes";
 
 export interface MediaViewersProps {
   viewingPhoto: InventoryPhoto | null;
@@ -22,12 +22,20 @@ export function MediaViewers({
   return (
     <>
       {/* Visor de foto de área */}
-      <Modal isOpen={!!viewingPhoto} onClose={() => setViewingPhoto(null)} title="Foto">
+      <Modal
+        isOpen={!!viewingPhoto}
+        onClose={() => setViewingPhoto(null)}
+        title="Foto"
+      >
         {viewingPhoto && (
           <div className="space-y-2">
-            <img src={viewingPhoto.dataUrl} alt="" className="w-full rounded-lg" />
+            <img
+              src={viewingPhoto.dataUrl}
+              alt=""
+              className="w-full rounded-lg"
+            />
             <p className="text-xs text-slate-500 text-center">
-              {new Date(viewingPhoto.takenAt).toLocaleString('es-CO')}
+              {new Date(viewingPhoto.takenAt).toLocaleString("es-CO")}
             </p>
           </div>
         )}
@@ -37,10 +45,10 @@ export function MediaViewers({
       <Modal
         isOpen={!!viewingMedia}
         onClose={() => setViewingMedia(null)}
-        title={viewingMedia?.type === 'video' ? 'Video' : 'Foto'}
+        title={viewingMedia?.type === "video" ? "Video" : "Foto"}
         size="lg"
       >
-        {viewingMedia?.type === 'video' ? (
+        {viewingMedia?.type === "video" ? (
           <div className="space-y-2">
             {viewingMedia.videoDataUrl ? (
               <video
@@ -49,18 +57,28 @@ export function MediaViewers({
                 className="w-full rounded-lg bg-black max-h-[70vh]"
               />
             ) : (
-              <img src={viewingMedia.dataUrl} alt="" className="w-full rounded-lg" />
+              <img
+                src={viewingMedia.dataUrl}
+                alt=""
+                className="w-full rounded-lg"
+              />
             )}
             <p className="text-xs text-slate-500 text-center">
-              {viewingMedia.durationSec ? `Duración: ${viewingMedia.durationSec}s · ` : ''}
-              {new Date(viewingMedia.takenAt).toLocaleString('es-CO')}
+              {viewingMedia.durationSec
+                ? `Duración: ${viewingMedia.durationSec}s · `
+                : ""}
+              {new Date(viewingMedia.takenAt).toLocaleString("es-CO")}
             </p>
           </div>
         ) : viewingMedia ? (
           <div className="space-y-2">
-            <img src={viewingMedia.dataUrl} alt="" className="w-full rounded-lg" />
+            <img
+              src={viewingMedia.dataUrl}
+              alt=""
+              className="w-full rounded-lg"
+            />
             <p className="text-xs text-slate-500 text-center">
-              {new Date(viewingMedia.takenAt).toLocaleString('es-CO')}
+              {new Date(viewingMedia.takenAt).toLocaleString("es-CO")}
             </p>
           </div>
         ) : null}
