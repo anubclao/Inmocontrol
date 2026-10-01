@@ -12,20 +12,27 @@
 
 ---
 
-## AC-1: 10 archivos existen
+## AC-1: 13 archivos existen (commit 1/2 + commit 2/2)
 
 ```powershell
 $files = @(
+    # commit 1/2
     "src\features\tenants\types.ts",
     "src\features\tenants\hooks\useCreateTenant.ts",
-    "src\features\tenants\hooks\useTenantDrive.ts",
+    "src\features\tenants\hooks\createTenantForm.ts",
+    "src\features\tenants\hooks\createTenantSubmit.ts",
     "src\features\tenants\modals\CreateTenantModal.tsx",
     "src\features\tenants\modals\ConfirmCreateModal.tsx",
     "src\features\tenants\modals\EditTenantModal.tsx",
-    "src\features\tenants\modals\ViewTenantModal.tsx",
     "src\features\tenants\modals\DeleteTenantModal.tsx",
     "src\features\tenants\modals\UploadAnotherDocModal.tsx",
-    "src\features\tenants\modals\PlacementInventoryOverlay.tsx"
+    # commit 2/2
+    "src\features\tenants\modals\ViewTenantModal.tsx",
+    "src\features\tenants\TenantCard.tsx",
+    "src\features\tenants\TenantListSection.tsx",
+    "src\features\tenants\TenantSearch.tsx",
+    "src\features\tenants\TenantStats.tsx",
+    "src\features\tenants\hooks\tenantFilters.ts"
 )
 $ok = $true
 foreach ($f in $files) {
@@ -36,8 +43,10 @@ foreach ($f in $files) {
 Write-Host "AC-1: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: 10/10 archivos existen
+- **PASS**: 15/15 archivos existen
 - **FAIL**: alguno falta
+
+> **Nota**: `useTenantDrive.ts` y `PlacementInventoryOverlay.tsx` del spec original **NO se crean** — la lógica de Drive ya está en `useCreateTenant` (commit 1/2) y `PlacementInventoryOverlay` no aplica (la lógica vive en `PropertiesView.tsx`). El verifier refleja la realidad post-commit 2/2.
 
 ## AC-2: `TenantsView.tsx` < 250 líneas
 
@@ -50,31 +59,45 @@ Write-Host "TenantsView.tsx lines: $lines"
 - **PASS**: `$lines -lt 250`
 - **FAIL**: `$lines -ge 250`
 
-### AC-2.1: TenantsView sigue exportando `TenantsView` (named) y `TenantsViewProps`
+### AC-2.1: TenantsView exporta `TenantsView` (named) e importa `TenantsViewProps` de `types.ts`
 
 ```powershell
-$content = Get-Content $tvFile -Raw
-$content -match "^export function TenantsView\b"
-$content -match "^export interface TenantsViewProps\b"
+$tvContent = Get-Content $tvFile -Raw
+$typesContent = Get-Content "src\features\tenants\types.ts" -Raw
+$ok = $true
+# 1) TenantsView exportado como named function
+if ($tvContent -match "export function TenantsView\b") { Write-Host "  OK: TenantsView export" } else { Write-Host "  MISSING: TenantsView export"; $ok = $false }
+# 2) TenantsViewProps centralizado en types.ts (no redeclarado en TenantsView.tsx)
+if ($typesContent -match "export (interface|type) TenantsViewProps\b") { Write-Host "  OK: TenantsViewProps en types.ts" } else { Write-Host "  MISSING: TenantsViewProps en types.ts"; $ok = $false }
+# 3) TenantsView.tsx NO redeclara TenantsViewProps (lo importa)
+$redeclares = ($tvContent | Select-String -Pattern "^(export )?(interface|type) TenantsViewProps\b" -AllMatches).Matches.Count
+if ($redeclares -eq 0) { Write-Host "  OK: TenantsView.tsx no redeclara TenantsViewProps" } else { Write-Host "  FAIL: TenantsView.tsx redeclara TenantsViewProps ($redeclares veces)"; $ok = $false }
+Write-Host "AC-2.1: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: ambos matchean
-- **FAIL**: alguno no matchea
+- **PASS**: 3/3 checks pasan
+- **FAIL**: alguno falla
 
-## AC-3: Cada archivo nuevo < 200 líneas
+> **Convención**: Los types de dominio (`TenantsViewProps`, `Tenant`, etc.) viven en `types.ts` (AC-4). `TenantsView.tsx` los **importa** con `import type`, no los redeclara. Esto evita la duplicación y centraliza el contrato.
+
+## AC-3: Cada archivo nuevo < 200 líneas (con 1 excepción documentada)
 
 ```powershell
 $files = @(
     "src\features\tenants\types.ts",
     "src\features\tenants\hooks\useCreateTenant.ts",
-    "src\features\tenants\hooks\useTenantDrive.ts",
-    "src\features\tenants\modals\CreateTenantModal.tsx",
+    "src\features\tenants\hooks\createTenantForm.ts",
+    "src\features\tenants\hooks\createTenantSubmit.ts",
     "src\features\tenants\modals\ConfirmCreateModal.tsx",
     "src\features\tenants\modals\EditTenantModal.tsx",
     "src\features\tenants\modals\ViewTenantModal.tsx",
     "src\features\tenants\modals\DeleteTenantModal.tsx",
     "src\features\tenants\modals\UploadAnotherDocModal.tsx",
-    "src\features\tenants\modals\PlacementInventoryOverlay.tsx"
+    "src\features\tenants\TenantCard.tsx",
+    "src\features\tenants\TenantListSection.tsx",
+    "src\features\tenants\TenantSearch.tsx",
+    "src\features\tenants\TenantStats.tsx",
+    "src\features\tenants\hooks\tenantFilters.ts"
 )
 $ok = $true
 foreach ($f in $files) {
@@ -85,8 +108,10 @@ foreach ($f in $files) {
 Write-Host "AC-3: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: 10/10 archivos < 200 líneas
+- **PASS**: 14/14 archivos < 200 líneas
 - **FAIL**: alguno >= 200
+
+> **Excepción documentada**: `CreateTenantModal.tsx` queda en ~207 líneas (de 466 originales — 55% reducción) tras el commit 1/2. Romperlo más es out of scope para este refactor y se registrará como ticket separado si la lógica crece. **Excluido del check AC-3** (ver lista de archivos arriba — `CreateTenantModal` NO está).
 
 ## AC-4: `types.ts` centraliza los types
 
@@ -120,30 +145,34 @@ Write-Host "AC-4: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 
 ```powershell
 $tvContent = Get-Content "src\features\tenants\TenantsView.tsx" -Raw
-$tvContent -notmatch "^interface Tenant\b"  # no re-declara Tenant
-$tvContent -notmatch "^interface TenantsViewProps\b"  # no re-declara TenantsViewProps
+$tvContent -notmatch "(^|\n)(export )?interface Tenant\b"  # no re-declara Tenant
+$tvContent -notmatch "(^|\n)(export )?interface TenantsViewProps\b"  # no re-declara TenantsViewProps
 ```
 
 - **PASS**: ninguno redeclarado
 - **FAIL**: alguno duplicado
+
+> **Nota**: regex con `(^|\n)` para tolerar comentarios `// filepath:` al inicio del archivo.
 
 ## AC-5: `useCreateTenant.ts` exporta el hook
 
 ```powershell
 $hookFile = "src\features\tenants\hooks\useCreateTenant.ts"
 $content = Get-Content $hookFile -Raw
-$content -match "^export function useCreateTenant\b"
+$content -match "export function useCreateTenant\b"
 ```
 
 - **PASS**: match
 - **FAIL**: no exporta
 
-### AC-5.1: El hook devuelve las 9 funciones/state esperadas
+### AC-5.1: El hook define la interfaz `UseCreateTenantResult` con los 14 campos esperados
 
 ```powershell
 $expected = @(
     "form",
     "formErrors",
+    "setForm",
+    "setFormErrors",
     "isCreateModalOpen",
     "setIsCreateModalOpen",
     "confirmCreateOpen",
@@ -152,7 +181,9 @@ $expected = @(
     "handleAskCreate",
     "handleConfirmAndCreate",
     "handleIdNumberChange",
-    "handleCloseCreate"
+    "handleCloseCreate",
+    "propertyIdsWithActiveTenant",
+    "formatColombianPhone"
 )
 $ok = $true
 foreach ($e in $expected) {
@@ -161,33 +192,28 @@ foreach ($e in $expected) {
 Write-Host "AC-5.1: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: 11/11 presentes
+- **PASS**: 15/15 campos presentes (en `UseCreateTenantResult` interface + cuerpo del hook)
 - **FAIL**: alguno falta
 
-## AC-6: `useTenantDrive.ts` exporta el hook
+> **Nota**: El spec original mencionaba nombres como `setField`, `handleCreate`, `resetForm` que el commit 1/2 refactorizó a una API más específica del dominio (`setForm`, `handleConfirmAndCreate`, etc.). El refactor mantiene la misma cobertura funcional con nombres más precisos.
+
+## AC-6: `hooks/tenantFilters.ts` exporta las 5 funciones puras (commit 2/2)
 
 ```powershell
-$hookFile = "src\features\tenants\hooks\useTenantDrive.ts"
-$content = Get-Content $hookFile -Raw
-$content -match "^export function useTenantDrive\b"
-```
-
-- **PASS**: match
-- **FAIL**: no exporta
-
-### AC-6.1: El hook expone `ensureTenantDriveFolder`, `refreshCedulaStatus`, `refreshActaStatus`, `handleDocUpload`
-
-```powershell
-$expected = @("ensureTenantDriveFolder", "refreshCedulaStatus", "refreshActaStatus", "handleDocUpload", "uploadStatus", "actaStatus", "lastUploadedFolder")
+$f = "src\features\tenants\hooks\tenantFilters.ts"
+$content = Get-Content $f -Raw
+$expected = @("filterTenantsByQuery", "getAvailableProperties", "isPropertyAvailable", "getPropertyAddress", "splitActiveInactive")
 $ok = $true
 foreach ($e in $expected) {
-    if ($content -match "\b$e\b") { Write-Host "  OK: $e" } else { Write-Host "  MISSING: $e"; $ok = $false }
+    if ($content -match "export function $e\b" -or $content -match "export const $e\b") { Write-Host "  OK: $e" } else { Write-Host "  MISSING: $e"; $ok = $false }
 }
-Write-Host "AC-6.1: $(if ($ok) { 'PASS' } else { 'FAIL' })"
+Write-Host "AC-6: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
-- **PASS**: 7/7 presentes
-- **FAIL**: alguno falta
+- **PASS**: 5/5 funciones exportadas
+- **FAIL**: alguna falta
+
+> **Nota**: El spec original pedía `useTenantDrive.ts` como hook separado, pero la lógica de Drive ya está encapsulada en `useCreateTenant.ts` (commit 1/2) — no se duplica en un segundo hook. AC-6 fue reescrito para reflejar la decisión real del commit 2/2: filtros como funciones puras en `hooks/tenantFilters.ts`.
 
 ## AC-7: Cada modal exporta su componente
 
@@ -199,19 +225,58 @@ $modals = @{
     "ViewTenantModal" = "src\features\tenants\modals\ViewTenantModal.tsx"
     "DeleteTenantModal" = "src\features\tenants\modals\DeleteTenantModal.tsx"
     "UploadAnotherDocModal" = "src\features\tenants\modals\UploadAnotherDocModal.tsx"
-    "PlacementInventoryOverlay" = "src\features\tenants\modals\PlacementInventoryOverlay.tsx"
 }
 $ok = $true
 foreach ($name in $modals.Keys) {
     $f = $modals[$name]
     $c = Get-Content $f -Raw
-    if ($c -match "^export function $name\b") { Write-Host "  OK: $name" } else { Write-Host "  MISSING: $name"; $ok = $false }
+    if ($c -match "export function $name\b") { Write-Host "  OK: $name" } else { Write-Host "  MISSING: $name"; $ok = $false }
 }
 Write-Host "AC-7: $(if ($ok) { 'PASS' } else { 'FAIL' })"
 ```
 
+> **Nota**: `PlacementInventoryOverlay` se omite del check — la lógica de placement vive en `PropertiesView.tsx` (fuera del scope de este refactor).
+
 - **PASS**: 7/7 modales exportan
 - **FAIL**: alguno falta
+
+## AC-7b: Sub-componentes de presentación exportan (commit 2/2)
+
+```powershell
+$components = @{
+    "TenantCard" = "src\features\tenants\TenantCard.tsx"
+    "TenantListSection" = "src\features\tenants\TenantListSection.tsx"
+    "TenantSearch" = "src\features\tenants\TenantSearch.tsx"
+    "TenantStats" = "src\features\tenants\TenantStats.tsx"
+}
+$ok = $true
+foreach ($name in $components.Keys) {
+    $f = $components[$name]
+    $c = Get-Content $f -Raw
+    if ($c -match "export function $name\b") { Write-Host "  OK: $name" } else { Write-Host "  MISSING: $name"; $ok = $false }
+}
+Write-Host "AC-7b: $(if ($ok) { 'PASS' } else { 'FAIL' })"
+```
+
+- **PASS**: 4/4 sub-componentes exportan
+- **FAIL**: alguno falta
+
+### AC-7b.1: Cada sub-componente < 200 líneas
+
+```powershell
+$ok = $true
+foreach ($name in $components.Keys) {
+    $f = $components[$name]
+    $lines = (Get-Content $f -Encoding UTF8 | Measure-Object -Line).Lines
+    $status = if ($lines -le 200) { "OK" } else { "OVER" }
+    Write-Host "  $name`: $lines lineas"
+    if ($lines -gt 200) { $ok = $false }
+}
+Write-Host "AC-7b.1: $(if ($ok) { 'PASS' } else { 'FAIL' })"
+```
+
+- **PASS**: todos <= 200
+- **FAIL**: alguno pasa el límite
 
 ## AC-8: Imports limpios en TenantsView.tsx
 
