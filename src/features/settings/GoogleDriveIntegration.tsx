@@ -13,7 +13,7 @@ interface GoogleDriveIntegrationProps {
  * Los archivos subidos desde la app van a la carpeta "InmoControl" en el Drive del usuario.
  */
 export function GoogleDriveIntegration({ showToast }: GoogleDriveIntegrationProps) {
-  const { connected, connecting, folderId, setConnecting, setConnected, disconnect, checkStatus } =
+  const { connected, connecting, folderId, source, setConnecting, setConnected, disconnect, checkStatus } =
     useGoogleDriveStore();
 
   // Al montar, verifica el estado de conexión contra el backend
@@ -35,8 +35,16 @@ export function GoogleDriveIntegration({ showToast }: GoogleDriveIntegrationProp
       const msgs: Record<string, string> = {
         no_code: 'No se recibió código de autorización.',
         token_exchange_failed: 'Error al intercambiar tokens. Intenta de nuevo.',
+        invalid_state:
+          'La conexión se inició desde otra sesión o expiró. Volvé a tocar "Conectar Google Drive".',
+        state_expired:
+          'El pedido de conexión tardó más de 10 minutos. Volvé a intentarlo.',
+        access_denied:
+          'Cancelaste el permiso en Google, o tu cuenta no está en la lista de testers de la app.',
+        invalid_grant:
+          'Google rechazó el código (puede haber expirado). Volvé a intentarlo.',
       };
-      showToast(msgs[err] ?? 'Error al conectar Google Drive', 'error');
+      showToast(msgs[err] ?? `Error al conectar Google Drive: ${err}`, 'error');
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []);
@@ -84,9 +92,17 @@ export function GoogleDriveIntegration({ showToast }: GoogleDriveIntegrationProp
           <h4 className="text-sm font-bold text-slate-900">Google Drive</h4>
           <p className="text-xs text-slate-500">
             {connected
-              ? 'Los documentos se guardan en tu Google Drive personal.'
+              ? source === 'legacy'
+                ? 'Conectado con la cuenta de la agencia. Reconectá para usar TU propio Gmail.'
+                : 'Los documentos se guardan en tu Google Drive personal.'
               : 'Almacena contratos, inventarios y documentos en tu cuenta de Google Drive.'}
           </p>
+          {connected && source === 'legacy' && (
+            <p className="text-[10px] text-amber-700 mt-1">
+              ⚠️ Estás usando una conexión heredada. Tocá &quot;Desconectar&quot; y luego
+              &quot;Conectar Google Drive&quot; con tu cuenta para que los archivos queden en tu Drive.
+            </p>
+          )}
           {connected && folderId && (
             <a
               href={`https://drive.google.com/drive/folders/${folderId}`}

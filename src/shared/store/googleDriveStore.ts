@@ -1,13 +1,24 @@
 import { create } from 'zustand';
 
 /** Estado de la conexión con Google Drive del usuario. */
-export type DriveConnectionReason = 'no_token' | 'no_expiry' | 'expired' | 'network';
+export type DriveConnectionReason =
+  | "no_token"
+  | "no_expiry"
+  | "expired"
+  | "revoked"
+  | "network";
 
 interface GoogleDriveState {
   connected: boolean;
   folderId: string | null;
   /** Razón de la desconexión (solo si connected=false). Útil para UI específica. */
   disconnectReason: DriveConnectionReason | null;
+  /**
+   * 'user'   → tokens del Gmail que conectó este usuario.
+   * 'legacy' → tokens viejos guardados bajo `default_user` (cuenta de la
+   *            agencia). La UI avisa que conviene reconectar con el Gmail propio.
+   */
+  source: "user" | "legacy" | null;
   connecting: boolean;
 
   setConnecting: (v: boolean) => void;
@@ -20,6 +31,7 @@ export const useGoogleDriveStore = create<GoogleDriveState>((set) => ({
   connected: false,
   folderId: null,
   disconnectReason: null,
+  source: null,
   connecting: false,
 
   setConnecting: (v) => set({ connecting: v }),
@@ -33,7 +45,13 @@ export const useGoogleDriveStore = create<GoogleDriveState>((set) => ({
     }),
 
   disconnect: () =>
-    set({ connected: false, folderId: null, disconnectReason: 'no_token', connecting: false }),
+    set({
+      connected: false,
+      folderId: null,
+      disconnectReason: 'no_token',
+      source: null,
+      connecting: false,
+    }),
 
   checkStatus: async () => {
     try {
@@ -46,9 +64,15 @@ export const useGoogleDriveStore = create<GoogleDriveState>((set) => ({
         // FIX Karpathy (jul-2026): propagamos la razón para que la UI pueda
         // mostrar el mensaje específico ("sesión expirada" vs "no conectado").
         disconnectReason: data.connected ? null : (data.reason ?? 'no_token'),
+        source: data.source === 'legacy' ? 'legacy' : data.source === 'user' ? 'user' : null,
       });
     } catch {
-      set({ connected: false, folderId: null, disconnectReason: 'network' });
+      set({
+        connected: false,
+        folderId: null,
+        disconnectReason: 'network',
+        source: null,
+      });
     }
   },
 }));

@@ -8,7 +8,7 @@ import pool from "../db.js";
 // ensureDefaultOrg() para que el orgId venga del req.user, no del primero
 // de la tabla. ensureDefaultOrg() se mantiene para bootstrap/tests.
 import { getOrgIdForRequest } from "../lib/orgContext.js";
-import { isTokenExpiringSoon } from "../lib/googleAuth.js";
+import { getDriveClientForRequest, getDriveContext } from "../lib/driveClient.js";
 import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
 import { withTransaction } from "../lib/withTransaction.js";
 // FIX #1 (P0 seguridad): requireAuth en todas las rutas de properties.
@@ -22,12 +22,6 @@ import { internal, internalExpose } from "../lib/errors.js";
 
 const router = express.Router();
 router.use(requireAuth);
-
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI,
-);
 
 /**
  * Timeout estricto para llamadas a Google OAuth/Drive. Sin esto, si Google
@@ -58,51 +52,27 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-async function getFreshDriveClient() {
+/**
+ * Contexto de Drive del usuario de la sesión (ver `lib/driveClient.ts`).
+ *
+ * Antes esta función leía los tokens con `user_id='default_user'` hardcodeado,
+ * así que un usuario nuevo con su Gmail conectado seguía escribiendo en el
+ * Drive de la agencia. Envuelto en `withTimeout` por el mismo motivo de
+ * siempre: si Google no responde, el wizard no debe colgarse.
+ *
+ * Nunca lanza: el caller chequea `if (!ctx)` y sigue sin Drive.
+ */
+async function getDriveContextWithTimeout(req: any) {
   try {
-    const [rows] = await withTimeout(
-      pool.query<any[]>(
-        "SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-        ["default_user", "google_drive"],
-      ),
+    return await withTimeout(
+      getDriveContext(req),
       GOOGLE_API_TIMEOUT_MS,
-      "user_oauth_tokens SELECT",
+      "drive context",
     );
-    if (!rows.length || !rows[0].access_token) return null;
-    oauth2Client.setCredentials({
-      access_token: rows[0].access_token,
-      refresh_token: rows[0].refresh_token ?? undefined,
-      expiry_date: rows[0].expiry_date ?? undefined,
-    });
-    if (isTokenExpiringSoon(rows[0].expiry_date)) {
-      const { credentials } = await withTimeout(
-        oauth2Client.refreshAccessToken(),
-        GOOGLE_API_TIMEOUT_MS,
-        "oauth2 refreshAccessToken",
-      );
-      oauth2Client.setCredentials(credentials);
-      await withTimeout(
-        pool.query(
-          "UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?",
-          [
-            credentials.access_token,
-            credentials.expiry_date,
-            "default_user",
-            "google_drive",
-          ],
-        ),
-        GOOGLE_API_TIMEOUT_MS,
-        "user_oauth_tokens UPDATE",
-      );
-    }
-    return google.drive({ version: "v3", auth: oauth2Client });
   } catch (err: any) {
-    // No rompemos el request entero si Drive está lento/caído. El caller
-    // chequea `if (drive)` y sigue sin Drive — los docs se subirán después
-    // cuando el agente los reintente desde el Detalle del Inmueble.
     console.warn(
-      "[Drive] getFreshDriveClient falló (continuando sin Drive):",
-      err.message,
+      "[Drive] no se pudo preparar el cliente (continuando sin Drive):",
+      err?.message,
     );
     return null;
   }
@@ -313,21 +283,18 @@ router.post(
       let driveFolderId: string | null = null;
       let driveFolderPath: string | null = null;
       if (!isUpsert) {
-        const drive = await getFreshDriveClient();
-        if (drive) {
+        const driveCtx = await getDriveContextWithTimeout(req);
+        if (driveCtx) {
           try {
-            const [tokenRows] = await pool.query<any[]>(
-              "SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-              ["default_user", "google_drive"],
-            );
-            const rootFolderId = tokenRows[0]?.drive_folder_id;
+            const drive: any = driveCtx.drive;
+            const rootFolderId = driveCtx.rootFolderId;
 
             if (rootFolderId) {
               // BUG-010: usar el helper central de escape. Escapa `\` antes
               // que `'` — el orden importa.
               const safeAddress = escapeDriveQueryValue(address);
               // BUG-016: con withTimeout en las 4 llamadas a Drive.
-              const existing = await withTimeout(
+              const existing: any = await withTimeout(
                 drive.files.list({
                   q: `name='${safeAddress}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
                   fields: "files(id)",
@@ -339,7 +306,7 @@ router.post(
 
               let folderId = existing.data.files?.[0]?.id;
               if (!folderId) {
-                const created = await withTimeout(
+                const created: any = await withTimeout(
                   drive.files.create({
                     requestBody: {
                       name: address,
@@ -358,7 +325,7 @@ router.post(
 
               const subs = ["Propietario", "Inventarios"];
               for (const sub of subs) {
-                const subExisting = await withTimeout(
+                const subExisting: any = await withTimeout(
                   drive.files.list({
                     q: `name='${sub}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
                     fields: "files(id)",
@@ -795,7 +762,8 @@ router.post(
                 `${key}.pdf`,
                 url,
                 null,
-                "default_user",
+                // Trazabilidad real: antes se guardaba el literal "default_user".
+                (req as any).user?.id ?? null,
               ],
             );
           } catch (err: any) {
@@ -1326,7 +1294,7 @@ router.delete(
     let driveCleanupStatus: "skipped" | "deleted" | "failed" = "skipped";
     if (property.drive_folder_id) {
       try {
-        const drive = await getFreshDriveClient();
+        const drive = await getDriveClientForRequest(req);
         if (drive) {
           const children = await drive.files.list({
             q: `'${property.drive_folder_id}' in parents and trashed=false`,

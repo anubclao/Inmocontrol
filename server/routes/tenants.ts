@@ -9,7 +9,7 @@ import pool from "../db.js";
 // ensureDefaultOrg() para que el orgId venga del req.user, no del primero
 // de la tabla. ensureDefaultOrg() se mantiene para bootstrap/tests.
 import { getOrgIdForRequest } from "../lib/orgContext.js";
-import { isTokenExpiringSoon } from "../lib/googleAuth.js";
+import { getDriveClientForRequest, getDriveContext } from "../lib/driveClient.js";
 import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
 
 /**
@@ -58,46 +58,20 @@ import { requireRole } from "../middleware/requireRole.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 router.use(requireAuth);
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI,
-);
-
-/** Helper: obtiene tokens del usuario actual (hardcodeado por ahora). */
-async function getUserTokens() {
-  const userId = "default_user";
-  const [rows] = await pool.query<any[]>(
-    "SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-    [userId, "google_drive"],
-  );
-  if (!rows.length || !rows[0].access_token) return null;
-  return rows[0];
-}
-
-/** Helper: asegura tokens frescos. */
-async function getFreshDriveClient() {
-  const tokens = await getUserTokens();
-  if (!tokens) throw new Error("No Drive connection");
-  oauth2Client.setCredentials({
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token ?? undefined,
-    expiry_date: tokens.expiry_date ?? undefined,
-  });
-  if (isTokenExpiringSoon(tokens.expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-    await pool.query(
-      "UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?",
-      [
-        credentials.access_token,
-        credentials.expiry_date,
-        "default_user",
-        "google_drive",
-      ],
-    );
-  }
-  return google.drive({ version: "v3", auth: oauth2Client });
+/**
+ * Helper: contexto de Drive del usuario de la sesión.
+ *
+ * Antes: `user_id = 'default_user'` hardcodeado + un `oauth2Client` global
+ * compartido (dos requests concurrentes se pisaban las credenciales).
+ * Ahora delega en `lib/driveClient.ts`.
+ *
+ * Lanza si no hay conexión — los callers de este archivo ya manejan el
+ * `catch` para degradar sin Drive.
+ */
+async function getFreshDriveClient(req: any) {
+  const drive = await getDriveClientForRequest(req);
+  if (!drive) throw new Error("No Drive connection");
+  return drive;
 }
 
 /**
@@ -170,7 +144,7 @@ router.post(
       // 1. Si Drive está conectado, asegurar que existe la carpeta del inmueble
       let drive: any = null;
       try {
-        drive = await getFreshDriveClient();
+        drive = await getFreshDriveClient(req);
       } catch (driveErr: any) {
         // FIX 2026-09-25: loguear el motivo del fallo. Antes el catch silencioso
         // hacía imposible diagnosticar por qué el tenant no tenía carpeta de
@@ -185,15 +159,12 @@ router.post(
         try {
           // 1a. Si no hay carpeta del inmueble, crearla
           if (!propertyDriveFolderId && propertyAddress) {
-            const [tokensRows] = await withTimeout(
-              pool.query<any[]>(
-                "SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-                ["default_user", "google_drive"],
-              ),
+            const driveCtx = await withTimeout(
+              getDriveContext(req),
               GOOGLE_API_TIMEOUT_MS,
-              "tokens SELECT (tenant POST)",
+              "drive context (tenant POST)",
             );
-            const rootFolderId = tokensRows[0]?.drive_folder_id;
+            const rootFolderId = driveCtx?.rootFolderId;
 
             if (rootFolderId) {
               // BUG-010: usar el helper central de escape (mismo patrón que
@@ -579,7 +550,7 @@ router.post(
     // 3. Necesitamos Drive conectado.
     let drive: any;
     try {
-      drive = await getFreshDriveClient();
+      drive = await getFreshDriveClient(req);
     } catch (e: any) {
       res.status(400).json({
         error:
@@ -589,11 +560,8 @@ router.post(
     }
 
     // 4. Necesitamos el rootFolderId del usuario.
-    const [tokensRows] = await pool.query<any[]>(
-      "SELECT drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-      ["default_user", "google_drive"],
-    );
-    const rootFolderId = tokensRows[0]?.drive_folder_id;
+    const driveCtx = await getDriveContext(req);
+    const rootFolderId = driveCtx?.rootFolderId;
     if (!rootFolderId) {
       res.status(400).json({
         error:
@@ -657,7 +625,7 @@ router.post(
     // Validar que la carpeta existe en Drive.
     let drive: any;
     try {
-      drive = await getFreshDriveClient();
+      drive = await getFreshDriveClient(req);
     } catch {
       res.status(400).json({ error: "No hay conexión con Google Drive" });
       return;
@@ -750,7 +718,7 @@ router.get(
         return;
       }
 
-      const drive = await getFreshDriveClient();
+      const drive = await getFreshDriveClient(req);
       const subfolderRes = await drive.files.list({
         q: `name='${folder}' and mimeType='application/vnd.google-apps.folder' and '${tenantDriveFolderId}' in parents and trashed=false`,
         fields: "files(id)",
@@ -893,7 +861,7 @@ router.post(
     }
 
     try {
-      const drive = await getFreshDriveClient();
+      const drive = await getFreshDriveClient(req);
 
       // Buscar el ID de la subcarpeta (Cedula/Contrato/Recibos) dentro de la carpeta del arrendatario
       const subfolderRes = await drive.files.list({
@@ -970,7 +938,7 @@ router.post(
     }
 
     try {
-      const drive = await getFreshDriveClient();
+      const drive = await getFreshDriveClient(req);
 
       // 1. Buscar/crear la subcarpeta "Acta" dentro de la carpeta del inquilino
       let actaFolderId: string | undefined;

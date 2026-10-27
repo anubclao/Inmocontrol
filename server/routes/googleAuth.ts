@@ -4,35 +4,83 @@ import express from 'express';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import { Readable } from 'stream';
-import pool, { checkDb } from '../db.js';
 // FIX #2 (P0 seguridad): requireAuth en endpoints privados de Google (upload-pdf, file proxy).
-// Las rutas de OAuth callback NO requieren auth (usuario no logueado todavía).
+// FIX 2026-10: /auth/google también requiere auth (ver documento abajo).
 import { requireAuth } from './auth.js';
 // fix-issue-permissions-by-endpoint: uploads a Drive requieren canManageDrive.
 import { requireRole } from '../middleware/requireRole.js';
 
 const router = express.Router();
-import { isTokenExpiringSoon } from '../lib/googleAuth.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import {
+  candidateDriveUserIds,
+  deleteDriveTokens,
+  describeDriveConnection,
+  getDriveClientForRequest,
+  getDriveContext,
+  saveDriveTokens,
+} from '../lib/driveClient.js';
 
-// FIX #2 (P0 seguridad): las rutas de OAuth callback (`/auth/google`,
-// `/auth/google/callback`) NO requieren auth — el usuario todavía no está
-// logueado cuando inicia el flujo OAuth. Las rutas de Drive SÍ requieren
-// auth (se aplican individualmente más abajo).
+// FIX #2 (P0 seguridad): las rutas de Drive requieren auth.
+//
+// FIX 2026-10 (auditoría Drive/Inventarios): `/auth/google` TAMBIÉN requiere
+// auth ahora. Antes era anónimo y el callback guardaba los tokens bajo el email
+// de Google (o `default_user`), así que:
+//   · un usuario nuevo conectaba su Gmail y la app seguía usando la fila de
+//     `default_user` → nunca veía su propio Drive;
+//   · dos usuarios en la misma instancia se pisaban los tokens (el último
+//     conectado se quedaba con el Drive de todos).
+// Ahora el flujo se ata al `profiles.id` de la sesión vía el parámetro `state`.
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI,
-);
+/** Genera un cliente OAuth nuevo por request. NUNCA compartir uno global:
+ *  `setCredentials()` sobre un singleton pisa las credenciales de otra request
+ *  en vuelo y termina escribiendo en el Drive de otro usuario. */
+function newOAuthClient() {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI,
+  );
+}
 
-// Scopes: drive.file = solo archivos creados por esta app (no accede al Drive completo)
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+// Scopes: drive.file = solo archivos creados por esta app (no accede al Drive completo).
+// openid + email: nos deja identificar CUENTA de Google conectada (para logs de
+// soporte y para detectar "conectaste la cuenta equivocada"). Son scopes no
+// sensibles: no agregan trámite de verificación en Google Cloud.
+const SCOPES = [
+  'https://www.googleapis.com/auth/drive.file',
+  'openid',
+  'email',
+];
 
-/** Genera la URL de autorización de Google. */
-router.get('/auth/google', (_req, res) => {
+/** Estados OAuth pendientes: `state` → quién inició el flujo.
+ *  En memoria (igual que las sesiones del piloto, ver routes/auth.ts). Si el
+ *  server reinicia en medio del flujo, el usuario simplemente reintenta. */
+const pendingOAuthStates = new Map<
+  string,
+  { profileId: string; email: string; createdAt: number }
+>();
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+function purgeExpiredStates() {
+  const now = Date.now();
+  for (const [key, value] of pendingOAuthStates) {
+    if (now - value.createdAt > STATE_TTL_MS) pendingOAuthStates.delete(key);
+  }
+}
+
+/** Genera la URL de autorización de Google (requiere sesión válida). */
+router.get('/auth/google', requireAuth, (req, res) => {
   console.log('[OAuth] /auth/google llamado. GOOGLE_CLIENT_ID presente:', !!process.env.GOOGLE_CLIENT_ID);
-  const state = crypto.randomBytes(16).toString('hex');
+  const user = (req as any).user as { id: string; email: string };
+  purgeExpiredStates();
+  const state = crypto.randomBytes(24).toString('hex');
+  pendingOAuthStates.set(state, {
+    profileId: user.id,
+    email: user.email,
+    createdAt: Date.now(),
+  });
+  const oauth2Client = newOAuthClient();
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',   // obtiene refresh_token (persiste entre sesiones)
     scope: SCOPES,
@@ -40,6 +88,7 @@ router.get('/auth/google', (_req, res) => {
     // prompt=consent fuerza la pantalla de consentimiento (necesario para recibir
     // el refresh_token la primera vez — sin esto Google puede no devolverlo)
     prompt: 'consent',
+    include_granted_scopes: true,
   });
   res.json({ url });
 });
@@ -60,7 +109,7 @@ const FRONTEND_REDIRECT_BASE = (
 // porque el browser está esperando un redirect, no un JSON.
 router.get('/auth/google/callback', asyncHandler(async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
-  console.log('[OAuth] Callback recibido:', { error, hasCode: !!code, codePreview: code ? code.slice(0, 20) + '...' : null });
+  console.log('[OAuth] Callback recibido:', { error, hasCode: !!code, hasState: !!state, codePreview: code ? code.slice(0, 20) + '...' : null });
 
   if (error || !code) {
     console.log('[OAuth] Error o sin código:', error);
@@ -68,42 +117,54 @@ router.get('/auth/google/callback', asyncHandler(async (req, res) => {
     return;
   }
 
+  // ── Validación del `state` (anti-CSRF) ────────────────────────────────────
+  // Sin esto, cualquiera podía fabricar un callback con su propio `code` y
+  // dejar la app conectada al Drive del atacante. Es de un solo uso.
+  const pending = state ? pendingOAuthStates.get(state) : undefined;
+  if (state) pendingOAuthStates.delete(state);
+  if (!pending) {
+    console.warn('[OAuth] state inválido o expirado — flujo rechazado');
+    res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_error=invalid_state`);
+    return;
+  }
+  if (Date.now() - pending.createdAt > STATE_TTL_MS) {
+    console.warn('[OAuth] state expirado (TTL 10 min) — flujo rechazado');
+    res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_error=state_expired`);
+    return;
+  }
+
   try {
     console.log('[OAuth] Intercambiando code por tokens...');
+    const oauth2Client = newOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);
     console.log('[OAuth] Tokens recibidos:', { hasAccess: !!tokens.access_token, hasRefresh: !!tokens.refresh_token, expiry: tokens.expiry_date });
+    if (!tokens.access_token) {
+      throw new Error('Google no devolvió access_token');
+    }
     oauth2Client.setCredentials(tokens);
 
-    // Extraer email del id_token JWT sin llamar a la API de profile
-    const userId = extractEmailFromIdToken(tokens.id_token ?? '') ?? 'default_user';
-    console.log('[OAuth] Usuario:', userId);
+    // Cuenta de Google que autorizó (solo para log/soporte).
+    const googleAccount = extractEmailFromIdToken(tokens.id_token ?? '');
+    console.log(
+      `[OAuth] Usuario app: ${pending.email} (${pending.profileId}) · cuenta Google: ${googleAccount ?? 'desconocida'}`,
+    );
 
     console.log('[OAuth] Creando/buscando carpeta en Drive...');
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
-    const folderId = await getOrCreateInmoControlFolder(drive, userId);
+    const folderId = await getOrCreateInmoControlFolder(drive, pending.profileId);
     console.log('[OAuth] Carpeta:', folderId);
 
     console.log('[OAuth] Guardando tokens en MySQL...');
-    const id = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO user_oauth_tokens (id, user_id, provider, access_token, refresh_token, expiry_date, drive_folder_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         access_token    = VALUES(access_token),
-         refresh_token   = VALUES(refresh_token),
-         expiry_date     = VALUES(expiry_date),
-         drive_folder_id = VALUES(drive_folder_id),
-         updated_at      = CURRENT_TIMESTAMP`,
-      [
-        id,
-        userId,
-        'google_drive',
-        tokens.access_token,
-        tokens.refresh_token ?? null,
-        tokens.expiry_date ?? null,
-        folderId,
-      ],
-    );
+    // user_id = profiles.id → cada usuario tiene SU fila. `saveDriveTokens`
+    // conserva el refresh_token anterior si Google no manda uno nuevo.
+    await saveDriveTokens({
+      userId: pending.profileId,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token ?? null,
+      expiryDate: tokens.expiry_date ?? null,
+      driveFolderId: folderId,
+      scopes: tokens.scope ?? SCOPES.join(' '),
+    });
 
     console.log('[OAuth] ✓ Éxito! Redirigiendo al frontend.');
     res.redirect(`${FRONTEND_REDIRECT_BASE}/?gdrive_connected=1&folder=${encodeURIComponent(folderId)}`);
@@ -129,40 +190,16 @@ router.post('/upload/google-drive', requireAuth, requireRole('canManageDrive'), 
     return;
   }
 
-  // Obtiene los tokens del usuario desde MySQL
-  // Por ahora usamos 'default_user' — cuando haya auth real, usar el user_id real
-  const userId = 'default_user';
-  const [rows] = await pool.query<any[]>(
-    'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-    [userId, 'google_drive'],
-  );
-
-  if (!rows.length || !rows[0].access_token) {
-    res.status(401).json({ error: 'No connected to Google Drive. Please connect first.' });
+  // Tokens del usuario de la sesión (perfil) con fallback legacy.
+  const ctx = await getDriveContext(req);
+  if (!ctx || !ctx.rootFolderId) {
+    res.status(401).json({
+      error: 'No connected to Google Drive. Please connect first.',
+      code: 'DRIVE_NOT_CONNECTED',
+    });
     return;
   }
-
-  const { access_token, refresh_token, expiry_date, drive_folder_id } = rows[0];
-
-  // Recrea el cliente con los tokens guardados
-  oauth2Client.setCredentials({
-    access_token,
-    refresh_token: refresh_token ?? undefined,
-    expiry_date: expiry_date ?? undefined,
-  });
-
-  // Renueva token si está próximo a expirar
-  if (isTokenExpiringSoon(expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-    // Actualiza tokens renovados en MySQL
-    await pool.query(
-      'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
-      [credentials.access_token, credentials.expiry_date, userId, 'google_drive'],
-    );
-  }
-
-  const drive = google.drive({ version: 'v3', auth: oauth2Client });
+  const { drive, rootFolderId: drive_folder_id } = ctx;
 
   // Subcarpeta por propiedad: "InmoControl / {propertyId}"
   const propFolderId = await getOrCreatePropertyFolder(drive, drive_folder_id, propertyId);
@@ -198,60 +235,43 @@ router.post('/upload/google-drive', requireAuth, requireRole('canManageDrive'), 
   });
 }));
 
-/** Estado de conexión del usuario. */
-// BUG-029: migrado a asyncHandler.
+/** Estado de conexión del usuario.
+ *
+ * FIX Karpathy (jul-2026): el endpoint debe reflejar la verdad sobre si el
+ * client puede operar contra Drive AHORA, no solo si hay tokens guardados.
+ * El bug histórico: decía `connected: true` si había drive_folder_id, pero el
+ * access_token podía estar expirado o el refresh_token revocado → el server
+ * fallaba con "No hay conexión" mientras el cliente creía que todo estaba OK.
+ *
+ * FIX 2026-10: además devuelve `source` ('user' | 'legacy') para que la UI
+ * pueda avisar cuando el usuario está usando los tokens legacy de
+ * `default_user` (cuenta de la agencia) en vez de su propio Gmail. */
 router.get('/status/google-drive', requireAuth, asyncHandler(async (req, res) => {
-  const userId = 'default_user';
-  const [rows] = await pool.query<any[]>(
-    `SELECT drive_folder_id, access_token, refresh_token, expiry_date
-     FROM user_oauth_tokens
-     WHERE user_id = ? AND provider = ?`,
-    [userId, 'google_drive'],
-  );
-
-  // FIX Karpathy (jul-2026): el endpoint debe reflejar la verdad sobre si el
-  // client puede operar contra Drive AHORA, no solo si hay tokens guardados.
-  // El bug histórico: decía `connected: true` si había drive_folder_id,
-  // pero el access_token podía estar expirado o el refresh_token revocado
-  // → getFreshDriveClient truena en el server con "No hay conexión" mientras
-  // el cliente pensaba que todo estaba OK (toast mentiroso).
-  if (rows.length === 0 || !rows[0].drive_folder_id) {
-    return res.json({ connected: false, reason: 'no_token' });
+  const status = await describeDriveConnection(req);
+  if (status.reason === 'legacy') {
+    // Telemetría para la migración: mientras el fallback esté activo no hay
+    // forma de saber cuántos usuarios siguen colgados de la fila vieja sin
+    // este log. Cuando deje de aparecer, es seguro poner
+    // DRIVE_LEGACY_FALLBACK=false.
+    const requester = (req as any).user?.id ?? 'anon';
+    console.warn(
+      `[drive] fallback LEGACY en uso · token_user_id=${status.userId} · solicitante=${requester}`,
+    );
   }
-  if (!rows[0].access_token) {
-    return res.json({
-      connected: false,
-      folderId: rows[0].drive_folder_id,
-      reason: 'no_token',
-    });
-  }
-  const exp = rows[0].expiry_date as number | null | undefined;
-  if (!exp) {
-    return res.json({
-      connected: false,
-      folderId: rows[0].drive_folder_id,
-      reason: 'no_expiry',
-    });
-  }
-  // Consideramos "expirado" si faltan menos de 5 min (igual que el helper
-  // isTokenExpiringSoon del server). El refresh puede fallar después.
-  const FIVE_MIN_MS = 5 * 60 * 1000;
-  if (exp - Date.now() < FIVE_MIN_MS) {
-    return res.json({
-      connected: false,
-      folderId: rows[0].drive_folder_id,
-      reason: 'expired',
-    });
-  }
-
-  res.json({ connected: true, folderId: rows[0].drive_folder_id });
+  res.json({
+    connected: status.connected,
+    folderId: status.folderId,
+    reason: status.reason === 'ok' ? undefined : status.reason,
+    source: status.reason === 'legacy' ? 'legacy' : status.connected ? 'user' : undefined,
+  });
 }));
 
-/** Desconectar Google Drive (borra tokens). */
-// BUG-029: migrado a asyncHandler.
+/** Desconectar Google Drive (borra SOLO los tokens del usuario actual). */
 router.delete('/auth/google-drive', requireAuth, requireRole('canManageDrive'), asyncHandler(async (req, res) => {
-  const userId = 'default_user';
-  await pool.query('DELETE FROM user_oauth_tokens WHERE user_id = ? AND provider = ?', [userId, 'google_drive']);
+  // `candidateDriveUserIds` incluye el fallback legacy: si el usuario venía
+  // usando la fila `default_user`, desconectar tiene que borrarla también.
+  const deleted = await deleteDriveTokens(candidateDriveUserIds(req));
+  console.log(`[OAuth] Drive desconectado · filas borradas: ${deleted}`);
   res.json({ success: true });
 }));
 
@@ -268,29 +288,12 @@ router.get('/drive/create-property-folders', requireAuth, asyncHandler(async (re
     return;
   }
 
-  const userId = 'default_user';
-  const [rows] = await pool.query<any[]>(
-    'SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-    [userId, 'google_drive'],
-  );
-  if (!rows.length || !rows[0].drive_folder_id) {
+  const ctx = await getDriveContext(req);
+  if (!ctx?.rootFolderId) {
     res.status(401).json({ error: 'No connected to Google Drive' });
     return;
   }
-
-  const { access_token, refresh_token, expiry_date, drive_folder_id: rootFolderId } = rows[0];
-  oauth2Client.setCredentials({
-    access_token,
-    refresh_token: refresh_token ?? undefined,
-    expiry_date: expiry_date ?? undefined,
-  });
-
-  if (isTokenExpiringSoon(expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-  }
-
-  const drive = google.drive({ version: 'v3', auth: oauth2Client });
+  const { drive, rootFolderId } = ctx;
 
   // 1. Buscar si ya existe una carpeta con este nombre bajo InmoControl/
   //    (defensa contra doble-creación si el cliente llama este endpoint dos veces)
@@ -362,24 +365,14 @@ router.post('/drive/upload-file', requireAuth, requireRole('canManageDrive'), as
     return;
   }
 
-  const userId = 'default_user';
-  const [rows] = await pool.query<any[]>(
-    'SELECT access_token, refresh_token, expiry_date FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-    [userId, 'google_drive'],
-  );
-  if (!rows.length) {
-    res.status(401).json({ error: 'No connected to Google Drive' });
+  const drive = await getDriveClientForRequest(req);
+  if (!drive) {
+    res.status(401).json({
+      error: 'No connected to Google Drive',
+      code: 'DRIVE_NOT_CONNECTED',
+    });
     return;
   }
-
-  const { access_token, refresh_token, expiry_date } = rows[0];
-  oauth2Client.setCredentials({ access_token, refresh_token: refresh_token ?? undefined, expiry_date: expiry_date ?? undefined });
-  if (isTokenExpiringSoon(expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-  }
-
-  const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
   // Buscar el ID de la subcarpeta (Propietario o Inventarios)
   const subfolderRes = await drive.files.list({
@@ -447,9 +440,12 @@ router.post('/drive/upload-pdf', requireAuth, requireRole('canManageDrive'), asy
     return;
   }
 
-  const drive = await getFreshDriveClientPublic();
+  const drive = await getDriveClientForRequest(req);
   if (!drive) {
-    res.status(503).json({ error: 'Google Drive no conectado' });
+    res.status(503).json({
+      error: 'Google Drive no conectado',
+      code: 'DRIVE_NOT_CONNECTED',
+    });
     return;
   }
 
@@ -577,7 +573,7 @@ router.get('/drive/file', requireAuth, asyncHandler(async (req, res) => {
     return;
   }
   try {
-    const drive = await getFreshDriveClientPublic();
+    const drive = await getDriveClientForRequest(req);
     if (!drive) {
       res.status(503).json({ error: 'Google Drive no conectado. Reconectar en Configuración.' });
       return;
@@ -629,7 +625,7 @@ router.get('/drive/thumb', requireAuth, asyncHandler(async (req, res) => {
     res.status(400).json({ error: 'Falta fileId' });
     return;
   }
-  const drive = await getFreshDriveClientPublic();
+  const drive = await getDriveClientForRequest(req);
   if (!drive) {
     res.status(503).json({ error: 'Google Drive no conectado.' });
     return;
@@ -647,34 +643,5 @@ router.get('/drive/thumb', requireAuth, asyncHandler(async (req, res) => {
     res.redirect(302, `/api/drive/file?fileId=${encodeURIComponent(fileId)}`);
   }
 }));
-
-/** Wrapper público de getFreshDriveClient para los proxies. Refresca el access_token
- *  si está por expirar y lo persiste. Devuelve null si no hay tokens. */
-async function getFreshDriveClientPublic(): Promise<ReturnType<typeof google.drive> | null> {
-  const [rows] = await pool.query<any[]>(
-    'SELECT access_token, refresh_token, expiry_date FROM user_oauth_tokens WHERE user_id = ? AND provider = ?',
-    ['default_user', 'google_drive'],
-  );
-  if (!rows.length || !rows[0].access_token) return null;
-  oauth2Client.setCredentials({
-    access_token: rows[0].access_token,
-    refresh_token: rows[0].refresh_token ?? undefined,
-    expiry_date: rows[0].expiry_date ?? undefined,
-  });
-  if (isTokenExpiringSoon(rows[0].expiry_date)) {
-    try {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      oauth2Client.setCredentials(credentials);
-      await pool.query(
-        'UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?',
-        [credentials.access_token, credentials.expiry_date, 'default_user', 'google_drive'],
-      );
-    } catch (err: any) {
-      console.warn('[OAuth] Refresh failed:', err.message);
-      return null;
-    }
-  }
-  return google.drive({ version: 'v3', auth: oauth2Client });
-}
 
 export default router;
