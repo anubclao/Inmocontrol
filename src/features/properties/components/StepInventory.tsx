@@ -122,6 +122,7 @@ export function StepInventory({
     clearDraft,
     onComplete,
     showToast,
+    property,
   });
 
   const signing = useInventorySigning({
@@ -129,7 +130,12 @@ export function StepInventory({
     persist,
     baseInventory,
     property,
-    tenantDriveFolderId,
+    // El modal de colocación (PropertiesView) no pasa esta prop, así que el
+    // paso "copiar el PDF firmado a Contrato/ del arrendatario" nunca corría.
+    // `storeTenant` ya está resuelto arriba con el mismo criterio (arrendatario
+    // ACTIVO de esta propiedad) y el mapper del store expone
+    // `tenantDriveFolderId`, así que lo usamos como fallback.
+    tenantDriveFolderId: tenantDriveFolderId ?? storeTenant?.tenantDriveFolderId ?? null,
     onComplete,
     showToast,
   });

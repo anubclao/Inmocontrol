@@ -93,41 +93,72 @@ export function useInventoryHydration({
             );
             if (remote) {
               const remotePhotos = normalizePhotosArray(remote.photos);
-              if (remotePhotos.length > 0) {
+              // GUARD (2026-10): el round-trip a MySQL existía para recuperar
+              // inventarios en un browser nuevo. Pero se disparaba también
+              // cuando el usuario tenía un borrador LOCAL sin fotos todavía, y
+              // entonces pisaba sus áreas/observaciones recién editadas con la
+              // última versión guardada en MySQL (pérdida de trabajo).
+              // Ahora solo adoptamos el remoto si aporta algo:
+              //   · no hay nada local, o
+              //   · el remoto tiene más fotos, o
+              //   · el remoto es más nuevo, o
+              //   · el remoto está firmado y el local no.
+              const localUpdated = existing?.updatedAt
+                ? new Date(existing.updatedAt).getTime()
+                : 0;
+              const remoteUpdated = remote.updated_at
+                ? new Date(remote.updated_at).getTime()
+                : 0;
+              const localPhotoCount = normalizePhotosArray(
+                existing?.photos,
+              ).length;
+              const adoptRemote =
+                !existing ||
+                remotePhotos.length > localPhotoCount ||
+                remoteUpdated > localUpdated + 2_000 ||
+                (!!remote.signed_at && !existing?.signedAt);
+
+              if (!adoptRemote) {
                 console.log(
-                  `[inventory] Re-hidratando ${remotePhotos.length} fotos desde MySQL → IndexedDB`,
+                  "[inventory] MySQL tiene una versión más vieja que la local — se conserva la local",
+                );
+              } else {
+                if (!existing) {
+                  console.log(
+                    `[inventory] Re-hidratando desde MySQL: ${remote.id} (${remotePhotos.length} fotos)`,
+                  );
+                }
+                existing = {
+                  id: remote.id,
+                  propertyId: remote.property_id,
+                  phase: remote.phase,
+                  propertyType: remote.property_type,
+                  counters: remote.counters ?? {},
+                  areas: remote.areas ?? [],
+                  photos: remotePhotos,
+                  signatures: remote.signatures ?? [],
+                  customAreas: remote.custom_areas ?? [],
+                  signedAt: remote.signed_at,
+                  createdAt: remote.created_at,
+                  updatedAt: remote.updated_at,
+                } as Inventory;
+                await inventoryDB.saveInventory(existing);
+                for (const p of existing.photos ?? []) {
+                  if (p?.dataUrl) {
+                    await inventoryDB.savePhoto({
+                      id: p.id,
+                      inventoryId: existing.id,
+                      dataUrl: p.dataUrl,
+                      areaId: p.areaId,
+                      fileName: p.fileName,
+                      takenAt: p.takenAt,
+                    });
+                  }
+                }
+                console.log(
+                  `[inventory] Recuperado de MySQL: ${remote.id} (${(existing.photos ?? []).length} fotos)`,
                 );
               }
-              existing = {
-                id: remote.id,
-                propertyId: remote.property_id,
-                phase: remote.phase,
-                propertyType: remote.property_type,
-                counters: remote.counters ?? {},
-                areas: remote.areas ?? [],
-                photos: remotePhotos,
-                signatures: remote.signatures ?? [],
-                customAreas: remote.custom_areas ?? [],
-                signedAt: remote.signed_at,
-                createdAt: remote.created_at,
-                updatedAt: remote.updated_at,
-              } as Inventory;
-              await inventoryDB.saveInventory(existing);
-              for (const p of existing.photos ?? []) {
-                if (p?.dataUrl) {
-                  await inventoryDB.savePhoto({
-                    id: p.id,
-                    inventoryId: existing.id,
-                    dataUrl: p.dataUrl,
-                    areaId: p.areaId,
-                    fileName: p.fileName,
-                    takenAt: p.takenAt,
-                  });
-                }
-              }
-              console.log(
-                `[inventory] Recuperado de MySQL: ${remote.id} (${(existing.photos ?? []).length} fotos)`,
-              );
             }
           }
         } catch (err) {

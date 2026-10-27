@@ -117,17 +117,49 @@ export function useInventorySigning({
     await persist(next);
     showToast("Inventario firmado y guardado", "success");
 
+    // Persistir el JSON en MySQL. Antes SOLO se guardaba en IndexedDB: si el
+    // agente cambiaba de equipo, el inventario de colocación desaparecía (la
+    // comparativa Inicial vs Final lee MySQL primero). Best-effort: si falla,
+    // el PDF de Drive sigue siendo la evidencia firmada.
+    try {
+      const { saveInventoryToServer } = await import("../../../inventoryApi");
+      const saved = await saveInventoryToServer(next);
+      if (saved.ok && saved.withoutPhotos) {
+        console.warn(
+          "[inventory] guardado en MySQL sin fotos embebidas (payload > 15MB). Las fotos quedan en Drive.",
+        );
+      } else if (!saved.ok) {
+        console.error("[inventory] no se pudo guardar en MySQL:", saved.error);
+        showToast(
+          `Inventario firmado, pero no se sincronizó al servidor (${saved.error}). El PDF queda en Drive.`,
+          "error",
+        );
+      }
+    } catch (err) {
+      console.error("[inventory] saveInventoryToServer falló:", err);
+    }
+
     if (inventory.phase === "final") {
+      // FIX 2026-10: `onComplete` (que dispara el cambio de estado a
+      // "Arrendado") se llamaba DENTRO del try que genera y sube el PDF. Si
+      // jsPDF fallaba o Drive demoraba, la firma quedaba guardada pero la
+      // propiedad se quedaba en "En Colocación" para siempre. Ahora el estado
+      // se actualiza pase lo que pase con el PDF, que es un efecto secundario.
       try {
         const { generateInventoryPdfBlob } =
           await import("../../../inventoryPdf");
-        const { inventoryDB: invDB } = await import("../../../inventoryDB");
+        const { getInventoryMediaDataUrl } = await import(
+          "../../../inventoryDB"
+        );
         const blob = await generateInventoryPdfBlob(
           next,
           property,
           async (id) => {
-            const photo = await invDB.getPhoto(id);
-            return (photo as any)?.dataUrl ?? null;
+            // Tolera media de área (key = id) y media de ítem (key = inv:id),
+            // más el dataUrl inline de inventarios viejos.
+            const inline =
+              next.photos.find((p) => p.id === id)?.dataUrl ?? null;
+            return getInventoryMediaDataUrl(next.id, id, inline);
           },
         );
 
@@ -140,9 +172,12 @@ export function useInventorySigning({
         const fileName = `Inventario_Colocacion_${new Date().toISOString().slice(0, 10)}.pdf`;
         const today = new Date().toISOString().slice(0, 10);
 
-        // 1) Subir a Inventarios/ del Drive de la propiedad
+        // 1) Subir a Inventarios/ del Drive de la propiedad.
+        //    OJO: `fetch` NO rechaza en 4xx/5xx — hay que mirar `res.ok`, si no
+        //    el toast dice "guardado en Inventarios/" aunque Drive haya
+        //    devuelto 401/503. Era un toast mentiroso clásico.
         try {
-          await fetch("/api/inventories/upload-pdf", {
+          const res = await fetch("/api/inventories/upload-pdf", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -152,15 +187,33 @@ export function useInventorySigning({
               inventoryDate: today,
             }),
           });
-          showToast("✓ PDF de colocación guardado en Inventarios/", "success");
+          if (res.ok) {
+            showToast("✓ PDF de colocación guardado en Inventarios/", "success");
+          } else {
+            const detail = await res.json().catch(() => ({}));
+            console.warn(
+              "[colocación] upload-pdf respondió",
+              res.status,
+              detail?.error,
+            );
+            showToast(
+              detail?.error ??
+                "No se pudo subir el PDF a Drive. El inventario quedó firmado; reintentá desde el detalle del inmueble.",
+              "error",
+            );
+          }
         } catch (e) {
           console.warn("[colocación] no se pudo subir a Inventarios/", e);
+          showToast(
+            "No se pudo subir el PDF a Drive (sin conexión). El inventario quedó firmado.",
+            "error",
+          );
         }
 
         // 2) Copiar también a la carpeta Contrato/ del arrendatario
         if (tenantDriveFolderId) {
           try {
-            await fetch("/api/tenants/upload-document", {
+            const res = await fetch("/api/tenants/upload-document", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -170,12 +223,29 @@ export function useInventorySigning({
                 base64Data: base64,
               }),
             });
-            showToast(
-              "✓ Copia guardada en carpeta del arrendatario",
-              "success",
-            );
+            if (res.ok) {
+              showToast(
+                "✓ Copia guardada en carpeta del arrendatario",
+                "success",
+              );
+            } else {
+              const detail = await res.json().catch(() => ({}));
+              console.warn(
+                "[colocación] upload-document respondió",
+                res.status,
+                detail?.error,
+              );
+              showToast(
+                "El PDF no se copió a la carpeta del arrendatario.",
+                "error",
+              );
+            }
           } catch (e) {
             console.warn("[colocación] no se pudo copiar al arrendatario:", e);
+            showToast(
+              "El PDF no se copió a la carpeta del arrendatario (sin conexión).",
+              "error",
+            );
           }
         }
 
@@ -183,11 +253,15 @@ export function useInventorySigning({
           `✓ Inventario de colocación firmado: ${areasConFotos}/${totalAreas} áreas · ${totalMedia} archivos · ${novedadesCount} novedades`,
           "success",
         );
-
-        onComplete(next);
       } catch (e) {
         console.error("Error generando/subiendo PDF de colocación:", e);
-        showToast("Error al generar/subir PDF firmado", "error");
+        showToast(
+          "Inventario firmado y guardado, pero falló la generación del PDF. Podés reintentarlo desde el detalle del inmueble.",
+          "error",
+        );
+      } finally {
+        // La propiedad pasa a "Arrendado" apenas queda firmada, tenga o no PDF.
+        onComplete(next);
       }
     }
   };

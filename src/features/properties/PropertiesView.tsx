@@ -1528,52 +1528,25 @@ export function PropertiesView({
           await inventoryDB.saveInventory(rekeyed); // crea con nueva key
           await inventoryDB.deleteInventory(oldId); // borra la vieja (incluye fotos)
 
-          // POST a MySQL (la FK ahora sí se cumple)
-          // IMPORTANTE: antes de serializar, eliminamos `videoDataUrl` de cada
-          // ItemMedia — el archivo de video completo puede pesar 10-50MB y
-          // rompería la columna JSON de MySQL. El video COMPLETO se queda en
-          // IndexedDB (key: <inventoryId>:<mediaId>) y se puede re-leer desde
-          // ahí cuando haga falta subirlo a Drive. Solo mandamos a MySQL el
-          // thumbnail + metadata, suficiente para renderizar el PDF.
-          const areasStripped = rekeyed.areas.map((a) => ({
-            ...a,
-            items: Object.fromEntries(
-              Object.entries(a.items).map(([k, v]) => [
-                k,
-                {
-                  ...v,
-                  media: (v.media ?? []).map((m) => {
-                    if (m.type === "video") {
-                      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                      const { videoDataUrl, ...rest } = m;
-                      return rest;
-                    }
-                    return m;
-                  }),
-                },
-              ]),
-            ),
-          }));
-          const r1 = await fetch("/api/inventories", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: rekeyed.id,
-              propertyId: rekeyed.propertyId,
-              phase: "inicial",
-              propertyType: rekeyed.propertyType,
-              counters: rekeyed.counters,
-              areas: areasStripped,
-              photos: rekeyed.photos,
-              signatures: rekeyed.signatures,
-              customAreas: rekeyed.customAreas,
-            }),
-          });
-          if (!r1.ok) {
-            const err = await r1.json().catch(() => ({}));
+          // POST a MySQL (la FK ahora sí se cumple).
+          // `saveInventoryToServer` ya quita `videoDataUrl` de cada ItemMedia
+          // (el video completo puede pesar 10-50MB y rompería la columna JSON)
+          // y, si el payload supera el límite de 15MB del server, reintenta sin
+          // las fotos embebidas en vez de fallar en silencio con 413.
+          const { saveInventoryToServer } = await import("./inventoryApi");
+          const saveResult = await saveInventoryToServer(rekeyed);
+          if (!saveResult.ok) {
             console.warn(
               "[finalize] inventory MySQL persist:",
-              err.error ?? r1.status,
+              saveResult.error,
+            );
+            showToast(
+              `Inventario guardado en este equipo, pero no se sincronizó al servidor (${saveResult.error}).`,
+              "error",
+            );
+          } else if (saveResult.withoutPhotos) {
+            console.warn(
+              "[finalize] inventario guardado SIN fotos embebidas (payload > 15MB). Las fotos van a Drive.",
             );
           } else {
             console.log(
@@ -1586,12 +1559,17 @@ export function PropertiesView({
             try {
               const { generateInventoryPdfBlob } =
                 await import("./inventoryPdf");
+              const { getInventoryMediaDataUrl } = await import(
+                "./inventoryDB"
+              );
               const blob = await generateInventoryPdfBlob(
                 rekeyed,
                 wizardProperty,
                 async (id: string) => {
-                  const photo = await inventoryDB.getPhoto(id);
-                  return (photo as any)?.dataUrl ?? null;
+                  const inline =
+                    rekeyed.photos?.find((p: any) => p.id === id)?.dataUrl ??
+                    null;
+                  return getInventoryMediaDataUrl(rekeyed.id, id, inline);
                 },
               );
               const reader = new FileReader();
@@ -1652,32 +1630,27 @@ export function PropertiesView({
               }
               if (photoUploads.length > 0) {
                 console.log(
-                  `[finalize] Subiendo ${photoUploads.length} fotos a Drive...`,
+                  `[finalize] Subiendo ${photoUploads.length} fotos a Drive (por lotes)...`,
                 );
-                const rPhotos = await fetch("/api/inventories/upload-photos", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    propertyId: propertyDbId,
-                    phase: "inicial",
-                    photos: photoUploads,
-                  }),
-                });
-                if (rPhotos.ok) {
-                  const result = await rPhotos.json();
-                  console.log(
-                    `[finalize] ${result.uploaded?.length ?? 0} fotos → Drive/${result.folderName}/`,
-                  );
-                  if (result.failed?.length > 0) {
-                    console.warn(
-                      `[finalize] ${result.failed.length} fotos fallaron:`,
-                      result.failed,
-                    );
-                  }
-                } else {
+                const { uploadInventoryPhotos } = await import(
+                  "../../lib/drive/driveService"
+                );
+                const up = await uploadInventoryPhotos(
+                  propertyDbId!,
+                  "inicial",
+                  photoUploads,
+                );
+                console.log(
+                  `[finalize] ${up.uploaded} fotos → Drive (${up.batches} lotes, ${up.failed.length} fallidas)`,
+                );
+                if (up.failed.length > 0) {
                   console.warn(
-                    "[finalize] upload-photos → HTTP",
-                    rPhotos.status,
+                    `[finalize] ${up.failed.length} fotos fallaron:`,
+                    up.failed.slice(0, 5),
+                  );
+                  showToast(
+                    `${up.uploaded}/${photoUploads.length} fotos subieron a Drive. Las demás se pueden reintentar desde el detalle del inmueble.`,
+                    "error",
                   );
                 }
               }

@@ -1,7 +1,6 @@
 import * as dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 import express from "express";
-import { google } from "googleapis";
 import crypto from "crypto";
 import { Readable } from "stream";
 import pool from "../db.js";
@@ -9,7 +8,7 @@ import pool from "../db.js";
 // ensureDefaultOrg() para que el orgId venga del req.user, no del primero
 // de la tabla. ensureDefaultOrg() se mantiene para bootstrap/tests.
 import { getOrgIdForRequest } from "../lib/orgContext.js";
-import { isTokenExpiringSoon } from "../lib/googleAuth.js";
+import { getDriveClientForRequest, getDriveContext } from "../lib/driveClient.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
 // BUG-014/015: drive con timeout 15s. Si Drive se cuelga, no esperamos
@@ -47,37 +46,24 @@ import { requireAuth } from "./auth.js";
 import { requireRole } from "../middleware/requireRole.js";
 router.use(requireAuth);
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI,
-);
-
-async function getFreshDriveClient() {
+/**
+ * Verifica que la propiedad exista Y pertenezca a la organización de la
+ * request. Devuelve la fila (address, drive_folder_id, drive_folder_path) o
+ * `null`.
+ *
+ * Antes los endpoints de inventario filtraban solo por `propertyId`, que viene
+ * del cliente: un usuario de otra organización podía leer/escribir inventarios
+ * ajenos si adivinaba el UUID (IDOR). `properties.organization_id` es NOT NULL,
+ * así que el filtro es seguro.
+ */
+async function findPropertyInOrg(propertyId: string, orgId: string) {
   const [rows] = await pool.query<any[]>(
-    "SELECT access_token, refresh_token, expiry_date, drive_folder_id FROM user_oauth_tokens WHERE user_id = ? AND provider = ?",
-    ["default_user", "google_drive"],
+    `SELECT address, drive_folder_id, drive_folder_path
+       FROM properties
+      WHERE id = ? AND organization_id = ?`,
+    [propertyId, orgId],
   );
-  if (!rows.length || !rows[0].access_token) return null;
-  oauth2Client.setCredentials({
-    access_token: rows[0].access_token,
-    refresh_token: rows[0].refresh_token ?? undefined,
-    expiry_date: rows[0].expiry_date ?? undefined,
-  });
-  if (isTokenExpiringSoon(rows[0].expiry_date)) {
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-    await pool.query(
-      "UPDATE user_oauth_tokens SET access_token=?, expiry_date=? WHERE user_id=? AND provider=?",
-      [
-        credentials.access_token,
-        credentials.expiry_date,
-        "default_user",
-        "google_drive",
-      ],
-    );
-  }
-  return google.drive({ version: "v3", auth: oauth2Client });
+  return rows[0] ?? null;
 }
 
 /** Busca (o crea) una subcarpeta dentro de otra por nombre. */
@@ -123,6 +109,21 @@ router.get(
     const { propertyId } = req.query as Record<string, string>;
     if (!propertyId) {
       res.status(400).json({ error: "Falta propertyId" });
+      return;
+    }
+    // Aislamiento por organización: sin esto, cualquier usuario autenticado
+    // podía leer los inventarios de otra inmobiliaria con solo el UUID.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      res.status(401).json({
+        error: "Sesión inválida",
+        code: "SESSION_MISSING_ORG",
+      });
+      return;
+    }
+    const property = await findPropertyInOrg(propertyId, _ctx.orgId);
+    if (!property) {
+      res.status(404).json({ error: "Propiedad no encontrada" });
       return;
     }
     // FIX: el JSON `photos` puede pesar >500KB por fila (base64). MySQL
@@ -193,6 +194,13 @@ router.post(
     }
     const orgId = _ctx.orgId;
 
+    // La propiedad tiene que ser de esta organización (FK + aislamiento).
+    const property = await findPropertyInOrg(body.propertyId, orgId);
+    if (!property) {
+      res.status(404).json({ error: "Propiedad no encontrada" });
+      return;
+    }
+
     // `inventories.id` es CHAR(36) en MySQL. Si el cliente envía un id ≤36 chars lo usamos
     // (compat con la convención UUID). Si no, generamos uno nuevo — NUNCA concatenar con ':'.
     const id = body.id && body.id.length <= 36 ? body.id : crypto.randomUUID();
@@ -226,7 +234,15 @@ router.post(
         body.signedAt ?? null,
       ],
     );
-    res.json({ success: true, inventoryId: id });
+    // El UPSERT puede haber caído sobre la fila existente de (property_id,
+    // phase) — la tabla tiene `uniq_inventory_property_phase`. Devolvemos el id
+    // REALMENTE persistido: antes respondíamos el `id` generado en esta request,
+    // que podía no existir en la DB (contrato mentiroso).
+    const [stored] = await pool.query<any[]>(
+      "SELECT id FROM inventories WHERE property_id = ? AND phase = ? LIMIT 1",
+      [body.propertyId, body.phase],
+    );
+    res.json({ success: true, inventoryId: stored[0]?.id ?? id });
   }),
 );
 
@@ -264,26 +280,34 @@ router.post(
       return;
     }
 
-    let drive: any = null;
-    try {
-      drive = await getFreshDriveClient();
-    } catch {
-      // sin drive
-    }
+    // Cliente de Drive del usuario de la sesión (no `default_user` hardcodeado).
+    const drive = await getDriveClientForRequest(req);
     if (!drive) {
-      res.status(401).json({ error: "No conectado a Google Drive" });
+      res.status(401).json({
+        error: "No conectado a Google Drive",
+        code: "DRIVE_NOT_CONNECTED",
+      });
       return;
     }
 
-    const [propRows] = await pool.query<any[]>(
-      "SELECT address, drive_folder_id FROM properties WHERE id = ?",
-      [propertyId],
-    );
-    if (!propRows.length || !propRows[0].drive_folder_id) {
+    // Aislamiento por organización + carpeta Drive de la propiedad.
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+      return;
+    }
+    const property = await findPropertyInOrg(propertyId, _ctx.orgId);
+    if (!property) {
+      res.status(404).json({ error: "Propiedad no encontrada" });
+      return;
+    }
+    if (!property.drive_folder_id) {
       res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
       return;
     }
-    const propertyFolderId = propRows[0].drive_folder_id;
+    const propertyFolderId = property.drive_folder_id;
 
     // Carpeta específica para fotos. "Inventario captacion" / "Inventario colocacion"
     // (singular) — separa las fotos individuales del PDF consolidado que va en "Inventarios/".
@@ -384,27 +408,34 @@ router.post(
       return;
     }
 
-    let drive: any = null;
-    try {
-      drive = await getFreshDriveClient();
-    } catch {
-      // sin drive
-    }
+    // Cliente de Drive del usuario de la sesión.
+    const drive = await getDriveClientForRequest(req);
     if (!drive) {
-      res.status(401).json({ error: "No conectado a Google Drive" });
+      res.status(401).json({
+        error: "No conectado a Google Drive",
+        code: "DRIVE_NOT_CONNECTED",
+      });
       return;
     }
 
-    // 1. Buscar la carpeta del inmueble
-    const [propRows] = await pool.query<any[]>(
-      "SELECT address, drive_folder_id, drive_folder_path FROM properties WHERE id = ?",
-      [propertyId],
-    );
-    if (!propRows.length || !propRows[0].drive_folder_id) {
+    // 1. Buscar la carpeta del inmueble (con aislamiento por organización)
+    const _ctx = await getOrgIdForRequest(req);
+    if (_ctx.isLegacySession) {
+      res
+        .status(401)
+        .json({ error: "Sesión inválida", code: "SESSION_MISSING_ORG" });
+      return;
+    }
+    const property = await findPropertyInOrg(propertyId, _ctx.orgId);
+    if (!property) {
+      res.status(404).json({ error: "Propiedad no encontrada" });
+      return;
+    }
+    if (!property.drive_folder_id) {
       res.status(404).json({ error: "La propiedad no tiene carpeta en Drive" });
       return;
     }
-    const propertyFolderId = propRows[0].drive_folder_id;
+    const propertyFolderId = property.drive_folder_id;
 
     // 2. Buscar/crear subcarpeta "Inventarios"
     const inventariosFolderId = await getOrCreateSubfolder(
@@ -468,17 +499,18 @@ router.post(
       phase === "inicial"
         ? "inventory_captacion_pdf_url"
         : "inventory_colocacion_pdf_url";
-    await pool.query(`UPDATE properties SET ${urlField} = ? WHERE id = ?`, [
-      uploaded.data.webViewLink,
-      propertyId,
-    ]);
+    await pool.query(
+      `UPDATE properties SET ${urlField} = ?
+        WHERE id = ? AND organization_id = ?`,
+      [uploaded.data.webViewLink, propertyId, _ctx.orgId],
+    );
 
     res.json({
       success: true,
       fileId: uploaded.data.id,
       fileName,
       webViewLink: uploaded.data.webViewLink,
-      folderPath: `${propRows[0].drive_folder_path ?? ""}/Inventarios`,
+      folderPath: `${property.drive_folder_path ?? ""}/Inventarios`,
     });
   }),
 );

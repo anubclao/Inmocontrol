@@ -177,3 +177,97 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
+
+// ── Fotos del inventario: subida por lotes ─────────────────────────────────
+// El server acepta JSON de hasta 15 MB (`express.json({limit:'15mb'})`). Un
+// inventario real tiene 20–60 fotos de 2–4 MB: mandarlas todas en un solo POST
+// producía 413 Payload Too Large y las fotos NUNCA llegaban a Drive (el
+// frontend solo hacía console.warn, así que nadie se enteraba).
+// Ahora se mandan lotes chicos, en secuencia, y se reporta qué falló.
+const PHOTOS_MAX_PER_BATCH = 4;
+/** Presupuesto de base64 por lote (~4.5 MB de payload real + overhead JSON). */
+const PHOTOS_MAX_BASE64_CHARS = 6_000_000;
+const PHOTOS_BATCH_TIMEOUT_MS = 60_000;
+
+export interface InventoryPhotoUploadResult {
+  uploaded: number;
+  failed: Array<{ name: string; error: string }>;
+  batches: number;
+  skippedReason?: string;
+}
+
+export async function uploadInventoryPhotos(
+  propertyId: string,
+  phase: "inicial" | "final",
+  photos: Array<{ name: string; base64Data: string }>,
+): Promise<InventoryPhotoUploadResult> {
+  const result: InventoryPhotoUploadResult = {
+    uploaded: 0,
+    failed: [],
+    batches: 0,
+  };
+  if (photos.length === 0) return result;
+
+  const { connected } = useGoogleDriveStore.getState();
+  if (!connected) {
+    result.skippedReason = "Drive no conectado";
+    return result;
+  }
+
+  // Partir en lotes por cantidad y por peso.
+  const batches: Array<Array<{ name: string; base64Data: string }>> = [];
+  let current: Array<{ name: string; base64Data: string }> = [];
+  let currentChars = 0;
+  for (const photo of photos) {
+    const size = photo.base64Data?.length ?? 0;
+    const wouldOverflow =
+      current.length >= PHOTOS_MAX_PER_BATCH ||
+      (current.length > 0 && currentChars + size > PHOTOS_MAX_BASE64_CHARS);
+    if (wouldOverflow) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(photo);
+    currentChars += size;
+  }
+  if (current.length > 0) batches.push(current);
+
+  for (const batch of batches) {
+    result.batches++;
+    try {
+      const res = await fetchWithTimeout(
+        "/api/inventories/upload-photos",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ propertyId, phase, photos: batch }),
+        },
+        PHOTOS_BATCH_TIMEOUT_MS,
+      );
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const reason = detail?.error ?? `HTTP ${res.status}`;
+        for (const photo of batch) {
+          result.failed.push({ name: photo.name, error: reason });
+        }
+        continue;
+      }
+      const data = await res.json();
+      result.uploaded += data.uploaded?.length ?? 0;
+      for (const f of data.failed ?? []) {
+        result.failed.push({ name: f.name, error: f.error });
+      }
+    } catch (err) {
+      const reason =
+        err instanceof TimeoutError
+          ? "Drive no respondió a tiempo"
+          : String(err);
+      for (const photo of batch) {
+        result.failed.push({ name: photo.name, error: reason });
+      }
+    }
+  }
+
+  return result;
+}

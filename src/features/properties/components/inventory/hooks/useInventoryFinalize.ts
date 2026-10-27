@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { generateInventoryPDF } from "../../../inventoryPdf";
+import { inventoryDB, getInventoryMediaDataUrl } from "../../../inventoryDB";
 import type { Inventory, InventoryItem } from "../../../inventoryTypes";
 import type { ResumenFinalizacion } from "./useInventoryState.types";
 
@@ -23,6 +24,17 @@ interface UseInventoryFinalizeParams {
   /** Pasamos el inventario final explícitamente para evitar closures stale */
   onComplete: (finalInventory?: Inventory) => void;
   showToast: (msg: string, type?: "success" | "error") => void;
+  /**
+   * Datos de la propiedad para el encabezado del PDF (dirección, propietario,
+   * chip). Antes el hook generaba el PDF con `{address:'', owner:'', chip:''}`
+   * y el documento salía sin dirección ni propietario.
+   */
+  property: {
+    address: string;
+    owner: string;
+    chip: string;
+    ownerIdNumber?: string;
+  };
 }
 
 export interface UseInventoryFinalizeReturn {
@@ -42,6 +54,7 @@ export function useInventoryFinalize({
   clearDraft,
   onComplete,
   showToast,
+  property,
 }: UseInventoryFinalizeParams): UseInventoryFinalizeReturn {
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [resumenFinalizacion, setResumenFinalizacion] =
@@ -147,16 +160,19 @@ export function useInventoryFinalize({
       const agencyName = useSettingsStore.getState().agency.name;
       await generateInventoryPDF(
         inventory,
-        // property se pasa por el caller — usamos la `inventory` directamente
-        // con un closure que el caller provee. En este hook, el segundo arg
-        // de generateInventoryPDF es `property` (objeto con address/owner/chip),
-        // que vive en el componente padre. Para evitar acoplamiento, usamos
-        // un placeholder con el mínimo necesario (la firma en PDF usa estos
-        // campos; si están vacíos, jsPDF pone 'N/A').
-        { address: "", owner: "", chip: "" },
+        // Datos REALES de la propiedad (antes iban vacíos → PDF sin dirección
+        // ni propietario en el encabezado).
+        {
+          address: property?.address ?? "",
+          owner: property?.owner ?? "",
+          chip: property?.chip ?? "",
+        },
         async (id) => {
-          const photo = inventory.photos.find((p) => p.id === id);
-          return photo?.dataUrl ?? null;
+          // Las fotos viven en el store `photos` de IndexedDB; el fallback al
+          // dataUrl inline cubre inventarios viejos que solo lo tenían ahí.
+          const inline =
+            inventory.photos.find((p) => p.id === id)?.dataUrl ?? null;
+          return getInventoryMediaDataUrl(inventory.id, id, inline);
         },
         { agencyName },
       );

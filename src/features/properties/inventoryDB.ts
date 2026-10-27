@@ -73,9 +73,15 @@ export const inventoryDB = {
 
   async deleteInventory(id: string): Promise<void> {
     await tx(STORE_INVENTORIES, 'readwrite', (s) => s.delete(id));
-    // Limpia también las fotos asociadas
+    // Limpia también las fotos asociadas. Hay DOS convenciones de key en uso:
+    //   · fotos de área      → key = `<photoId>` (campo inventoryId = id)
+    //   · media de ítem      → key = `<inventoryId>:<mediaId>`
+    // Antes solo se borraban las del segundo tipo, así que las fotos de área
+    // quedaban huérfanas ocupando espacio hasta que el usuario limpiaba caché.
     const photos = await tx<any[]>(STORE_PHOTOS, 'readonly', (s) => s.getAll());
-    const toDelete = photos.filter((p: any) => p.id.startsWith(`${id}:`));
+    const toDelete = photos.filter(
+      (p: any) => p.inventoryId === id || String(p.id).startsWith(`${id}:`),
+    );
     await Promise.all(toDelete.map((p: any) => tx(STORE_PHOTOS, 'readwrite', (s) => s.delete(p.id))));
   },
 
@@ -94,12 +100,42 @@ export const inventoryDB = {
 
   async listPhotosByInventory(inventoryId: string): Promise<any[]> {
     const all = await tx<any[]>(STORE_PHOTOS, 'readonly', (s) => s.getAll());
-    return all.filter((p: any) => p.id.startsWith(`${inventoryId}:`));
+    // Misma tolerancia que `deleteInventory`: aceptar ambas convenciones de key.
+    return all.filter(
+      (p: any) =>
+        p.inventoryId === inventoryId ||
+        String(p.id).startsWith(`${inventoryId}:`),
+    );
   },
 };
 
 /** Helper para construir ids consistentes. */
 export const photoId = (inventoryId: string, photoId: string) => `${inventoryId}:${photoId}`;
+
+/**
+ * Resuelve el dataURL de un media probando AMBAS convenciones de key.
+ *
+ * Por qué: `StepInventory.onSaveItemMedia` guarda la media de un ítem con key
+ * `<inventoryId>:<mediaId>`, pero `inventoryPdf` pide `getMediaDataUrl(media.id)`
+ * (sin prefijo). Resultado: las fotos/videos adjuntos a un ítem NUNCA aparecían
+ * en el PDF. Este helper cubre las dos formas y también el dataURL inline
+ * (inventarios viejos que lo tenían embebido en el JSON).
+ */
+export async function getInventoryMediaDataUrl(
+  inventoryId: string,
+  mediaId: string,
+  inlineFallback?: string | null,
+): Promise<string | null> {
+  try {
+    const direct = await inventoryDB.getPhoto(mediaId);
+    if (direct?.dataUrl) return direct.dataUrl as string;
+    const prefixed = await inventoryDB.getPhoto(`${inventoryId}:${mediaId}`);
+    if (prefixed?.dataUrl) return prefixed.dataUrl as string;
+  } catch (err) {
+    console.warn('[inventoryDB] getInventoryMediaDataUrl falló:', err);
+  }
+  return inlineFallback ?? null;
+}
 
 /**
  * Normaliza el campo `photos` de un Inventory a SIEMPRE un array.
