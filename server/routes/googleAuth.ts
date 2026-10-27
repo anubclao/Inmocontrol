@@ -61,11 +61,25 @@ const pendingOAuthStates = new Map<
   { profileId: string; email: string; createdAt: number }
 >();
 const STATE_TTL_MS = 10 * 60 * 1000;
+/** Tope duro del mapa. En uso real con TTL de 10 min nunca se alcanza; está
+ *  para que un pico de inicios de OAuth (o un reloj raro) no lo haga crecer
+ *  sin límite entre purgas. */
+const MAX_PENDING_STATES = 500;
 
 function purgeExpiredStates() {
   const now = Date.now();
   for (const [key, value] of pendingOAuthStates) {
     if (now - value.createdAt > STATE_TTL_MS) pendingOAuthStates.delete(key);
+  }
+  // Map preserva orden de inserción → se descartan los más viejos primero.
+  if (pendingOAuthStates.size > MAX_PENDING_STATES) {
+    const excess = pendingOAuthStates.size - MAX_PENDING_STATES;
+    let removed = 0;
+    for (const key of pendingOAuthStates.keys()) {
+      if (removed >= excess) break;
+      pendingOAuthStates.delete(key);
+      removed += 1;
+    }
   }
 }
 
