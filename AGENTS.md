@@ -380,6 +380,24 @@ un `Map` en memoria (`server/routes/googleAuth.ts`), igual que las sesiones
 El cliente OAuth sí es seguro entre instancias: se crea por request y los tokens
 viven en `user_oauth_tokens`, así que cualquier réplica puede operar contra Drive.
 
+**Confirmación de la premisa (oct-2026).** El repo no usa `cluster`, PM2 ni
+`WEB_CONCURRENCY`: la app nunca levanta workers propios. Y Hostinger documenta
+que *"each Node.js website runs as one long-running Node.js process"*
+([límites de Node.js](https://www.hostinger.com/support/hostinger-node-js-limits-for-web-and-cloud-plans/)).
+O sea: **single-instance confirmado**, el razonamiento de arriba aplica.
+
+Ojo con esto al diagnosticar "a veces se cae la sesión" o "a veces falla conectar
+Drive": en Hostinger los Web Apps *"run on demand"* y el proceso **se detiene
+tras un período sin tráfico**, reiniciándose en la siguiente request
+([overview](https://docs.hostinger.com/node.js/overview)). Como sesiones y states
+viven en memoria, cada parada por inactividad los borra. Consecuencias esperadas,
+no bugs:
+
+- El usuario vuelve a loguearse tras un rato sin actividad.
+- Un OAuth que quedó abierto en la pantalla de consentimiento de Google más
+  tiempo que la ventana de idle cae en `invalid_state`. El mensaje en Settings ya
+  indica reintentar; no requiere soporte.
+
 ### Inventario: bugs corregidos en la auditoría oct-2026
 
 - `useInventorySigning`: los toasts de "PDF guardado en Inventarios/" salían
