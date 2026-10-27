@@ -327,6 +327,81 @@ Cuando el usuario abre el modal de detalle, el frontend hace `GET /api/propertie
   [`docs/TESTERS.md`](docs/TESTERS.md). Actualizar ese doc cuando se sume
   o salga un tester.
 
+### Tokens de Google Drive: POR USUARIO (fix oct-2026)
+
+Antes: el callback OAuth guardaba los tokens con el email de Google (o el
+literal `default_user`) pero **todos** los routes los leían con
+`user_id='default_user'` hardcodeado, cada uno con su propio `oauth2Client`
+singleton. Consecuencias reales:
+
+- Un usuario nuevo conectaba su Gmail y la app seguía usando la fila vieja →
+  nunca veía su propio Drive.
+- Dos usuarios en la misma instancia se pisaban los tokens (el último en
+  conectar se quedaba con el Drive de todos).
+- Dos requests concurrentes compartían `oauth2Client` → `setCredentials()` de
+  una pisaba a la otra (escritura cruzada entre cuentas).
+
+Modelo actual (única fuente de verdad: `server/lib/driveClient.ts`):
+
+- `user_id` = `profiles.id` de la sesión (`req.user.id`). El callback lo saca
+  del `state` (mapa en memoria, TTL 10 min, un solo uso).
+- `getDriveContext(req)` / `getDriveClientForRequest(req)` crean un cliente
+  OAuth NUEVO por request. **Ningún route debe leer `user_oauth_tokens` a mano.**
+- Fallback legacy `default_user` activo por default (`DRIVE_LEGACY_FALLBACK`).
+  Después de que cada usuario reconectó su Gmail, poner
+  `DRIVE_LEGACY_FALLBACK=false` en el panel. `GET /api/status/google-drive`
+  devuelve `source: 'legacy'` mientras alguien siga usando la fila vieja, y la
+  UI de Settings lo avisa.
+- `refresh_token` nunca se sobrescribe con NULL: `saveDriveTokens` y el refresh
+  usan `COALESCE` (antes una reconexión sin refresh_token mataba la conexión a
+  la hora).
+- `/api/auth/google` ahora **requiere sesión** y valida `state` en el callback
+  (antes era anónimo → OAuth CSRF: cualquiera podía dejarte conectado a su
+  Drive).
+- Scopes: `drive.file openid email`. `openid email` no son sensibles y permiten
+  loguear qué cuenta de Google se conectó.
+
+Diagnóstico: `node scripts/diag-oauth-users.mjs` (compara
+`user_oauth_tokens.user_id` contra `profiles.id`).
+
+**Alcance single-instance (leer antes de escalar).** El `state` de OAuth vive en
+un `Map` en memoria (`server/routes/googleAuth.ts`), igual que las sesiones
+(`server/routes/auth.ts:42`). Consecuencias, en orden de gravedad:
+
+- **Reinicio del proceso** → se pierden sesiones Y states. El usuario queda
+  deslogueado y tiene que volver a entrar; el OAuth en vuelo cae en
+  `invalid_state` (mensaje en Settings: "volvé a tocar Conectar Google Drive").
+  Recuperable con un click, por eso no se justifica persistirlo.
+- **Más de una réplica** → no comparten ni sesiones ni states: el callback puede
+  llegar a la instancia que no generó el `state`. Esto **rompe el login**, no solo
+  el OAuth. Antes de escalar horizontalmente hay que mover sesiones y states a
+  Redis o a una tabla con TTL, en ese orden.
+
+El cliente OAuth sí es seguro entre instancias: se crea por request y los tokens
+viven en `user_oauth_tokens`, así que cualquier réplica puede operar contra Drive.
+
+### Inventario: bugs corregidos en la auditoría oct-2026
+
+- `useInventorySigning`: los toasts de "PDF guardado en Inventarios/" salían
+  aunque Drive devolviera 401/503 (`fetch` no rechaza en 4xx/5xx). Ahora se
+  chequea `res.ok`. Además `onComplete` (flip a "Arrendado") va en `finally`:
+  antes, si jsPDF fallaba, la propiedad quedaba en "En Colocación" para siempre.
+- `useInventoryFinalize.onGeneratePDF`: el PDF se generaba con
+  `{address:'', owner:'', chip:''}` → encabezado vacío. Ahora recibe los datos
+  reales de la propiedad desde `StepInventory`.
+- Fotos de ítems: se guardan en IndexedDB con key `<inventoryId>:<mediaId>` pero
+  el PDF las pedía con `media.id` → nunca aparecían. Usar
+  `getInventoryMediaDataUrl(inventoryId, mediaId, inlineFallback)`.
+- `upload-photos` se manda **por lotes** (`uploadInventoryPhotos` en
+  `lib/drive/driveService.ts`, 4 fotos / ~6 MB por request). Un POST único con
+  20-60 fotos superaba el `express.json({limit:'15mb'})` → 413 y las fotos se
+  perdían en silencio.
+- `useInventoryHydration`: el fallback a MySQL ya no pisa un borrador local sin
+  fotos cuando la versión remota es más vieja (comparación de `updatedAt`).
+- `GET/POST /api/inventories` y los dos uploads validan
+  `properties.organization_id` (antes: IDOR, cualquier usuario autenticado leía
+  inventarios de otra inmobiliaria con el UUID).
+
 ### Recuperación de wizard interrumpido (PENDIENTE)
 
 - Hoy: si el usuario cierra el browser en medio del wizard, **se pierde todo** (estado solo en React, no persistido).
