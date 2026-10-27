@@ -117,7 +117,15 @@ src/
 1. Panel → Avanzado → Node.js → Create Application (Application root: project root, startup: `npm start`).
 2. Variables de entorno (ver `.env.production.example`).
 3. Schema de DB: importar `db/mysql/schema-hostinger.sql` vía phpMyAdmin.
-4. Seed: `curl -X POST -H "X-Admin-Seed-Token: <token>" https://<dominio>/api/admin/seed`.
+4. Seed: `curl -X POST -H "X-Admin-Seed-Token: <token>" https://inmocontrol.tecnowebsupportia.com/api/admin/seed`.
+
+**Producción:** `https://inmocontrol.tecnowebsupportia.com` (verificar siempre con
+`GET /api/health` → 200 y `db.ok: true`).
+
+**Ojo con el webhook:** un `git push` **sin refs nuevas** devuelve
+`Everything up-to-date` y **no emite evento**, así que Hostinger no redeploya. Si
+hace falta re-disparar el build (p. ej. se conectó GitHub→Hostinger después del
+push), usar `git commit --allow-empty` + push, o el botón **Redistribuir** del panel.
 
 ## Estado del refactor
 
