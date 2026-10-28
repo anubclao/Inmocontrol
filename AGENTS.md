@@ -269,6 +269,51 @@ Cualquier `GET /api/properties/:id` o `POST /api/inventories/upload-pdf` tiraba
   inválida en MySQL 8). Con la migración aplicada, la columna YA existe — esa
   rama era un parche que en realidad rompía más de lo que arreglaba.
 
+### Auditoría Hostinger (oct-2026) — rate limit, Drive y procesos
+
+Hostinger cerró una revisión del hosting con esta lectura: app estable, sin
+cron/workers, pero con un evento de **200/200 procesos** en 24 h, pico de
+memoria de ~746 MB y riesgo concentrado en subidas a Drive. Los cambios se
+hicieron en 3 commits (`fix(auth)`, `fix(drive)`, `fix(server)`).
+
+**Migración 017 — `login_attempts.attempts` (aplicar ANTES del deploy).**
+El UNIQUE `(ip, email, window_start)` + `INSERT ... ON DUPLICATE KEY UPDATE`
+hacía que cada (ip, email) tuviera UNA fila por ventana de 15 min. El conteo
+era `COUNT(*)` → nunca pasaba de 1 → **el umbral de 5 intentos no se alcanzaba
+nunca**. Ahora hay columna `attempts`, el conteo es `SUM(attempts)` y
+`attempted_at` se refresca en cada upsert (ventana deslizante desde el ÚLTIMO
+intento). Aplicar con `node scripts/apply-017-migration.mjs` (hace snapshot de
+la tabla en `backups/` antes del ALTER) y verificar el bloqueo real con
+`node scripts/verify-rate-limit.mjs` (6º intento → 429).
+
+- **Orden obligatorio**: migración primero, deploy después. Si se invierte, el
+  código detecta `ER_BAD_FIELD_ERROR`, sigue insertando con el esquema viejo y
+  loguea `[rateLimit] FALTA migración 017` — no rompe el login, pero el límite
+  queda como estaba (roto).
+- `login_attempts` ahora está declarada en `schema-completo.sql` (antes solo
+  existía en la migración 014, así que un deploy limpio no creaba la tabla y el
+  middleware degradaba a permitir todo en silencio).
+
+**`server/lib/driveGuard.ts` — usar siempre para llamadas a Google.**
+`runDrive(label, (signal) => drive.x.y(params, { signal }), { timeoutMs, attempts })`.
+El timeout se implementa con `Promise.race` + `AbortController`, así que corta
+aunque el callee ignore la señal. Reintentos con backoff solo para 429/5xx/red;
+nunca 4xx. `upsertFileInFolder()` y `findOrCreateFolder()` son idempotentes: un
+timeout que en realidad se completó en Google no deja archivos duplicados.
+`/api/drive/file` usa `pipeline()` — no volver a `.pipe()`.
+
+**Límites de subida.** `server/lib/uploadLimits.ts`: PDF 10 MB, lote de fotos
+8 MB, validado ANTES de decodificar base64 y respondido como 413 con
+`PAYLOAD_TOO_LARGE`. El envelope global `express.json({limit:'15mb'})` sigue
+existiendo pero ya no es la única defensa.
+
+**Procesos.** `SIGTERM` y `SIGINT` comparten shutdown (cierra HTTP y pool, tope
+8 s). `uncaughtException` **sale con código 1** a propósito: Hostinger solo
+reinicia cuando ve un exit, y un proceso corrupto atendiendo requests es peor
+que un reinicio. Pool con `queueLimit` 100 (`DB_QUEUE_LIMIT`) en vez de cola
+infinita. Sesiones con TTL validado en `requireAuth` + purga perezosa al
+loguear (sin `setInterval`).
+
 ### Schema importante de `properties.status`
 
 - Constraint: `CHECK (status IN ('Pendiente','Activo','En Colocación','Arrendado','Inactivo'))`
