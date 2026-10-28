@@ -66,17 +66,23 @@ async function startServer() {
   app.use(express.json({ limit: "15mb" })); // PDFs en base64 pueden ser grandes
   app.use(cookieParser()); // necesario para sesiones httpOnly de /api/auth/*
 
-  // ─── DEBUG (temporal — ver fix-bug-body-parser-empty) ─────────────
-  // Loguea CADA request entrante y si el body parser tiró un error
-  // silencioso. Es para diagnosticar por qué `requireAuth` no corre en
-  // requests autenticadas (devuelve 401 con body vacío).
+  // ─── Request log (solo /api) ────────────────────────────────────────
+  // Antes logueaba TODO, incluidos los assets estáticos de `dist/`: cada carga
+  // de la app generaba decenas de líneas y en Hostinger eso infla los archivos
+  // de log del panel (I/O y disco en un plan compartido). El interés real está
+  // en las rutas de API; el detalle de assets no aporta nada.
   app.use((req, res, next) => {
+    // El path se captura ACÁ: Express reescribe `req.url` durante el dispatch
+    // del router y el callback de `finish` puede verlo ya recortado (`/me` en
+    // vez de `/api/auth/me`).
+    const reqPath = req.path;
+    if (!reqPath.startsWith("/api")) return next();
     const start = Date.now();
     res.on("finish", () => {
       const ms = Date.now() - start;
       const cookiePresent = req.headers.cookie ? "yes" : "no";
       console.log(
-        `[req] ${req.method} ${req.path} → ${res.statusCode} (${ms}ms, cookie=${cookiePresent}, len=${res.getHeader("content-length") ?? "?"})`,
+        `[req] ${req.method} ${reqPath} → ${res.statusCode} (${ms}ms, cookie=${cookiePresent}, len=${res.getHeader("content-length") ?? "?"})`,
       );
     });
     next();
@@ -174,7 +180,7 @@ async function startServer() {
   // Captura cualquier error de next(err) o asyncHandler, devuelve JSON consistente.
   app.use(errorHandler);
 
-  app.listen(PORT, HOST, () => {
+  httpServer = app.listen(PORT, HOST, () => {
     console.log(
       `[server] Listening on http://${HOST}:${PORT} (NODE_ENV=${process.env.NODE_ENV ?? "development"})`,
     );
@@ -189,12 +195,48 @@ async function startServer() {
   });
 }
 
-// Cleanup al cerrar
-process.on("SIGINT", async () => {
-  console.log("\nCerrando pool de MySQL...");
-  await pool.end().catch(() => {});
-  process.exit(0);
-});
+/** Instancia HTTP, para poder cerrarla en un shutdown ordenado. */
+let httpServer: import("http").Server | null = null;
+let shuttingDown = false;
+
+/**
+ * Cierre ordenado.
+ *
+ * Hostinger manda SIGTERM al redeployar o al detener la app por inactividad.
+ * Antes solo escuchábamos SIGINT (Ctrl+C local), así que en producción el
+ * pool de MySQL se cerraba de golpe y las conexiones quedaban colgadas del
+ * lado del servidor de base de datos.
+ */
+async function shutdown(reason: string, exitCode = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[server] ${reason} — cerrando ordenadamente...`);
+
+  // Red de seguridad: si algo del cierre se cuelga (una query en vuelo, un
+  // socket que no suelta), no dejamos el proceso zombi.
+  const force = setTimeout(() => {
+    console.error("[server] cierre forzado tras 8s");
+    process.exit(exitCode === 0 ? 1 : exitCode);
+  }, 8_000);
+  force.unref();
+
+  try {
+    if (httpServer) {
+      await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
+      console.log("[server] HTTP cerrado");
+    }
+    await pool.end().catch(() => {});
+    console.log("[server] pool de MySQL cerrado");
+  } catch (err: any) {
+    console.error("[server] error durante el cierre:", err?.message ?? err);
+  }
+
+  clearTimeout(force);
+  process.exit(exitCode);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 // ─── Safety nets — NUNCA dejar que un error asíncrono mate el proceso ───
 // Sin estos handlers, una query MySQL mal armada (ej: ER_BAD_FIELD_ERROR
@@ -213,12 +255,16 @@ process.on("unhandledRejection", (reason: any) => {
 
 process.on("uncaughtException", (err: any) => {
   console.error(
-    "[server] UNCAUGHT EXCEPTION (no mató el proceso):",
+    "[server] UNCAUGHT EXCEPTION — el proceso sale para que el supervisor lo reinicie:",
     err?.message ?? err,
   );
   if (err?.stack) console.error(err.stack);
-  // No exit — solo loguear. Para errores fatales de verdad (OOM, etc.),
-  // Node va a cerrar el proceso igual cuando intente usarlos.
+
+  // Auditoría Hostinger (oct-2026): antes NO salíamos. Quedarse vivo con la
+  // memoria en estado inconsistente es peor que reiniciar: el proceso sigue
+  // atendiendo requests con estado roto y el panel de Hostinger no se entera
+  // (nunca ve un exit). Hostinger reinicia solo cuando el proceso termina.
+  void shutdown("uncaughtException", 1);
 });
 
 startServer().catch((err) => {

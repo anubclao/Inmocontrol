@@ -56,7 +56,14 @@ export function errorHandler(
   } else {
     // Error no tipado: 4xx si trae status < 500, 5xx por default
     statusCode = err?.statusCode ?? err?.status ?? 500;
-    code = err?.code ?? (statusCode >= 500 ? "INTERNAL" : "CLIENT_ERROR");
+    // En 5xx NO propagamos `err.code` crudo: viene de Node/MySQL/Google y
+    // filtra infraestructura al cliente (ej: "ECONNREFUSED" le dice que la DB
+    // está caída y en qué puerto). Los 4xx sí lo conservan porque el cliente
+    // lo usa para decidir (SESSION_MISSING_ORG, RATE_LIMITED, etc.).
+    code =
+      statusCode >= 500
+        ? "INTERNAL"
+        : (err?.code ?? (statusCode >= 500 ? "INTERNAL" : "CLIENT_ERROR"));
     // Si es 4xx o el caller marcó expose=true, mostramos el mensaje.
     // Si es 5xx sin expose, mensaje genérico.
     const expose = statusCode < 500 || err?.expose === true;

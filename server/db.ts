@@ -51,7 +51,15 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME ?? 'inmocontrol',
   waitForConnections: true,
   connectionLimit: Number(process.env.DB_LIMIT ?? 10),
-  queueLimit: 0,
+  // Auditoría Hostinger (oct-2026): `queueLimit: 0` = cola infinita. Si MySQL
+  // se pone lento, las requests se apilan en RAM hasta tumbar el proceso. Con
+  // tope, el excedente falla rápido en vez de arrastrar todo.
+  queueLimit: Number(process.env.DB_QUEUE_LIMIT ?? 100),
+  connectTimeout: Number(process.env.DB_CONNECT_TIMEOUT_MS ?? 10_000),
+  // Keep-alive: evita que un firewall/NAT corte conexiones ociosas y el pool
+  // reparta sockets muertos (ECONNRESET intermitente en prod).
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10_000,
   dateStrings: true,    // devuelve DATE/DATETIME como string ISO en lugar de Date
   decimalNumbers: true, // DECIMAL → number (no string)
 });

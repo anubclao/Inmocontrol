@@ -21,6 +21,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import pool from "../db.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import {
   rateLimit,
   recordAttempt,
@@ -40,6 +41,25 @@ interface Session {
   createdAt: number;
 }
 const sessions = new Map<string, Session>();
+
+/**
+ * Borra sesiones vencidas.
+ *
+ * Sin esto el Map crecía para siempre: la cookie vence a las 12 h pero la
+ * entrada en memoria quedaba hasta el reinicio del proceso. No es un leak
+ * grande (una entrada por login), pero es gratis acotarlo y Hostinger pidió
+ * revisar "procesos persistentes".
+ *
+ * Se llama al crear una sesión (login) y de forma perezosa desde
+ * `requireAuth`, así que no necesita un `setInterval` — que es justo lo que
+ * no queremos en un plan compartido.
+ */
+function purgeExpiredSessions(): void {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (now - session.createdAt > COOKIE_MAX_AGE_MS) sessions.delete(id);
+  }
+}
 
 const COOKIE_NAME = "inmocontrol_pilot_session";
 const COOKIE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 horas
@@ -87,6 +107,15 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
       .json({ error: "No autenticado", code: "NO_SESSION" });
   }
   const session = sessions.get(sessionId);
+  if (session && Date.now() - session.createdAt > COOKIE_MAX_AGE_MS) {
+    // TTL vencido: la cookie podía seguir viva (el browser no siempre la
+    // borra) pero la sesión ya no debe servir.
+    sessions.delete(sessionId);
+    clearSessionCookie(res);
+    return res
+      .status(401)
+      .json({ error: "Sesión expirada", code: "SESSION_EXPIRED" });
+  }
   if (!session) {
     clearSessionCookie(res);
     return res
@@ -123,7 +152,12 @@ router.post(
   // fix-issue-rate-limit-auth-login: dos middlewares (per-IP+email y per-IP).
   rateLimit({ windowSeconds: 15 * 60, maxAttempts: 5, scope: "ip+email" }),
   rateLimit({ windowSeconds: 15 * 60, maxAttempts: 20, scope: "ip" }),
-  async (req, res) => {
+  // BUG (auditoría Hostinger, oct-2026): este handler era `async` SIN
+  // asyncHandler. Un `throw` (ej: MySQL caído) se escapaba como
+  // unhandledRejection y la request quedaba colgada sin respuesta: el usuario
+  // veía "cargando" para siempre y el socket quedaba retenido. Con
+  // asyncHandler el error va al errorHandler central y devuelve JSON.
+  asyncHandler(async (req, res) => {
     const { email, password } = req.body as {
       email?: string;
       password?: string;
@@ -188,6 +222,7 @@ router.post(
       await recordAttempt(ip, normalizedEmail, true);
 
       // Crear sesión
+      purgeExpiredSessions();
       const sessionId = crypto.randomUUID();
       sessions.set(sessionId, {
         profileId: user.id,
@@ -215,7 +250,7 @@ router.post(
       console.error("[auth] login error:", err);
       throw err;
     }
-  },
+  }),
 );
 
 /**
