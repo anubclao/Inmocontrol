@@ -2,7 +2,6 @@ import * as dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 import express from "express";
 import crypto from "crypto";
-import { Readable } from "stream";
 import pool from "../db.js";
 // FIX 2026-09-25 (saas_multitenant.md): usar getOrgIdForRequest en vez de
 // ensureDefaultOrg() para que el orgId venga del req.user, no del primero
@@ -18,35 +17,17 @@ import {
   formatMb,
   MAX_PDF_BYTES,
   MAX_PHOTO_BATCH_BYTES,
+  stripDataUrlPrefix,
 } from "../lib/uploadLimits.js";
 import { payloadTooLarge } from "../lib/errors.js";
-
-// BUG-014/015: drive con timeout 15s. Si Drive se cuelga, no esperamos
-// para siempre. Constante local (consistente con tenants.ts y properties.ts).
-const DRIVE_TIMEOUT_MS = 15_000;
-
-function withTimeout<T = any>(
-  p: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(
-      () => reject(new Error(`Timeout after ${ms}ms: ${label}`)),
-      ms,
-    );
-    p.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(t);
-        reject(e);
-      },
-    );
-  });
-}
+// Reemplaza al `withTimeout` local: timeout con abort REAL + reintentos en
+// lecturas + upsert idempotente. El local cortaba la espera pero dejaba la
+// subida corriendo en background (dos uploads si el usuario reintentaba).
+import {
+  findOrCreateFolder,
+  runDrive,
+  upsertFileInFolder,
+} from "../lib/driveGuard.js";
 
 const router = express.Router();
 
@@ -76,36 +57,20 @@ async function findPropertyInOrg(propertyId: string, orgId: string) {
   return rows[0] ?? null;
 }
 
-/** Busca (o crea) una subcarpeta dentro de otra por nombre. */
+/** Busca (o crea) una subcarpeta dentro de otra por nombre.
+ *
+ * Delega en `findOrCreateFolder` (driveGuard): timeout con abort real y
+ * búsqueda idempotente con reintentos. Antes usaba `withTimeout`, que cortaba
+ * la espera pero dejaba la request a Google corriendo en background — si el
+ * usuario reintentaba, quedaban dos creaciones en paralelo.
+ */
 async function getOrCreateSubfolder(
   drive: any,
   parentId: string,
   name: string,
 ): Promise<string> {
-  // BUG-014/015: con withTimeout para no colgarse.
-  const list = await withTimeout(
-    drive.files.list({
-      q: `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
-      fields: "files(id)",
-      spaces: "drive",
-    }),
-    DRIVE_TIMEOUT_MS,
-    `drive.files.list (subfolder ${name})`,
-  );
-  if (list.data.files?.length) return list.data.files[0].id!;
-  const created = await withTimeout(
-    drive.files.create({
-      requestBody: {
-        name,
-        mimeType: "application/vnd.google-apps.folder",
-        parents: [parentId],
-      },
-      fields: "id",
-    }),
-    DRIVE_TIMEOUT_MS,
-    `drive.files.create (subfolder ${name})`,
-  );
-  return created.data.id!;
+  const { id } = await findOrCreateFolder(drive, name, parentId);
+  return id;
 }
 
 /**
@@ -361,33 +326,31 @@ router.post(
         let mimeType = "image/jpeg";
         const m = /^data:([^;]+);base64,/.exec(photo.base64Data);
         if (m) mimeType = m[1];
-        const cleanBase64 = photo.base64Data.replace(/^data:[^;]+;base64,/, "");
 
-        const buffer = Buffer.from(cleanBase64, "base64");
-        // BUG-015: con withTimeout para que una foto colgada no bloquee el resto.
-        const result = await withTimeout(
-          drive.files.create({
-            requestBody: { name: photo.name, parents: [photosFolderId] },
-            media: { mimeType, body: Readable.from(buffer) },
-            fields: "id, webViewLink",
-          }),
-          DRIVE_TIMEOUT_MS,
-          `drive.files.create (photo ${photo.name})`,
-        );
+        const buffer = Buffer.from(stripDataUrlPrefix(photo.base64Data), "base64");
+        // upsert por nombre: si el lote se reintenta (timeout que en realidad
+        // se completó en Google), no queda la foto duplicada.
+        const result = await upsertFileInFolder(drive, {
+          name: photo.name,
+          parentId: photosFolderId,
+          mimeType,
+          body: buffer,
+        });
 
-        await withTimeout(
-          drive.permissions.create({
-            fileId: result.data.id!,
-            requestBody: { role: "reader", type: "anyone" },
-          }),
-          DRIVE_TIMEOUT_MS,
-          `drive.permissions.create (photo ${photo.name})`,
+        await runDrive(`permissions.create (photo ${photo.name})`, (signal) =>
+          drive.permissions.create(
+            {
+              fileId: result.id,
+              requestBody: { role: "reader", type: "anyone" },
+            },
+            { signal },
+          ),
         );
 
         uploaded.push({
           name: photo.name,
-          webViewLink: result.data.webViewLink!,
-          fileId: result.data.id!,
+          webViewLink: result.webViewLink!,
+          fileId: result.id,
         });
       } catch (err) {
         console.warn(
@@ -475,36 +438,34 @@ router.post(
     const fileName = `Inventario_${phaseLabel}_${date}.pdf`;
 
     // 4. Subir el PDF
-    const buffer = Buffer.from(
-      base64Data.replace(/^data:application\/pdf;base64,/, ""),
-      "base64",
-    );
-    // BUG-014: con withTimeout + try/catch para que un timeout no devuelva
-    // HTML 500. El catch devuelve 503 con mensaje accionable.
+    const buffer = Buffer.from(stripDataUrlPrefix(base64Data), "base64");
+    // BUG-014: el catch devuelve 503 con mensaje accionable en vez de HTML 500.
+    // Auditoría Hostinger: `upsertFileInFolder` + `runDrive` reemplazan a
+    // `withTimeout`, que cortaba la espera pero NO cancelaba la subida (un
+    // reintento dejaba dos uploads en paralelo y, peor, dos PDFs en Drive).
     let uploaded;
     try {
-      uploaded = await withTimeout(
-        drive.files.create({
-          requestBody: { name: fileName, parents: [inventariosFolderId] },
-          media: { mimeType: "application/pdf", body: Readable.from(buffer) },
-          fields: "id, webViewLink",
-        }),
-        DRIVE_TIMEOUT_MS,
-        `drive.files.create (${fileName})`,
-      );
+      const file = await upsertFileInFolder(drive, {
+        name: fileName,
+        parentId: inventariosFolderId,
+        mimeType: "application/pdf",
+        body: buffer,
+      });
+      uploaded = { data: { id: file.id, webViewLink: file.webViewLink } };
 
       // Hacer público el link
-      await withTimeout(
-        drive.permissions.create({
-          fileId: uploaded.data.id!,
-          requestBody: { role: "reader", type: "anyone" },
-        }),
-        DRIVE_TIMEOUT_MS,
-        `drive.permissions.create (${fileName})`,
+      await runDrive(`permissions.create (${fileName})`, (signal) =>
+        drive.permissions.create(
+          {
+            fileId: file.id,
+            requestBody: { role: "reader", type: "anyone" },
+          },
+          { signal },
+        ),
       );
     } catch (err: any) {
       console.error("[upload-pdf] drive failed:", err);
-      if (err?.message?.includes("Timeout")) {
+      if (err?.code === "DRIVE_TIMEOUT" || err?.message?.includes("Timeout")) {
         return res.status(503).json({
           error: "Drive no responde. Reintentá en unos segundos.",
         });
