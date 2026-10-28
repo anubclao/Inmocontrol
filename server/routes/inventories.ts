@@ -10,6 +10,16 @@ import pool from "../db.js";
 import { getOrgIdForRequest } from "../lib/orgContext.js";
 import { getDriveClientForRequest, getDriveContext } from "../lib/driveClient.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+// Auditoría Hostinger (oct-2026): tope explícito por endpoint (413) en vez de
+// dejar que el único límite sea el envelope global de 15 MB.
+import {
+  assertBase64Size,
+  base64DecodedBytes,
+  formatMb,
+  MAX_PDF_BYTES,
+  MAX_PHOTO_BATCH_BYTES,
+} from "../lib/uploadLimits.js";
+import { payloadTooLarge } from "../lib/errors.js";
 
 // BUG-014/015: drive con timeout 15s. Si Drive se cuelga, no esperamos
 // para siempre. Constante local (consistente con tenants.ts y properties.ts).
@@ -280,6 +290,19 @@ router.post(
       return;
     }
 
+    // Límite por lote ANTES de decodificar: evita el pico de RAM de un base64
+    // gigante y le dice al cliente cuál es el máximo. El frontend ya corta en
+    // lotes de 6 M chars (driveService), esto es la red de seguridad.
+    const batchBytes = photos.reduce(
+      (acc, p) => acc + base64DecodedBytes(p?.base64Data ?? ""),
+      0,
+    );
+    if (batchBytes > MAX_PHOTO_BATCH_BYTES) {
+      throw payloadTooLarge(
+        `Lote de fotos demasiado grande: ${formatMb(batchBytes)} (máximo ${formatMb(MAX_PHOTO_BATCH_BYTES)}). Mandá menos fotos por lote.`,
+      );
+    }
+
     // Cliente de Drive del usuario de la sesión (no `default_user` hardcodeado).
     const drive = await getDriveClientForRequest(req);
     if (!drive) {
@@ -407,6 +430,8 @@ router.post(
       res.status(400).json({ error: "Faltan: propertyId, phase, base64Data" });
       return;
     }
+
+    assertBase64Size(base64Data, MAX_PDF_BYTES, "El PDF del inventario");
 
     // Cliente de Drive del usuario de la sesión.
     const drive = await getDriveClientForRequest(req);

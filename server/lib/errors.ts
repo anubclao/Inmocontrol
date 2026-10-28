@@ -39,6 +39,8 @@ export const notFound = (m: string, c = "NOT_FOUND"): AppError =>
   new AppError(404, m, c, true);
 export const conflict = (m: string, c = "CONFLICT"): AppError =>
   new AppError(409, m, c, true);
+export const payloadTooLarge = (m: string, c = "PAYLOAD_TOO_LARGE"): AppError =>
+  new AppError(413, m, c, true);
 
 // ── 5xx factories ────────────────────────────────────────────────────────
 /** 500 con mensaje genérico "Internal server error". El original se loguea con stack. */

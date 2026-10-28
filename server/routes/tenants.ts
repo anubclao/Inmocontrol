@@ -11,6 +11,7 @@ import pool from "../db.js";
 import { getOrgIdForRequest } from "../lib/orgContext.js";
 import { getDriveClientForRequest, getDriveContext } from "../lib/driveClient.js";
 import { escapeDriveQueryValue } from "../lib/driveHelpers.js";
+import { assertBase64Size, MAX_PDF_BYTES } from "../lib/uploadLimits.js";
 
 /**
  * FIX 2026-07-22: timeout estricto para llamadas a Google Drive.
@@ -851,6 +852,9 @@ router.post(
       res.status(400).json({ error: "Faltan campos requeridos" });
       return;
     }
+
+    // Auditoría Hostinger: 413 explícito antes de decodificar.
+    assertBase64Size(base64Data, MAX_PDF_BYTES, "El documento");
 
     const allowedFolders = ["Cedula", "Contrato", "Recibos"];
     if (!allowedFolders.includes(folder)) {

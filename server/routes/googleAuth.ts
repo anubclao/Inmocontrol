@@ -4,6 +4,7 @@ import express from 'express';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 // FIX #2 (P0 seguridad): requireAuth en endpoints privados de Google (upload-pdf, file proxy).
 // FIX 2026-10: /auth/google también requiere auth (ver documento abajo).
 import { requireAuth } from './auth.js';
@@ -20,6 +21,20 @@ import {
   getDriveContext,
   saveDriveTokens,
 } from '../lib/driveClient.js';
+// Auditoría Hostinger (oct-2026): estas rutas llamaban a Google sin timeout.
+// `runDrive` usa AbortController → aborta la request de verdad al vencer, no
+// solo la promesa, y reintenta 429/5xx con backoff en las lecturas.
+import {
+  findFileByName,
+  findOrCreateFolder,
+  runDrive,
+  upsertFileInFolder,
+} from '../lib/driveGuard.js';
+import {
+  assertBase64Size,
+  MAX_PDF_BYTES,
+  stripDataUrlPrefix,
+} from '../lib/uploadLimits.js';
 
 // FIX #2 (P0 seguridad): las rutas de Drive requieren auth.
 //
@@ -204,6 +219,10 @@ router.post('/upload/google-drive', requireAuth, requireRole('canManageDrive'), 
     return;
   }
 
+  // 413 explícito antes de decodificar (evita el pico de RAM de un base64
+  // enorme y le dice al cliente cuál es el máximo).
+  assertBase64Size(base64Data, MAX_PDF_BYTES, 'El PDF');
+
   // Tokens del usuario de la sesión (perfil) con fallback legacy.
   const ctx = await getDriveContext(req);
   if (!ctx || !ctx.rootFolderId) {
@@ -218,34 +237,38 @@ router.post('/upload/google-drive', requireAuth, requireRole('canManageDrive'), 
   // Subcarpeta por propiedad: "InmoControl / {propertyId}"
   const propFolderId = await getOrCreatePropertyFolder(drive, drive_folder_id, propertyId);
 
-  // Limpia el base64 y sube
-  const buffer = Buffer.from(base64Data.replace(/^data:application\/pdf;base64,/, ''), 'base64');
-  const mimeType = 'application/pdf';
+  const buffer = Buffer.from(stripDataUrlPrefix(base64Data), 'base64');
   const finalFileName = `${docType}_${fileName}`;
 
-  const uploadedFile = await drive.files.create({
-    requestBody: {
-      name: finalFileName,
-      parents: [propFolderId],
-    },
-    media: { mimeType, body: buffer },
-    fields: 'id, name, webViewLink',
+  // Upsert: si el documento ya existe con ese nombre, lo reemplaza en vez de
+  // crear un duplicado (clave para que un reintento tras timeout no duplique).
+  const uploaded = await upsertFileInFolder(drive, {
+    name: finalFileName,
+    parentId: propFolderId,
+    mimeType: 'application/pdf',
+    body: buffer,
   });
 
   // Hacer el archivo públicamente visible (el usuario puede compartir el link)
-  await drive.permissions.create({
-    fileId: uploadedFile.data.id!,
-    requestBody: {
-      role: 'reader',
-      type: 'anyone',
-    },
-  });
+  await runDrive('permissions.create', (signal) =>
+    drive.permissions.create(
+      {
+        fileId: uploaded.id,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone',
+        },
+      },
+      { signal },
+    ),
+  );
 
   res.json({
     success: true,
-    fileId: uploadedFile.data.id,
-    fileName: uploadedFile.data.name,
-    webViewLink: uploadedFile.data.webViewLink,
+    fileId: uploaded.id,
+    fileName: finalFileName,
+    webViewLink: uploaded.webViewLink,
+    replaced: uploaded.replaced,
   });
 }));
 
@@ -309,54 +332,20 @@ router.get('/drive/create-property-folders', requireAuth, asyncHandler(async (re
   }
   const { drive, rootFolderId } = ctx;
 
-  // 1. Buscar si ya existe una carpeta con este nombre bajo InmoControl/
-  //    (defensa contra doble-creación si el cliente llama este endpoint dos veces)
-  const existing = await drive.files.list({
-    q: `name='${String(propertyName).replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${rootFolderId}' in parents and trashed=false`,
-    fields: 'files(id)',
-    spaces: 'drive',
-  });
+  // Idempotente: busca-o-crea las tres carpetas. Antes, si la carpeta de la
+  // propiedad ya existía, se asumía que las subcarpetas también y no se
+  // verificaban (un run parcial dejaba la propiedad sin `Propietario/`).
+  const property = await findOrCreateFolder(drive, propertyName, rootFolderId);
+  const propietario = await findOrCreateFolder(drive, 'Propietario', property.id);
+  const inventarios = await findOrCreateFolder(drive, 'Inventarios', property.id);
 
-  let propertyFolderId: string;
-  if (existing.data.files && existing.data.files.length > 0) {
-    // Ya existe — reusar
-    propertyFolderId = existing.data.files[0].id!;
-    console.log(`[Drive] Carpeta "${propertyName}" ya existía → reusando ${propertyFolderId}`);
-  } else {
-    // Crear carpeta de la propiedad dentro de InmoControl
-    const propertyFolder = await drive.files.create({
-      requestBody: {
-        name: propertyName,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [rootFolderId],
-      },
-      fields: 'id',
-    });
-    propertyFolderId = propertyFolder.data.id!;
-
-    // 2. Crear subcarpeta Propietario
-    await drive.files.create({
-      requestBody: {
-        name: 'Propietario',
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [propertyFolderId],
-      },
-      fields: 'id',
-    });
-
-    // 3. Crear subcarpeta Inventarios
-    await drive.files.create({
-      requestBody: {
-        name: 'Inventarios',
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [propertyFolderId],
-      },
-      fields: 'id',
-    });
-  }
-
-  console.log(`[Drive] Carpetas creadas para "${propertyName}": ${propertyFolderId}`);
-  res.json({ propertyFolderId });
+  console.log(
+    `[Drive] Carpetas para "${propertyName}": ${property.id} ` +
+      `(propiedad=${property.created ? 'creada' : 'reusada'}, ` +
+      `Propietario=${propietario.created ? 'creada' : 'reusada'}, ` +
+      `Inventarios=${inventarios.created ? 'creada' : 'reusada'})`,
+  );
+  res.json({ propertyFolderId: property.id });
 }));
 
 /**
@@ -379,6 +368,8 @@ router.post('/drive/upload-file', requireAuth, requireRole('canManageDrive'), as
     return;
   }
 
+  assertBase64Size(base64Data, MAX_PDF_BYTES, 'El PDF');
+
   const drive = await getDriveClientForRequest(req);
   if (!drive) {
     res.status(401).json({
@@ -389,36 +380,29 @@ router.post('/drive/upload-file', requireAuth, requireRole('canManageDrive'), as
   }
 
   // Buscar el ID de la subcarpeta (Propietario o Inventarios)
-  const subfolderRes = await drive.files.list({
-    q: `name='${subfolder}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
-    fields: 'files(id)',
-    spaces: 'drive',
-  });
-
-  const subfolderId = subfolderRes.data.files?.[0]?.id;
+  const subfolderId = await findFileByName(drive, subfolder, folderId, 'folder');
   if (!subfolderId) {
     res.status(404).json({ error: `Subcarpeta "${subfolder}" no encontrada dentro de la propiedad` });
     return;
   }
 
-  // Decodificar base64 a buffer
-  const fileBuffer = Buffer.from(base64Data, 'base64');
+  const fileBuffer = Buffer.from(stripDataUrlPrefix(base64Data), 'base64');
 
-  // Subir archivo
-  const uploaded = await drive.files.create({
-    requestBody: {
-      name: fileName,
-      parents: [subfolderId],
-    },
-    media: {
-      mimeType: 'application/pdf',
-      body: Readable.from(fileBuffer),
-    },
-    fields: 'id, webViewLink',
+  const uploaded = await upsertFileInFolder(drive, {
+    name: fileName,
+    parentId: subfolderId,
+    mimeType: 'application/pdf',
+    body: fileBuffer,
   });
 
-  console.log(`[Drive] Archivo "${fileName}" subido a "${subfolder}" para propiedad ${propertyId}`);
-  res.json({ fileId: uploaded.data.id, webViewLink: uploaded.data.webViewLink });
+  console.log(
+    `[Drive] Archivo "${fileName}" ${uploaded.replaced ? 'reemplazado' : 'subido'} en "${subfolder}" para propiedad ${propertyId}`,
+  );
+  res.json({
+    fileId: uploaded.id,
+    webViewLink: uploaded.webViewLink,
+    replaced: uploaded.replaced,
+  });
 }));
 
 /**
@@ -454,6 +438,8 @@ router.post('/drive/upload-pdf', requireAuth, requireRole('canManageDrive'), asy
     return;
   }
 
+  assertBase64Size(base64Data, MAX_PDF_BYTES, 'El PDF');
+
   const drive = await getDriveClientForRequest(req);
   if (!drive) {
     res.status(503).json({
@@ -464,51 +450,39 @@ router.post('/drive/upload-pdf', requireAuth, requireRole('canManageDrive'), asy
   }
 
   // 1. Buscar o crear la subcarpeta (genérica, no restringida a un set fijo)
-  const subfolderRes = await drive.files.list({
-    q: `name='${subfolder.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentFolderId}' in parents and trashed=false`,
-    fields: 'files(id)',
-    spaces: 'drive',
-  });
-
-  let subfolderId = subfolderRes.data.files?.[0]?.id;
-  if (!subfolderId) {
-    const created = await drive.files.create({
-      requestBody: {
-        name: subfolder,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [parentFolderId],
-      },
-      fields: 'id',
-    });
-    subfolderId = created.data.id!;
+  const folder = await findOrCreateFolder(drive, subfolder, parentFolderId);
+  if (folder.created) {
     console.log(`[Drive] Subcarpeta "${subfolder}/" creada para parent ${parentKind ?? parentFolderId}`);
   }
 
-  // 2. Subir el PDF
-  const fileBuffer = Buffer.from(base64Data, 'base64');
-  const uploaded = await drive.files.create({
-    requestBody: {
-      name: fileName,
-      parents: [subfolderId],
-    },
-    media: {
-      mimeType: 'application/pdf',
-      body: Readable.from(fileBuffer),
-    },
-    fields: 'id, webViewLink',
+  // 2. Subir el PDF (upsert: un reintento no duplica el archivo)
+  const fileBuffer = Buffer.from(stripDataUrlPrefix(base64Data), 'base64');
+  const uploaded = await upsertFileInFolder(drive, {
+    name: fileName,
+    parentId: folder.id,
+    mimeType: 'application/pdf',
+    body: fileBuffer,
   });
 
   // 3. Hacer accesible públicamente (mismo patrón que los demás endpoints)
-  await drive.permissions.create({
-    fileId: uploaded.data.id!,
-    requestBody: { role: 'reader', type: 'anyone' },
-  });
+  await runDrive('permissions.create', (signal) =>
+    drive.permissions.create(
+      {
+        fileId: uploaded.id,
+        requestBody: { role: 'reader', type: 'anyone' },
+      },
+      { signal },
+    ),
+  );
 
-  console.log(`[Drive] PDF "${fileName}" → ${parentKind ?? 'parent'}/${subfolder}/`);
+  console.log(
+    `[Drive] PDF "${fileName}" ${uploaded.replaced ? 'reemplazado' : 'subido'} → ${parentKind ?? 'parent'}/${subfolder}/`,
+  );
   res.json({
-    fileId: uploaded.data.id,
-    webViewLink: uploaded.data.webViewLink,
+    fileId: uploaded.id,
+    webViewLink: uploaded.webViewLink,
     subfolder,
+    replaced: uploaded.replaced,
   });
 }));
 
@@ -516,20 +490,11 @@ router.post('/drive/upload-pdf', requireAuth, requireRole('canManageDrive'), asy
 
 /** Busca o crea la carpeta raíz "InmoControl" en el Drive del usuario. */
 async function getOrCreateInmoControlFolder(drive: any, userId: string): Promise<string> {
-  const name = 'InmoControl';
-  const response = await drive.files.list({
-    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false`,
-    fields: 'files(id, name)',
-    spaces: 'drive',
-  });
-
-  if (response.data.files?.length) return response.data.files[0].id!;
-
-  const folder = await drive.files.create({
-    requestBody: { name, mimeType: 'application/vnd.google-apps.folder' },
-    fields: 'id',
-  });
-  return folder.data.id!;
+  // `userId` se conserva en la firma por compatibilidad; el árbol ya está
+  // atado al Drive del usuario por el cliente OAuth de la request.
+  void userId;
+  const { id } = await findOrCreateFolder(drive, 'InmoControl', 'root');
+  return id;
 }
 
 /** Decodifica el email del id_token JWT de Google sin llamar a la API. */
@@ -545,24 +510,8 @@ function extractEmailFromIdToken(idToken: string): string | null {
 
 /** Busca o crea la subcarpeta "{propertyId}" dentro de la carpeta InmoControl. */
 async function getOrCreatePropertyFolder(drive: any, parentId: string, propertyId: string): Promise<string> {
-  const name = `Propiedad_${propertyId}`;
-  const response = await drive.files.list({
-    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
-    fields: 'files(id, name)',
-    spaces: 'drive',
-  });
-
-  if (response.data.files?.length) return response.data.files[0].id!;
-
-  const folder = await drive.files.create({
-    requestBody: {
-      name,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentId],
-    },
-    fields: 'id',
-  });
-  return folder.data.id!;
+  const { id } = await findOrCreateFolder(drive, `Propiedad_${propertyId}`, parentId);
+  return id;
 }
 
 /**
@@ -592,16 +541,26 @@ router.get('/drive/file', requireAuth, asyncHandler(async (req, res) => {
       res.status(503).json({ error: 'Google Drive no conectado. Reconectar en Configuración.' });
       return;
     }
-    const meta = await drive.files.get({
-      fileId,
-      fields: 'id, name, mimeType, size',
-      supportsAllDrives: false,
-    });
+    const meta = await runDrive(
+      'files.get (metadata)',
+      (signal) =>
+        drive.files.get(
+          { fileId, fields: 'id, name, mimeType, size', supportsAllDrives: false },
+          { signal },
+        ),
+      { attempts: 2 },
+    );
     const mimeType = meta.data.mimeType ?? 'application/octet-stream';
     const name = meta.data.name ?? `drive-${fileId}`;
-    const dl = await drive.files.get(
-      { fileId, alt: 'media', supportsAllDrives: false },
-      { responseType: 'stream' },
+    // Timeout más largo que el resto: acá sí estamos bajando contenido.
+    const dl = await runDrive(
+      'files.get (media)',
+      (signal) =>
+        drive.files.get(
+          { fileId, alt: 'media', supportsAllDrives: false },
+          { responseType: 'stream', signal },
+        ),
+      { timeoutMs: 60_000 },
     );
     res.setHeader('Content-Type', mimeType);
     if (meta.data.size) res.setHeader('Content-Length', String(meta.data.size));
@@ -611,15 +570,22 @@ router.get('/drive/file', requireAuth, asyncHandler(async (req, res) => {
       res.setHeader('Content-Disposition', `inline; filename="${name.replace(/"/g, '')}"`);
     }
     res.setHeader('Cache-Control', 'private, max-age=300');
-    (dl.data as Readable).pipe(res);
+    // pipeline (antes `.pipe(res)`): propaga errores del stream y libera el
+    // socket. Con pipe a secas, un corte de Drive dejaba la respuesta colgada
+    // hasta el timeout del cliente y el socket retenido en el server.
+    await pipeline(dl.data as Readable, res);
   } catch (err: any) {
-    if (err.code === 404) {
-      res.status(404).json({ error: 'Archivo no encontrado en Drive' });
-      return;
-    }
-    if (err.code === 403) {
-      res.status(403).json({ error: 'Sin permisos para acceder al archivo' });
-      return;
+    // Si ya se enviaron headers no podemos reescribir el status: pipeline ya
+    // destruyó la respuesta y el errorHandler no responde de nuevo.
+    if (!res.headersSent && !res.writableEnded) {
+      if (err.code === 404) {
+        res.status(404).json({ error: 'Archivo no encontrado en Drive' });
+        return;
+      }
+      if (err.code === 403) {
+        res.status(403).json({ error: 'Sin permisos para acceder al archivo' });
+        return;
+      }
     }
     throw err; // BUG-029: propagar al errorHandler central
   }
@@ -644,11 +610,19 @@ router.get('/drive/thumb', requireAuth, asyncHandler(async (req, res) => {
     res.status(503).json({ error: 'Google Drive no conectado.' });
     return;
   }
-  const meta = await drive.files.get({
-    fileId,
-    fields: 'id, name, mimeType, thumbnailLink',
-    supportsAllDrives: false,
-  });
+  const meta = await runDrive(
+    'files.get (thumbnail)',
+    (signal) =>
+      drive.files.get(
+        {
+          fileId,
+          fields: 'id, name, mimeType, thumbnailLink',
+          supportsAllDrives: false,
+        },
+        { signal },
+      ),
+    { attempts: 2 },
+  );
   const thumb = meta.data.thumbnailLink;
   if (thumb) {
     const sized = thumb.replace(/=s\d+(-c)?$/, `=${sizeSuffix}$1`);

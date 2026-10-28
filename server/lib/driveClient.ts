@@ -36,6 +36,7 @@ import type { Request } from "express";
 import crypto from "crypto";
 import pool from "../db.js";
 import { isTokenExpiringSoon } from "./googleAuth.js";
+import { withTimeout } from "./driveGuard.js";
 
 export const DRIVE_PROVIDER = "google_drive";
 
@@ -150,7 +151,14 @@ export async function getDriveContext(
       return null;
     }
     try {
-      const { credentials } = await oauth2Client.refreshAccessToken();
+      // 15 s: sin este tope, un refresh colgado mantenía la request abierta
+      // hasta el requestTimeout de Node (300 s) en CADA request que necesitara
+      // renovar el token.
+      const { credentials } = await withTimeout(
+        oauth2Client.refreshAccessToken(),
+        15_000,
+        "refresh access_token",
+      );
       oauth2Client.setCredentials(credentials);
       await pool.query(
         `UPDATE user_oauth_tokens
