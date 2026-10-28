@@ -130,8 +130,8 @@ CREATE TABLE IF NOT EXISTS tenants (
   PRIMARY KEY (id),
   KEY tenants_org_idx (organization_id),
   KEY tenants_property_idx (property_id),
-  -- BUG-033: UNIQUE constraint evita que dos tenants con la misma cédula
-  -- coexistan en la misma org. Migration 013 aplica lo mismo en DBs existentes.
+  -- BUG-033: UNIQUE constraint evita duplicados de (org, document_id).
+  -- Migration 013 aplica lo mismo en DBs existentes.
   UNIQUE KEY uniq_tenant_org_doc (organization_id, document_id),
   KEY tenants_doc_idx (organization_id, document_id),
   CONSTRAINT fk_tenants_org FOREIGN KEY (organization_id) REFERENCES organizations (id) ON DELETE CASCADE,
@@ -170,7 +170,6 @@ CREATE TABLE IF NOT EXISTS property_owners (
 
 -- ============================================================================
 -- 5.2 PROPERTY_UNITS — unidades adicionales (garaje, depósito, etc.) (migración 010)
--- 5.2 PROPERTY_UNITS — unidades adicionales (garaje, depósito, etc.) (migración 010)
 -- ============================================================================
 -- NO se crea fila para la unidad principal: la principal es la propiedad
 -- misma y sus docs (Certificado de Tradición principal) tienen unit_id=NULL.
@@ -200,7 +199,6 @@ CREATE TABLE IF NOT EXISTS property_units (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
--- 6. CONTRACTS — contratos de arrendamiento
 -- 5. PROPERTY_DOCUMENTS — documentos legales subidos por el agente
 -- ============================================================================
 -- owner_id y unit_id (migración 010) permiten vincular el documento a un
@@ -231,7 +229,7 @@ CREATE TABLE IF NOT EXISTS property_documents (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
--- 5.1 PROPERTY_OWNERS — N propietarios por propiedad (migración 010)
+-- 6. CONTRACTS — contratos de arrendamiento
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS contracts (
   id                     CHAR(36)      NOT NULL,
@@ -507,10 +505,9 @@ CREATE TABLE IF NOT EXISTS rent_invoices (
   updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uniq_invoice_contract_period (contract_id, period),
-  -- BUG-007/032: UNIQUE compuesto evita duplicar invoice_number bajo
-  -- concurrencia. Cada property tiene su propio contador, pero dentro
-  -- del mismo (org, property, period) el número es único. Permite que
-  -- propiedad A y B tengan ambas CC-YYYYMM-001.
+  -- BUG-007/032: UNIQUE compuesto (org, property, period, invoice_number)
+  -- permite que cada property tenga su propio contador por mes pero
+  -- rechaza duplicados dentro del mismo (org, property, period).
   -- Migration 012 aplica lo mismo en DBs existentes.
   UNIQUE KEY uniq_invoice_org_prop_period_number (organization_id, property_id, period, invoice_number),
   KEY invoices_org_idx (organization_id),
@@ -698,9 +695,42 @@ CREATE TABLE IF NOT EXISTS saas_invoices (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
+-- 23. login_attempts
+-- ============================================================================
+-- Rate limit de /api/auth/login (migración 014 + 017).
+--
+-- `attempts` NO es redundante con el número de filas: el UNIQUE
+-- (ip, email, window_start) deduplica por ventana de 15 min, así que cada
+-- fila acumula N intentos. El middleware cuenta SUM(attempts), no COUNT(*).
+-- Sin esa columna el límite de intentos no se activa nunca (bug oct-2026).
+--
+-- Se declara acá porque hasta ahora solo existía en la migración: un deploy
+-- limpio con schema-hostinger.sql NO creaba la tabla y el middleware
+-- degradaba a permitir todo en silencio.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ip            VARCHAR(45)  NOT NULL,
+  email         VARCHAR(255) NOT NULL,
+  success       TINYINT(1)   NOT NULL DEFAULT 0,
+  attempts      INT UNSIGNED NOT NULL DEFAULT 1
+                  COMMENT 'Intentos acumulados por (ip,email,ventana). El rate limit suma esto, no cuenta filas',
+  window_start  BIGINT UNSIGNED NOT NULL
+                  COMMENT 'Bucket fijo de 15 min: dedupe del UNIQUE',
+  attempted_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  COMMENT 'Último intento (se refresca en cada upsert): ventana deslizante',
+  cleared_at    DATETIME     NULL
+                  COMMENT 'Soft-clear tras login exitoso',
+  INDEX idx_ip_email (ip, email, attempted_at),
+  INDEX idx_window (window_start),
+  UNIQUE KEY uniq_window (ip, email, window_start)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
 -- RESUMEN FINAL
 -- ============================================================================
--- Total de tablas: 22 (1-22), más 1 tabla auxiliar (user_oauth_tokens = #17).
+-- Total de tablas: 22 del modelo base + login_attempts (#23).
+-- (user_oauth_tokens ya está contada como #17.)
 --
 -- Listado completo:
 --   1.  organizations
@@ -725,9 +755,10 @@ CREATE TABLE IF NOT EXISTS saas_invoices (
 --   20. saas_subscriptions
 --   21. saas_payment_methods
 --   22. saas_invoices
+--   23. login_attempts        (rate limit de login — migración 014 + 017)
 --
 -- TOTAL OBJETOS DE DB:
---   • 22 tablas
+--   • 23 tablas
 --   •  0 vistas
 --   •  0 triggers
 --   •  0 stored procedures
@@ -736,6 +767,7 @@ CREATE TABLE IF NOT EXISTS saas_invoices (
 -- Toda la lógica vive en TypeScript (cálculos financieros, validaciones).
 -- El server Express es una capa fina de persistencia.
 -- ============================================================================
+
 
 -- ============================================================================
 -- InmoControl — NOVEDADES DE CARGOS UNIFICADAS (Fase 12+)

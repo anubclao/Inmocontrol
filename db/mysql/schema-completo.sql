@@ -725,9 +725,42 @@ CREATE TABLE IF NOT EXISTS saas_invoices (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
+-- 23. login_attempts
+-- ============================================================================
+-- Rate limit de /api/auth/login (migración 014 + 017).
+--
+-- `attempts` NO es redundante con el número de filas: el UNIQUE
+-- (ip, email, window_start) deduplica por ventana de 15 min, así que cada
+-- fila acumula N intentos. El middleware cuenta SUM(attempts), no COUNT(*).
+-- Sin esa columna el límite de intentos no se activa nunca (bug oct-2026).
+--
+-- Se declara acá porque hasta ahora solo existía en la migración: un deploy
+-- limpio con schema-hostinger.sql NO creaba la tabla y el middleware
+-- degradaba a permitir todo en silencio.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ip            VARCHAR(45)  NOT NULL,
+  email         VARCHAR(255) NOT NULL,
+  success       TINYINT(1)   NOT NULL DEFAULT 0,
+  attempts      INT UNSIGNED NOT NULL DEFAULT 1
+                  COMMENT 'Intentos acumulados por (ip,email,ventana). El rate limit suma esto, no cuenta filas',
+  window_start  BIGINT UNSIGNED NOT NULL
+                  COMMENT 'Bucket fijo de 15 min: dedupe del UNIQUE',
+  attempted_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  COMMENT 'Último intento (se refresca en cada upsert): ventana deslizante',
+  cleared_at    DATETIME     NULL
+                  COMMENT 'Soft-clear tras login exitoso',
+  INDEX idx_ip_email (ip, email, attempted_at),
+  INDEX idx_window (window_start),
+  UNIQUE KEY uniq_window (ip, email, window_start)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
 -- RESUMEN FINAL
 -- ============================================================================
--- Total de tablas: 22 (1-22), más 1 tabla auxiliar (user_oauth_tokens = #17).
+-- Total de tablas: 22 del modelo base + login_attempts (#23).
+-- (user_oauth_tokens ya está contada como #17.)
 --
 -- Listado completo:
 --   1.  organizations
@@ -752,9 +785,10 @@ CREATE TABLE IF NOT EXISTS saas_invoices (
 --   20. saas_subscriptions
 --   21. saas_payment_methods
 --   22. saas_invoices
+--   23. login_attempts        (rate limit de login — migración 014 + 017)
 --
 -- TOTAL OBJETOS DE DB:
---   • 22 tablas
+--   • 23 tablas
 --   •  0 vistas
 --   •  0 triggers
 --   •  0 stored procedures
