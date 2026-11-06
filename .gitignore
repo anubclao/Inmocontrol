@@ -1,8 +1,12 @@
 node_modules/
 build/
-dist/
-dist-server/
 coverage/
+
+# ─── Artefactos de build SÍ versionados (deploy Hostinger) ─────────────
+# `dist/` y `dist-server/` se commitean a propósito: el servidor NO compila.
+# Compilá en local con `npm run build` ANTES de pushear, o el deploy
+# publica un bundle viejo en silencio. Ver `npm run predeploy-check`.
+# NO volver a agregarlos acá sin cambiar el flujo de deploy.
 .DS_Store
 *.log
 .env*

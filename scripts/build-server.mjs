@@ -1,11 +1,15 @@
 // Bundlea server.ts y todas sus dependencias (incluyendo lógica compartida
 // en src/features/billing y src/utils) en un único archivo JS para deploy.
-// Usa esbuild (ya disponible como dep transitiva de vite).
+// Usa esbuild (ya disponible como dep de dev).
 //
 // Output: dist-server/server.js (single file, listo para `node` directo).
+//
+// `dist-server/` se versiona (el servidor no compila), así que se limpia
+// antes de escribir: sin esto quedan archivos de builds viejos (de cuando
+// se compilaba con tsc) y viajan al repo como código muerto.
 
 import { build } from 'esbuild';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 
 const ENTRY = 'server.ts';
 const OUTFILE = 'dist-server/server.js';
@@ -15,6 +19,11 @@ if (!existsSync(ENTRY)) {
   console.error(`[build:server] No encuentro ${ENTRY} (cwd: ${process.cwd()})`);
   process.exit(1);
 }
+
+// El bundle es autocontenido: ningún import relativo queda vivo en la salida.
+// Por eso el directorio de salida debe contener SOLO server.js.
+rmSync(OUTDIR, { recursive: true, force: true });
+mkdirSync(OUTDIR, { recursive: true });
 
 try {
   const result = await build({
