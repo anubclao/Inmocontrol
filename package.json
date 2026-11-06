@@ -15,7 +15,7 @@
     "dev:server": "tsx watch server.ts",
     "dev:server:nowatch": "tsx server.ts",
     "dev:all": "node scripts/dev-all.mjs",
-    "build": "npm run build:client && npm run build:server",
+    "build": "node scripts/build.mjs",
     "build:client": "vite build",
     "build:server": "node scripts/build-server.mjs",
     "preview": "vite preview",
