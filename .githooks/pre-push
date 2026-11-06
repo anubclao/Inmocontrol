@@ -1,0 +1,12 @@
+#!/bin/sh
+# Hook pre-push: el servidor de Hostinger no compila, así que se pushea el
+# build ya hecho. Esto evita publicar un bundle viejo sin enterarse.
+#
+# Instalar una vez por clon:
+#   git config core.hooksPath .githooks
+#
+# BUILD_MAX_AGE_MINUTES=0: sin ventana de antigüedad (el objetivo acá es
+# detectar código sin compilar; bloquear un push de docs por tiempo sería
+# un falso positivo).
+
+BUILD_MAX_AGE_MINUTES=0 exec node scripts/check-build.js

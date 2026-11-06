@@ -274,9 +274,12 @@ MySQL no está corriendo. Ver `Paso 1`.
 El schema no se aplicó. Repetir Paso 3.
 
 ### "Cannot find module 'tsx'"
-```bash
-npm install   # reinstala dependencias
-```
+
+`tsx` es de desarrollo (`devDependencies`). Si el error aparece **en el servidor**,
+el startup está mal configurado: producción no ejecuta `tsx server.ts`, ejecuta
+`npm start` → `node dist-server/server.js` (ver Paso 3).
+
+Si aparece **en local**, corré `npm ci` (instala dev + prod).
 
 ### El PDF se descarga pero no aparece en Drive
 Drive no está conectado (Paso 8). El flujo funciona sin Drive — solo descarga local.
@@ -307,44 +310,86 @@ Total: 1.5-2 semanas para llegar a "production-ready" multi-cliente.
 
 ### TL;DR
 
-```bash
-# 1. En tu máquina local: build
-npm install --production=false  # instala todo (dev + prod)
-npm run build                    # genera dist/
+> ⚠️ **El servidor NO compila.** `dist/` y `dist-server/` viajan dentro del commit.
+> Si pusheás sin correr `npm run build`, el deploy reporta éxito y sigue sirviendo
+> el bundle anterior, en silencio. `npm run predeploy-check` aborta en ese caso.
 
-# 2. Subir vía SFTP/FTP a Hostinger (toda la carpeta del proyecto, excepto node_modules)
-# 3. En el panel de Hostinger: configurar Node.js app
-# 4. Configurar env vars en el panel
-# 5. Crear DB MySQL en el panel
-# 6. Correr schema + seed desde SSH
+```bash
+# 1. En tu máquina local: compilar y validar
+npm ci                   # acá sí hacen falta dev + prod
+npm run build            # genera dist/ y dist-server/server.js
+npm run predeploy-check  # aborta si el build falta, está viejo o quedó atrás de src/
+
+# 2. Push a main → Hostinger hace `npm ci --omit=dev` y arranca `npm start`
+git push
+
+# 3. En el panel: variables de entorno + crear la DB MySQL
+# 4. Schema + seed desde SSH
 ```
 
 ### 1. Preparar build local
 
 ```bash
 cd D:\desarrollos\Inmocontrol
-npm install    # asegura que node_modules esté al día
-npm run lint   # debería pasar (los 19 errores preexistentes son cosméticos)
+npm ci         # asegura que node_modules esté al día
+npm run lint   # TypeScript compila sin errores
 npm run test   # 35 tests del motor — verde
 npm run smoke  # E2E sin MySQL — verde
-npm run build  # genera dist/ (frontend estático)
+npm run build  # genera dist/ Y dist-server/server.js
 ```
 
-Verificá que `dist/` se generó con el index.html adentro.
+Verificá dos cosas antes de pushear:
 
-### 2. Subir archivos a Hostinger
+- `dist/index.html` existe y apunta a `dist/assets/*` reales.
+- `dist-server/server.js` es el único archivo de `dist-server/` (el build limpia el directorio).
 
-**Método recomendado**: SFTP/SFTP con FileZilla o similar.
+`npm run predeploy-check` valida lo anterior de forma automática y además aborta si el
+build está viejo (15 min por defecto, configurable con `BUILD_MAX_AGE_MINUTES`) o si
+quedó atrás de los últimos cambios en `src/` o `server/`.
 
-**Qué subir**:
-- Toda la carpeta del proyecto, **EXCEPTO**:
-  - `node_modules/` (lo genera Hostinger con `npm install`)
-  - `dist/` (lo regeneras con `npm run build` en el server)
-  - `.git/`, `*.log`, `backups/`, `dev-*.out`, etc.
-- Subí `dist/` ya compilado (más rápido que esperar que el server lo compile)
-- Subí también los archivos de migraciones y seed: `db/mysql/schema-completo.sql`, `db/mysql/migrations/`, `scripts/`
+### 2. Desplegar
 
-**Método alternativo**: Git. Si Hostinger tiene SSH, podés hacer `git clone` desde el repo.
+**Método recomendado: Git (auto-deploy).**
+
+```bash
+git push origin main
+```
+
+Hostinger clona el repo (que ya incluye `dist/` y `dist-server/server.js`), corre
+`npm ci --omit=dev` y arranca `npm start`. No compila y no instala devDependencies.
+
+**Qué NO se sube:**
+- `node_modules/` — lo instala `npm ci --omit=dev` en el servidor.
+- `.env*` — las variables van en el panel.
+
+**Si hicieras deploy manual por SFTP**, subí el repo completo excepto `node_modules/`,
+`.git/`, `backups/` y los `*.log`, pero **incluyendo `dist/` y `dist-server/`**.
+
+**Hook opcional (recomendado)**: para que el guard corra solo en cada push.
+
+```bash
+git config core.hooksPath .githooks
+```
+
+#### Migración única: la primera vez que el build va versionado
+
+Antes de este cambio `dist/` y `dist-server/` estaban en `.gitignore`, así que el
+servidor los tiene como archivos **untracked**. Git no sobrescribe untracked con
+tracked, y el primer deploy fallaría con:
+
+```
+error: Untracked working tree files would be overwritten by merge: dist/index.html
+```
+
+En el servidor, **justo antes** de disparar ese primer deploy:
+
+```bash
+cd ~/domains/<tu-dominio>/nodejs    # raíz de la app en hPanel
+rm -rf dist dist-server
+```
+
+El pull siguiente los repone desde el repo en la misma operación. A partir de ahí
+el flujo normal funciona sin pasos extra.
 
 ### 3. Configurar la app Node.js en Hostinger
 
@@ -355,15 +400,25 @@ Verificá que `dist/` se generó con el index.html adentro.
    - **Application mode**: Production
    - **Application root**: `/home/u123456789/public_html/inmocontrol` (o donde subiste los archivos)
    - **Application URL**: tu dominio
-   - **Application startup file**: `node_modules/.bin/tsx`
-   - **Application arguments**: `server.ts`
+   - **Application startup file**: `npm start` (ejecuta `NODE_ENV=production node dist-server/server.js`)
+   - **Application arguments**: *(vacío)*
    - **Environment variables**: agregar todas las del `.env.production.example`
+
+   > El startup **NO** es `tsx server.ts`. `tsx` y `server.ts` son de desarrollo: en
+   > producción solo se ejecuta el bundle ya compilado, y `tsx` no está instalado
+   > porque vive en `devDependencies`.
 
 4. **MUY IMPORTANTE**: agregar también:
    - `NODE_OPTIONS=--max-old-space-size=512` (evita OOM en shared hosting)
    - `NODE_ENV=production`
 
-5. Click **Save** → Hostinger instala `node_modules/` y arranca la app.
+5. **Comando de instalación del panel**: `npm ci --omit=dev`
+   (sin `npm install`, sin `npm run build`; el build ya viene en el repo).
+
+6. Click **Save** → Hostinger instala solo dependencias de producción y arranca la app.
+
+   > Si el panel permite elegir el comando de arranque, `node dist-server/server.js`
+   > directo consume menos procesos que pasar por npm.
 
 ### 4. Crear la base de datos MySQL
 

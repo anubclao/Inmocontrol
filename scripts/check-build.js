@@ -6,6 +6,8 @@
 // Uso:
 //   npm run predeploy-check
 //   BUILD_MAX_AGE_MINUTES=60 npm run predeploy-check   (relajar la ventana)
+//   BUILD_MAX_AGE_MINUTES=0  npm run predeploy-check   (sin ventana; solo
+//                                                      existencia + código nuevo)
 //
 // También sirve como hook pre-push de Git (ver DEPLOY.md).
 
@@ -46,12 +48,16 @@ if (errors.length === 0) {
   );
 
   // ─── 2. Ningún artefacto es más viejo que la ventana permitida ─────────
-  const ageMinutes = (Date.now() - oldestArtifact) / 60000;
-  if (ageMinutes > MAX_AGE_MINUTES) {
-    fail(
-      `El build tiene ${ageMinutes.toFixed(0)} min (límite ${MAX_AGE_MINUTES} min).`,
-      'Corré `npm run build` antes de pushear, o subí BUILD_MAX_AGE_MINUTES si es intencional.',
-    );
+  // 0 = sin ventana (el hook pre-push lo usa así: no tiene sentido bloquear
+  // el push de un README por no recompilar, pero sí bloquear código sin build).
+  if (MAX_AGE_MINUTES > 0) {
+    const ageMinutes = (Date.now() - oldestArtifact) / 60000;
+    if (ageMinutes > MAX_AGE_MINUTES) {
+      fail(
+        `El build tiene ${ageMinutes.toFixed(0)} min (límite ${MAX_AGE_MINUTES} min).`,
+        'Corré `npm run build` antes de pushear, o subí BUILD_MAX_AGE_MINUTES si es intencional.',
+      );
+    }
   }
 
   // ─── 3. El build no quedó atrás de los últimos cambios de código ───────

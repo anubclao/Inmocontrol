@@ -91,25 +91,45 @@ src/
 
 > Cada `git push` → redeploy automático. NO requiere FTP ni intervención manual.
 
-**El proyecto compila en 2 outputs:**
+**El servidor NO compila y NO instala devDependencies.** Todo se resuelve en local:
+
+```bash
+npm run build && npm run predeploy-check && git push
+```
+
+**El proyecto compila en 2 outputs — los DOS se versionan en git:**
 
 - `dist/` — frontend estático (vite build)
-- `dist-server/server.js` — backend bundleado (esbuild, single-file con todo inline)
+- `dist-server/server.js` — backend bundleado (esbuild, single-file con todo inline). `build-server.mjs` limpia el directorio antes de escribir, así no quedan restos de builds viejos.
+
+Si pusheás sin recompilar, el deploy reporta éxito y sigue sirviendo el bundle anterior en silencio. Para eso existe el guard:
+
+- `npm run predeploy-check` → falla si falta un artefacto, si tiene más de 15 min (`BUILD_MAX_AGE_MINUTES`), si hay archivos de `src/`/`server/` más nuevos que el build, o si `dist/index.html` apunta a assets que no existen.
 
 **Scripts clave:**
 
 - `npm run build` → corre `build:client` + `build:server` (ambos en uno)
 - `npm start` → `NODE_ENV=production node dist-server/server.js`
 
+**Dependencias de producción: 7 paquetes.** `express`, `mysql2`, `dotenv`, `cors`, `cookie-parser`, `bcryptjs`, `googleapis`. `twilio` y `nodemailer` son `optionalDependencies` (import dinámico con `await import()`, degradan solos). React, Vite, Tailwind, jsPDF, Recharts, Zustand y el resto del frontend viven en `devDependencies`: Vite los empaqueta dentro de `dist/`.
+
+**Comando de deploy en hPanel (Avanzado → Node.js):**
+
+```bash
+npm ci --omit=dev
+```
+
+Sin `npm install` y sin `npm run build`. Startup: `npm start`.
+
 **Lo que NO se sube al server:**
 
-- `node_modules/` (Hostinger instala con npm install en cada deploy)
+- `node_modules/` (Hostinger lo instala con `npm ci --omit=dev`)
 - `supabase/` (legacy — ya no se usa, eliminar)
 - `.env*` (los env vars se configuran en el panel)
 
 **Auto-deploy Hostinger:**
 
-1. Push a `main` → Hostinger clona, `npm install`, `npm run build`, publica `dist/`, arranca `npm start`.
+1. Push a `main` → Hostinger clona, `npm ci --omit=dev` (sin build), arranca `npm start`.
 2. Si falla: revisar "Registros de tiempo de ejecución" en el panel (debe tener logs, no estar vacío).
 
 **Para deploy fresh:**
